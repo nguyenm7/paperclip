@@ -33,6 +33,15 @@ export const DEFAULT_PRODUCTIVITY_REVIEW_MAX_CREATIONS_PER_WINDOW = 3;
 
 const TERMINAL_RUN_STATUSES = ["succeeded", "failed", "cancelled", "timed_out"] as const;
 const ACTIVE_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
+// Terminal runs that died before the agent could act carry no agent-behavior signal
+// for the no-comment streak: gate cancellations (dependency guard, budget, pause) end
+// as `cancelled` without entering live execution, and transient upstream/session-limit
+// deaths kill the run before the comment step. Counting them produces false-positive
+// reviews against healthy agents on blocked issues.
+const STREAK_EXEMPT_RUN_ERROR_CODES = new Set<string>([
+  "codex_transient_upstream",
+  "claude_transient_upstream",
+]);
 const MAX_CANDIDATE_ISSUES = 250;
 const MAX_RUNS_FOR_STREAK = 100;
 const MAX_PARENT_WALK_DEPTH = 25;
@@ -61,6 +70,7 @@ type ProductivityReviewEvidence = {
   sourceIssue: IssueRow;
   sourceAgent: AgentRow;
   noCommentStreak: number;
+  streakExemptRunCount: number;
   totalRunCount: number;
   terminalRunCount: number;
   activeRunCount: number;
@@ -177,6 +187,23 @@ function buildThresholds(overrides?: Partial<ProductivityReviewThresholds>): Pro
       DEFAULT_PRODUCTIVITY_REVIEW_MAX_CREATIONS_PER_WINDOW,
     ),
   };
+}
+
+function isNoCommentStreakEligibleRun(
+  run: Pick<HeartbeatRunRow, "status" | "startedAt" | "errorCode" | "resultJson">,
+) {
+  if (run.status === "cancelled") return false;
+  if (!run.startedAt) return false;
+  if (run.errorCode && STREAK_EXEMPT_RUN_ERROR_CODES.has(run.errorCode)) return false;
+  const resultJson = run.resultJson;
+  if (
+    resultJson &&
+    typeof resultJson === "object" &&
+    (resultJson as Record<string, unknown>).errorFamily === "transient_upstream"
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function choosePrimaryTrigger(input: {
@@ -424,8 +451,13 @@ export function productivityReviewService(db: Db, deps?: { enqueueWakeup?: Enque
       TERMINAL_RUN_STATUSES.includes(run.status as (typeof TERMINAL_RUN_STATUSES)[number]),
     );
     let noCommentStreak = 0;
+    let streakExemptRunCount = 0;
     for (const run of terminalRuns) {
       if (commentRunIds.has(run.id)) break;
+      if (!isNoCommentStreakEligibleRun(run)) {
+        streakExemptRunCount += 1;
+        continue;
+      }
       noCommentStreak += 1;
     }
 
@@ -486,7 +518,13 @@ export function productivityReviewService(db: Db, deps?: { enqueueWakeup?: Enque
     if (!trigger) return null;
 
     const triggerReasons: string[] = [];
-    if (noComment) triggerReasons.push(`${noCommentStreak} consecutive completed issue-linked runs had no run-created issue comment`);
+    if (noComment) {
+      triggerReasons.push(
+        `${noCommentStreak} consecutive completed live issue-linked runs had no run-created issue comment${
+          streakExemptRunCount > 0 ? ` (${streakExemptRunCount} never-live runs exempted)` : ""
+        }`,
+      );
+    }
     if (longActive) triggerReasons.push(`current active episode has lasted ${msToHuman(elapsedMs)}`);
     if (highChurn) {
       triggerReasons.push(
@@ -500,6 +538,7 @@ export function productivityReviewService(db: Db, deps?: { enqueueWakeup?: Enque
       sourceIssue,
       sourceAgent,
       noCommentStreak,
+      streakExemptRunCount,
       totalRunCount: latestRuns.length,
       terminalRunCount: terminalRuns.length,
       activeRunCount,
@@ -587,6 +626,7 @@ export function productivityReviewService(db: Db, deps?: { enqueueWakeup?: Enque
       `- Terminal sampled runs: ${evidence.terminalRunCount}`,
       `- Active queued/running/scheduled runs: ${evidence.activeRunCount}`,
       `- No-comment completed-run streak: ${evidence.noCommentStreak}`,
+      `- Never-live runs exempted from streak: ${evidence.streakExemptRunCount}`,
       `- Current active elapsed time: ${msToHuman(evidence.elapsedMs)}`,
       `- Runs in rolling windows: ${evidence.runCountLastHour}/1h, ${evidence.runCountLastSixHours}/6h`,
       `- Assignee run-linked comments total/window: ${evidence.commentCount} total, ${evidence.commentCountLastHour}/1h, ${evidence.commentCountLastSixHours}/6h`,

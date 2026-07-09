@@ -35,13 +35,21 @@ const TERMINAL_RUN_STATUSES = ["succeeded", "failed", "cancelled", "timed_out"] 
 const ACTIVE_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 // Terminal runs that died before the agent could act carry no agent-behavior signal
 // for the no-comment streak: gate cancellations (dependency guard, budget, pause) end
-// as `cancelled` without entering live execution, and transient upstream/session-limit
-// deaths kill the run before the comment step. Counting them produces false-positive
-// reviews against healthy agents on blocked issues.
+// as `cancelled` without entering live execution, and transient upstream or adapter
+// auth deaths kill the run before the comment step. Counting them produces
+// false-positive reviews against healthy agents. Beyond the known error shapes below,
+// the general never-live rule in isNoCommentStreakEligibleRun exempts any unsuccessful
+// terminal run with zero recorded token usage and zero cost events, so new adapter
+// error codes do not need to be enumerated here one by one.
 const STREAK_EXEMPT_RUN_ERROR_CODES = new Set<string>([
   "codex_transient_upstream",
   "claude_transient_upstream",
+  "claude_bedrock_auth",
 ]);
+// Every adapter's credential failure shares this suffix (claude_auth_required,
+// gemini_auth_required, acpx_auth_required, ...): the CLI never authenticated,
+// so no agent turn ever started.
+const STREAK_EXEMPT_RUN_ERROR_CODE_SUFFIX = "_auth_required";
 const MAX_CANDIDATE_ISSUES = 250;
 const MAX_RUNS_FOR_STREAK = 100;
 const MAX_PARENT_WALK_DEPTH = 25;
@@ -189,18 +197,50 @@ function buildThresholds(overrides?: Partial<ProductivityReviewThresholds>): Pro
   };
 }
 
+function hasRecordedTokenUsage(usageJson: Record<string, unknown> | null | undefined): boolean {
+  if (!usageJson || typeof usageJson !== "object") return false;
+  const tokenKeys = [
+    "inputTokens",
+    "input_tokens",
+    "rawInputTokens",
+    "cachedInputTokens",
+    "cached_input_tokens",
+    "rawCachedInputTokens",
+    "outputTokens",
+    "output_tokens",
+    "rawOutputTokens",
+  ];
+  return tokenKeys.some((key) => {
+    const value = usageJson[key];
+    const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : 0;
+    return Number.isFinite(parsed) && parsed > 0;
+  });
+}
+
 function isNoCommentStreakEligibleRun(
-  run: Pick<HeartbeatRunRow, "status" | "startedAt" | "errorCode" | "resultJson">,
+  run: Pick<HeartbeatRunRow, "status" | "startedAt" | "errorCode" | "resultJson" | "usageJson">,
+  opts: { hasCostEvents: boolean },
 ) {
   if (run.status === "cancelled") return false;
   if (!run.startedAt) return false;
-  if (run.errorCode && STREAK_EXEMPT_RUN_ERROR_CODES.has(run.errorCode)) return false;
+  if (run.errorCode) {
+    if (STREAK_EXEMPT_RUN_ERROR_CODES.has(run.errorCode)) return false;
+    if (run.errorCode.endsWith(STREAK_EXEMPT_RUN_ERROR_CODE_SUFFIX)) return false;
+  }
   const resultJson = run.resultJson;
   if (
     resultJson &&
     typeof resultJson === "object" &&
     (resultJson as Record<string, unknown>).errorFamily === "transient_upstream"
   ) {
+    return false;
+  }
+  // General never-live rule: an unsuccessful terminal run that recorded zero token
+  // usage and produced zero cost events died before the agent ever executed,
+  // whatever adapter error code it carried. Successful runs stay eligible even
+  // without usage telemetry so missing adapter reporting can never mask a genuine
+  // no-comment streak.
+  if (run.status !== "succeeded" && !hasRecordedTokenUsage(run.usageJson) && !opts.hasCostEvents) {
     return false;
   }
   return true;
@@ -447,6 +487,22 @@ export function productivityReviewService(db: Db, deps?: { enqueueWakeup?: Enque
       }
     }
 
+    const costEventRunIds = new Set<string>();
+    if (runIds.length > 0) {
+      const costRows = await db
+        .select({ heartbeatRunId: costEvents.heartbeatRunId })
+        .from(costEvents)
+        .where(
+          and(
+            eq(costEvents.companyId, sourceIssue.companyId),
+            inArray(costEvents.heartbeatRunId, runIds),
+          ),
+        );
+      for (const row of costRows) {
+        if (row.heartbeatRunId) costEventRunIds.add(row.heartbeatRunId);
+      }
+    }
+
     const terminalRuns = latestRuns.filter((run) =>
       TERMINAL_RUN_STATUSES.includes(run.status as (typeof TERMINAL_RUN_STATUSES)[number]),
     );
@@ -454,7 +510,7 @@ export function productivityReviewService(db: Db, deps?: { enqueueWakeup?: Enque
     let streakExemptRunCount = 0;
     for (const run of terminalRuns) {
       if (commentRunIds.has(run.id)) break;
-      if (!isNoCommentStreakEligibleRun(run)) {
+      if (!isNoCommentStreakEligibleRun(run, { hasCostEvents: costEventRunIds.has(run.id) })) {
         streakExemptRunCount += 1;
         continue;
       }

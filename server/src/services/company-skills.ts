@@ -1146,7 +1146,7 @@ export async function discoverProjectWorkspaceSkillDirectories(target: ProjectSk
     .sort((left, right) => left.skillDir.localeCompare(right.skillDir));
 }
 
-async function readLocalSkillImports(companyId: string, sourcePath: string): Promise<ImportedSkill[]> {
+export async function readLocalSkillImports(companyId: string, sourcePath: string): Promise<ImportedSkill[]> {
   const resolvedPath = path.resolve(sourcePath);
   const stat = await fs.stat(resolvedPath).catch(() => null);
   if (!stat) {
@@ -1199,21 +1199,11 @@ async function readLocalSkillImports(companyId: string, sourcePath: string): Pro
 
   const imports: ImportedSkill[] = [];
   for (const skillPath of skillPaths) {
+    // readLocalSkillImportFromDirectory computes the full inventory (and trust
+    // level) for the skill directory; recomputing it here from the root walk
+    // breaks when skillDir is "." (source pointing at the skill dir itself).
     const skillDir = path.posix.dirname(skillPath);
-    const inventory = allFiles
-      .filter((entry) => entry === skillPath || entry.startsWith(`${skillDir}/`))
-      .map((entry) => {
-        const relative = entry === skillPath ? "SKILL.md" : entry.slice(skillDir.length + 1);
-        return {
-          path: normalizePortablePath(relative),
-          kind: classifyInventoryKind(relative),
-        };
-      })
-      .sort((left, right) => left.path.localeCompare(right.path));
-    const imported = await readLocalSkillImportFromDirectory(companyId, path.join(root, skillDir));
-    imported.fileInventory = inventory;
-    imported.trustLevel = deriveTrustLevel(inventory);
-    imports.push(imported);
+    imports.push(await readLocalSkillImportFromDirectory(companyId, path.join(root, skillDir)));
   }
 
   return imports;

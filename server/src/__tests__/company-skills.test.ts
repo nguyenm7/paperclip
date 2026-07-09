@@ -8,6 +8,7 @@ import {
   normalizeGitHubSkillDirectory,
   parseSkillImportSourceInput,
   readLocalSkillImportFromDirectory,
+  readLocalSkillImports,
 } from "../services/company-skills.js";
 
 const cleanupDirs = new Set<string>();
@@ -184,6 +185,43 @@ describe("project workspace skill discovery", () => {
         },
       ],
     });
+  });
+});
+
+describe("local skill imports", () => {
+  it("keeps sibling files when the source points at the skill directory itself", async () => {
+    const skillDir = await makeTempDir("paperclip-skill-dir-source-");
+    await writeSkillDir(skillDir, "Dir Source Skill");
+    await fs.mkdir(path.join(skillDir, "references"), { recursive: true });
+    await fs.mkdir(path.join(skillDir, "scripts"), { recursive: true });
+    await fs.writeFile(path.join(skillDir, "references", "DESIGN.md"), "# Design\n", "utf8");
+    await fs.writeFile(path.join(skillDir, "scripts", "run.sh"), "echo ok\n", "utf8");
+
+    const imports = await readLocalSkillImports("33333333-3333-4333-8333-333333333333", skillDir);
+
+    expect(imports).toHaveLength(1);
+    expect(new Set(imports[0].fileInventory.map((entry) => entry.path))).toEqual(new Set([
+      "SKILL.md",
+      "references/DESIGN.md",
+      "scripts/run.sh",
+    ]));
+    expect(imports[0].trustLevel).toBe("scripts_executables");
+  });
+
+  it("keeps sibling files when the source points at a parent of the skill directory", async () => {
+    const root = await makeTempDir("paperclip-skill-parent-source-");
+    const skillDir = path.join(root, "dir-source-skill");
+    await writeSkillDir(skillDir, "Dir Source Skill");
+    await fs.mkdir(path.join(skillDir, "references"), { recursive: true });
+    await fs.writeFile(path.join(skillDir, "references", "DESIGN.md"), "# Design\n", "utf8");
+
+    const imports = await readLocalSkillImports("33333333-3333-4333-8333-333333333333", root);
+
+    expect(imports).toHaveLength(1);
+    expect(new Set(imports[0].fileInventory.map((entry) => entry.path))).toEqual(new Set([
+      "SKILL.md",
+      "references/DESIGN.md",
+    ]));
   });
 });
 

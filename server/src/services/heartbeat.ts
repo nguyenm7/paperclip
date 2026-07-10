@@ -2409,6 +2409,14 @@ function enrichWakeContextSnapshot(input: {
   if (!readNonEmptyString(contextSnapshot["wakeTriggerDetail"]) && triggerDetail) {
     contextSnapshot.wakeTriggerDetail = triggerDetail;
   }
+  // Direct-message wakes (plugin agent sessions sendMessage / agents.invoke)
+  // carry the message as payload.prompt. Surface it on the context snapshot so
+  // adapters can render it as the conversational turn; without this the prompt
+  // is stored on the wakeup request but never reaches the agent.
+  const wakeMessageFromPayload = readNonEmptyString(payload?.["prompt"]);
+  if (!readNonEmptyString(contextSnapshot["wakeMessage"]) && wakeMessageFromPayload) {
+    contextSnapshot.wakeMessage = wakeMessageFromPayload;
+  }
   normalizeModelProfileWakeContext({ contextSnapshot, payload });
   normalizeInteractionContinuationWakeContext(contextSnapshot, payload);
 

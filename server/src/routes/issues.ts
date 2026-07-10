@@ -137,6 +137,7 @@ import {
   resolveCoreTrustPreset,
   type TrustPresetResolution,
 } from "../services/trust-preset-resolver.js";
+import { scheduleDeliverableWriteEscalation } from "../services/recovery/deliverable-write-escalation.js";
 
 const MAX_ISSUE_COMMENT_LIMIT = 500;
 const updateIssueRouteSchema = updateIssueSchema.extend({
@@ -2024,6 +2025,35 @@ export function issueRoutes(
     if (!run) return true;
     if (!isStatusOnlyCheapRecoveryContext(run.contextSnapshot)) return true;
 
+    // resumeRequiresNormalModel must be honored, not just advertised: without
+    // this escalation an issue whose next action is a deliverable write can
+    // only ever be woken by runs forbidden from performing it (LOOA-175).
+    const escalation = await scheduleDeliverableWriteEscalation(db, heartbeat.wakeup, {
+      companyId: issue.companyId,
+      issueId: issue.id,
+      agentId: run.agentId,
+      sourceRunId: run.id,
+      deniedMutation: { method: req.method, path: req.originalUrl },
+    });
+    if (escalation.outcome === "scheduled") {
+      await logActivity(db, {
+        companyId: issue.companyId,
+        actorType: "system",
+        actorId: "recovery_deliverable_write_escalation",
+        agentId: run.agentId,
+        runId: run.id,
+        action: "issue.deliverable_write_escalation_scheduled",
+        entityType: "issue",
+        entityId: issue.id,
+        details: {
+          sourceRunId: run.id,
+          wakeReason: escalation.wakeReason,
+          idempotencyKey: escalation.idempotencyKey,
+          deniedMutation: { method: req.method, path: req.originalUrl },
+        },
+      }).catch((err) => logger.warn({ err, issueId: issue.id }, "failed to log deliverable write escalation"));
+    }
+
     res.status(403).json({
       error: "Cheap status-only recovery runs cannot update issue documents, plans, or deliverable artifacts",
       details: {
@@ -2032,6 +2062,12 @@ export function issueRoutes(
         modelProfile: "cheap",
         recoveryIntent: "status_only",
         resumeRequiresNormalModel: true,
+        escalation: {
+          outcome: escalation.outcome,
+          wakeReason: escalation.wakeReason,
+          idempotencyKey: escalation.idempotencyKey,
+          path: escalation.escalationPath,
+        },
       },
     });
     return false;

@@ -32,6 +32,18 @@ export {
   recoveryService,
 } from "./service.js";
 export {
+  DELIVERABLE_WRITE_ESCALATION_PATH,
+  DELIVERABLE_WRITE_ESCALATION_REASON,
+  buildDeliverableWriteEscalationIdempotencyKey,
+  buildDeliverableWriteEscalationWake,
+  findExistingDeliverableWriteEscalationWake,
+  scheduleDeliverableWriteEscalation,
+} from "./deliverable-write-escalation.js";
+export type {
+  DeliverableWriteEscalationOutcome,
+  DeliverableWriteEscalationResult,
+} from "./deliverable-write-escalation.js";
+export {
   DEFAULT_MAX_LIVENESS_CONTINUATION_ATTEMPTS,
   RUN_LIVENESS_CONTINUATION_REASON,
   buildRunLivenessContinuationIdempotencyKey,

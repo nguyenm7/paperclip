@@ -2,8 +2,21 @@ import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// LOOA-175 regression: a cheap status-only recovery run that 403s on a
+// deliverable write must schedule exactly one normal-model escalation wake so
+// the pending write reaches a run that is permitted to perform it, and the 403
+// body must name that escalation path.
+
 const issueId = "11111111-1111-4111-8111-111111111111";
 const companyId = "22222222-2222-4222-8222-222222222222";
+
+const statusOnlyRunContext = {
+  modelProfile: "cheap",
+  recoveryIntent: "status_only",
+  allowDeliverableWork: false,
+  allowDocumentUpdates: false,
+  resumeRequiresNormalModel: true,
+};
 
 const mockIssueService = vi.hoisted(() => ({
   getById: vi.fn(),
@@ -27,7 +40,7 @@ const mockAgentService = vi.hoisted(() => ({
 
 const mockLogActivity = vi.hoisted(() => vi.fn(async () => undefined));
 const mockHeartbeatService = vi.hoisted(() => ({
-  wakeup: vi.fn(async () => undefined),
+  wakeup: vi.fn(async () => ({ id: "escalation-run-1" })),
   reportRunActivity: vi.fn(async () => undefined),
 }));
 const mockInstanceSettingsService = vi.hoisted(() => ({
@@ -49,31 +62,6 @@ const mockIssueThreadInteractionService = vi.hoisted(() => ({
   expireRequestConfirmationsSupersededByComment: vi.fn(async () => []),
   expireStaleRequestConfirmationsForIssueDocument: vi.fn(async () => []),
 }));
-
-const planDocument = {
-  id: "document-1",
-  companyId,
-  issueId,
-  key: "plan",
-  title: "Plan",
-  format: "markdown",
-  body: "# Plan",
-  latestRevisionId: "revision-2",
-  latestRevisionNumber: 2,
-  createdByAgentId: null,
-  createdByUserId: "board-user",
-  updatedByAgentId: null,
-  updatedByUserId: "board-user",
-  createdAt: new Date("2026-03-26T12:00:00.000Z"),
-  updatedAt: new Date("2026-03-26T12:10:00.000Z"),
-};
-
-const systemDocument = {
-  ...planDocument,
-  id: "document-2",
-  key: "system-plan",
-  title: "System plan",
-};
 
 function registerModuleMocks() {
   vi.doMock("../services/access.js", () => ({
@@ -149,7 +137,13 @@ function registerModuleMocks() {
   }));
 }
 
-function createRunContextDb(contextSnapshot: Record<string, unknown>) {
+// Minimal db stub for the two guard queries: the heartbeatRuns context lookup
+// resolves through .where().then(), the agentWakeupRequests dedupe lookup
+// resolves through .where().limit(1).then().
+function createGuardDb(input: {
+  runContextSnapshot: Record<string, unknown>;
+  existingWakeRows?: unknown[];
+}) {
   return {
     select: vi.fn(() => ({
       from: vi.fn(() => ({
@@ -159,12 +153,11 @@ function createRunContextDb(contextSnapshot: Record<string, unknown>) {
               id: "run-1",
               companyId,
               agentId: "agent-1",
-              contextSnapshot,
+              contextSnapshot: input.runContextSnapshot,
             }]),
-          // The status-only guard also dedupe-checks agentWakeupRequests via
-          // .limit(1) before scheduling the deliverable-write escalation wake.
           limit: vi.fn(() => ({
-            then: async (resolve: (rows: unknown[]) => unknown) => resolve([]),
+            then: async (resolve: (rows: unknown[]) => unknown) =>
+              resolve(input.existingWakeRows ?? []),
           })),
         })),
       })),
@@ -172,16 +165,15 @@ function createRunContextDb(contextSnapshot: Record<string, unknown>) {
   };
 }
 
-async function createApp(
-  actor: Express.Request["actor"] = {
-    type: "board",
-    userId: "board-user",
-    companyIds: [companyId],
-    source: "local_implicit",
-    isInstanceAdmin: false,
-  },
-  db: unknown = {},
-) {
+const agentActor = {
+  type: "agent",
+  agentId: "agent-1",
+  companyId,
+  runId: "run-1",
+  source: "agent_jwt",
+} as const;
+
+async function createApp(db: unknown) {
   const [{ issueRoutes }, { errorHandler }] = await Promise.all([
     vi.importActual<typeof import("../routes/issues.js")>("../routes/issues.js"),
     vi.importActual<typeof import("../middleware/index.js")>("../middleware/index.js"),
@@ -189,7 +181,7 @@ async function createApp(
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    (req as any).actor = actor;
+    (req as any).actor = agentActor;
     next();
   });
   app.use("/api", issueRoutes(db as any, {} as any));
@@ -197,7 +189,7 @@ async function createApp(
   return app;
 }
 
-describe("issue document revision routes", () => {
+describe("status-only recovery deliverable write escalation (LOOA-175)", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.doUnmock("../services/access.js");
@@ -216,38 +208,18 @@ describe("issue document revision routes", () => {
     vi.clearAllMocks();
     mockAccessService.decide.mockResolvedValue({
       allowed: true,
-      action: "issue:read",
+      action: "issue:mutate",
       reason: "allow_test",
       explanation: "Allowed by test mock.",
     });
     mockIssueService.getById.mockResolvedValue({
       id: issueId,
       companyId,
-      identifier: "PAP-881",
-      title: "Document revisions",
-      status: "in_progress",
+      identifier: "PAP-900",
+      title: "Ledger write",
+      status: "todo",
+      assigneeAgentId: "agent-1",
     });
-    mockDocumentsService.listIssueDocuments.mockImplementation(
-      async (_issueId, options: { includeSystem?: boolean } | undefined) =>
-        options?.includeSystem ? [planDocument, systemDocument] : [planDocument],
-    );
-    mockDocumentsService.listIssueDocumentRevisions.mockResolvedValue([
-      {
-        id: "revision-2",
-        companyId,
-        documentId: "document-1",
-        issueId,
-        key: "plan",
-        revisionNumber: 2,
-        title: "Plan v2",
-        format: "markdown",
-        body: "# Two",
-        changeSummary: null,
-        createdByAgentId: null,
-        createdByUserId: "board-user",
-        createdAt: new Date("2026-03-26T12:00:00.000Z"),
-      },
-    ]);
     mockDocumentsService.restoreIssueDocumentRevision.mockResolvedValue({
       restoredFromRevisionId: "revision-1",
       restoredFromRevisionNumber: 1,
@@ -261,135 +233,96 @@ describe("issue document revision routes", () => {
         body: "# One",
         latestRevisionId: "revision-3",
         latestRevisionNumber: 3,
-        createdByAgentId: null,
-        createdByUserId: "board-user",
-        updatedByAgentId: null,
-        updatedByUserId: "board-user",
+        createdByAgentId: "agent-1",
+        createdByUserId: null,
+        updatedByAgentId: "agent-1",
+        updatedByUserId: null,
         createdAt: new Date("2026-03-26T12:00:00.000Z"),
         updatedAt: new Date("2026-03-26T12:10:00.000Z"),
       },
     });
-    mockHeartbeatService.wakeup.mockResolvedValue(undefined);
-    mockHeartbeatService.reportRunActivity.mockResolvedValue(undefined);
-    mockInstanceSettingsService.get.mockResolvedValue({
-      id: "instance-settings-1",
-      general: {
-        censorUsernameInLogs: false,
-        feedbackDataSharingPreference: "prompt",
-      },
-    });
-    mockInstanceSettingsService.getExperimental.mockResolvedValue({});
-    mockInstanceSettingsService.getGeneral.mockResolvedValue({ feedbackDataSharingPreference: "prompt" });
-    mockInstanceSettingsService.listCompanyIds.mockResolvedValue([companyId]);
-    mockRoutineService.syncRunStatusForIssue.mockResolvedValue(undefined);
+    mockHeartbeatService.wakeup.mockResolvedValue({ id: "escalation-run-1" });
     mockLogActivity.mockResolvedValue(undefined);
   });
 
-  it("returns revision snapshots including title and format", async () => {
-    const res = await request(await createApp()).get(`/api/issues/${issueId}/documents/plan/revisions`);
+  it("403s the deliverable write, schedules exactly one normal-model wake, and names the escalation path", async () => {
+    const app = await createApp(createGuardDb({ runContextSnapshot: statusOnlyRunContext }));
 
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual([
-      expect.objectContaining({
-        revisionNumber: 2,
-        title: "Plan v2",
-        format: "markdown",
-        body: "# Two",
-      }),
-    ]);
-  });
-
-  it("filters system documents by default on the document list route", async () => {
-    const res = await request(await createApp()).get(`/api/issues/${issueId}/documents`);
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual([expect.objectContaining({ key: "plan" })]);
-  });
-
-  it("passes includeSystem=true through for debug document listing", async () => {
-    const res = await request(await createApp()).get(
-      `/api/issues/${issueId}/documents?includeSystem=true`,
-    );
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual([
-      expect.objectContaining({ key: "plan" }),
-      expect.objectContaining({ key: "system-plan" }),
-    ]);
-  });
-
-  it("restores a revision through the append-only route and logs the action", async () => {
-    const res = await request(await createApp())
-      .post(`/api/issues/${issueId}/documents/plan/revisions/revision-1/restore`)
-      .send({});
-
-    expect(res.status).toBe(200);
-    expect(mockDocumentsService.restoreIssueDocumentRevision).toHaveBeenCalledWith({
-      issueId,
-      key: "plan",
-      revisionId: "revision-1",
-      createdByAgentId: null,
-      createdByUserId: "board-user",
-    });
-    expect(mockLogActivity).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        action: "issue.document_restored",
-        details: expect.objectContaining({
-          key: "plan",
-          restoredFromRevisionId: "revision-1",
-          restoredFromRevisionNumber: 1,
-          revisionNumber: 3,
-        }),
-      }),
-    );
-    expect(res.body).toEqual(expect.objectContaining({
-      key: "plan",
-      title: "Plan v1",
-      latestRevisionNumber: 3,
-    }));
-  });
-
-  it("blocks cheap status-only recovery runs from restoring issue documents", async () => {
-    mockIssueService.getById.mockResolvedValueOnce({
-      id: issueId,
-      companyId,
-      identifier: "PAP-881",
-      title: "Document revisions",
-      status: "todo",
-      assigneeAgentId: "agent-1",
-    });
-
-    const res = await request(await createApp(
-      {
-        type: "agent",
-        agentId: "agent-1",
-        companyId,
-        runId: "run-1",
-        source: "agent_jwt",
-      },
-      createRunContextDb({
-        modelProfile: "cheap",
-        recoveryIntent: "status_only",
-        allowDeliverableWork: false,
-        allowDocumentUpdates: false,
-        resumeRequiresNormalModel: true,
-      }),
-    ))
-      .post(`/api/issues/${issueId}/documents/plan/revisions/revision-1/restore`)
-      .send({});
+    const res = await request(app)
+      .put(`/api/issues/${issueId}/documents/findings`)
+      .send({ title: "Findings", format: "markdown", body: "# Findings" });
 
     expect(res.status).toBe(403);
     expect(res.body.error).toContain("Cheap status-only recovery runs cannot update issue documents");
-    expect(mockDocumentsService.restoreIssueDocumentRevision).not.toHaveBeenCalled();
+    expect(res.body.details.escalation).toMatchObject({
+      outcome: "scheduled",
+      wakeReason: "recovery_deliverable_write_escalation",
+      idempotencyKey: `recovery_deliverable_write_escalation:${issueId}:run-1`,
+    });
+    expect(res.body.details.escalation.path).toContain("normal-model wake");
+
+    expect(mockHeartbeatService.wakeup).toHaveBeenCalledTimes(1);
+    const [wakeAgentId, wakeOpts] = mockHeartbeatService.wakeup.mock.calls[0] as [string, Record<string, any>];
+    expect(wakeAgentId).toBe("agent-1");
+    expect(wakeOpts.reason).toBe("recovery_deliverable_write_escalation");
+    expect(wakeOpts.idempotencyKey).toBe(`recovery_deliverable_write_escalation:${issueId}:run-1`);
+    // The follow-up wake must be a normal-model run: no cheap hints anywhere.
+    for (const snapshot of [wakeOpts.payload, wakeOpts.contextSnapshot]) {
+      expect(snapshot.modelProfile).toBeUndefined();
+      expect(snapshot.recoveryIntent).toBeUndefined();
+      expect(snapshot.allowDocumentUpdates).toBeUndefined();
+    }
+    expect(wakeOpts.payload.deniedMutation).toMatchObject({
+      method: "PUT",
+      path: `/api/issues/${issueId}/documents/findings`,
+    });
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: "issue.deliverable_write_escalation_scheduled" }),
+    );
   });
 
-  it("rejects invalid document keys before attempting restore", async () => {
-    const res = await request(await createApp())
-      .post(`/api/issues/${issueId}/documents/INVALID KEY/revisions/revision-1/restore`)
+  it("does not enqueue a second wake for the same source run", async () => {
+    const app = await createApp(createGuardDb({
+      runContextSnapshot: statusOnlyRunContext,
+      existingWakeRows: [{ id: "wake-1", status: "queued" }],
+    }));
+
+    const res = await request(app)
+      .put(`/api/issues/${issueId}/documents/findings`)
+      .send({ format: "markdown", body: "# Findings" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.details.escalation.outcome).toBe("already_scheduled");
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+  });
+
+  it("still fails closed with 403 when scheduling the escalation wake fails", async () => {
+    mockHeartbeatService.wakeup.mockRejectedValue(new Error("wake enqueue exploded"));
+    const app = await createApp(createGuardDb({ runContextSnapshot: statusOnlyRunContext }));
+
+    const res = await request(app)
+      .put(`/api/issues/${issueId}/documents/findings`)
+      .send({ format: "markdown", body: "# Findings" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.details.escalation.outcome).toBe("failed");
+    expect(res.body.details.escalation.path).toContain("normal-model wake");
+  });
+
+  it("permits the deliverable write on the follow-up run once the cheap hints are scrubbed", async () => {
+    // A normal-model escalation run carries a scrubbed context snapshot, so the
+    // same guard lets the write through.
+    const app = await createApp(createGuardDb({
+      runContextSnapshot: { issueId, wakeReason: "recovery_deliverable_write_escalation" },
+    }));
+
+    const res = await request(app)
+      .post(`/api/issues/${issueId}/documents/plan/revisions/revision-1/restore`)
       .send({});
 
-    expect(res.status).toBe(400);
-    expect(mockDocumentsService.restoreIssueDocumentRevision).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(mockDocumentsService.restoreIssueDocumentRevision).toHaveBeenCalledTimes(1);
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
   });
 });

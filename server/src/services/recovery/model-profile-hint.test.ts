@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  STATUS_ONLY_RECOVERY_GUARD_CONTEXT,
   recoveryAssigneeAdapterOverrides,
   scrubRecoveryModelProfileHints,
   withRecoveryModelProfileHint,
@@ -9,12 +10,12 @@ describe("recovery model profile policy", () => {
   it("allows cheap only for status-only recovery and adds guard context", () => {
     expect(withRecoveryModelProfileHint({ issueId: "issue-1" }, "status_only")).toEqual({
       issueId: "issue-1",
-      recoveryIntent: "status_only",
-      allowDeliverableWork: false,
-      allowDocumentUpdates: false,
-      resumeRequiresNormalModel: true,
+      ...STATUS_ONLY_RECOVERY_GUARD_CONTEXT,
       modelProfile: "cheap",
     });
+    expect(STATUS_ONLY_RECOVERY_GUARD_CONTEXT.statusOnlyRunGuidance).toContain(
+      "recovery_deliverable_write_escalation",
+    );
     expect(recoveryAssigneeAdapterOverrides("status_only")).toEqual({ modelProfile: "cheap" });
   });
 
@@ -27,6 +28,7 @@ describe("recovery model profile policy", () => {
       allowDeliverableWork: false,
       allowDocumentUpdates: false,
       resumeRequiresNormalModel: true,
+      statusOnlyRunGuidance: "stale guidance",
     }, "normal_model")).toEqual({
       issueId: "issue-1",
       retryOfRunId: "run-1",

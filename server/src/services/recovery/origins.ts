@@ -7,6 +7,7 @@ export const RECOVERY_ORIGIN_KINDS = {
 
 export const RECOVERY_REASON_KINDS = {
   runLivenessContinuation: "run_liveness_continuation",
+  deliverableWriteEscalation: "recovery_deliverable_write_escalation",
 } as const;
 
 export const RECOVERY_KEY_PREFIXES = {

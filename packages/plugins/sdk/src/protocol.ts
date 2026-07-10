@@ -65,6 +65,9 @@ import type {
   PluginAuthorizationDecisionResult,
   PluginAuthorizationPolicyRecord,
   PluginAuthorizationPolicySummary,
+  PluginApprovalRecord,
+  PluginApprovalDecisionResult,
+  PluginInteractionDecisionResult,
 } from "./types.js";
 import type {
   PluginHealthDiagnostics,
@@ -1132,6 +1135,43 @@ export interface WorkerToHostMethods {
       authorAgentId?: string | null;
     },
     result: IssueThreadInteraction,
+  ];
+  "issues.listInteractions": [
+    params: { issueId: string; companyId: string },
+    result: IssueThreadInteraction[],
+  ];
+  "issues.respondInteraction": [
+    params: {
+      issueId: string;
+      interactionId: string;
+      companyId: string;
+      action: "accept" | "reject";
+      /** Active human company member the decision is attributed to. */
+      actorUserId: string;
+      reason?: string | null;
+    },
+    result: PluginInteractionDecisionResult,
+  ];
+
+  // Approvals
+  "approvals.list": [
+    params: { companyId: string; status?: string | null },
+    result: PluginApprovalRecord[],
+  ];
+  "approvals.get": [
+    params: { approvalId: string; companyId: string },
+    result: PluginApprovalRecord | null,
+  ];
+  "approvals.decide": [
+    params: {
+      approvalId: string;
+      companyId: string;
+      action: "approve" | "reject";
+      /** Active human company member the decision is attributed to. */
+      actorUserId: string;
+      decisionNote?: string | null;
+    },
+    result: PluginApprovalDecisionResult,
   ];
 
   // Issue Documents

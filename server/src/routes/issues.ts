@@ -825,53 +825,17 @@ function queueResolvedInteractionContinuationWakeup(input: {
   forceFreshSession?: boolean;
   workspaceRefreshReason?: string | null;
 }) {
-  if (
-    input.interaction.continuationPolicy !== "wake_assignee"
-    && input.interaction.continuationPolicy !== "wake_assignee_on_accept"
-  ) return;
-  if (
-    input.interaction.continuationPolicy === "wake_assignee_on_accept"
-    && input.interaction.status !== "accepted"
-  ) return;
-  if (input.interaction.status === "expired") return;
-  if (!input.issue.assigneeAgentId || isClosedIssueStatus(input.issue.status)) return;
-
-  const forceFreshSession = input.forceFreshSession === true;
-  const workspaceRefreshReason = readNonEmptyString(input.workspaceRefreshReason);
-  void input.heartbeat.wakeup(input.issue.assigneeAgentId, {
-    source: "automation",
-    triggerDetail: "system",
-    reason: "issue_commented",
-    payload: {
+  // Shared with the plugin bridge (issues.respondInteraction) so chat-surface
+  // decisions resume agents exactly like web-app decisions.
+  serviceIndex.queueResolvedInteractionContinuationWakeup({
+    ...input,
+    onError: (err) => logger.warn({
+      err,
       issueId: input.issue.id,
       interactionId: input.interaction.id,
-      interactionKind: input.interaction.kind,
-      interactionStatus: input.interaction.status,
-      sourceCommentId: input.interaction.sourceCommentId ?? null,
-      sourceRunId: input.interaction.sourceRunId ?? null,
-      mutation: "interaction",
-    },
-    requestedByActorType: input.actor.actorType,
-    requestedByActorId: input.actor.actorId,
-    contextSnapshot: {
-      issueId: input.issue.id,
-      taskId: input.issue.id,
-      interactionId: input.interaction.id,
-      interactionKind: input.interaction.kind,
-      interactionStatus: input.interaction.status,
-      sourceCommentId: input.interaction.sourceCommentId ?? null,
-      sourceRunId: input.interaction.sourceRunId ?? null,
-      wakeReason: "issue_commented",
-      source: input.source,
-      ...(forceFreshSession ? { forceFreshSession: true } : {}),
-      ...(workspaceRefreshReason ? { workspaceRefreshReason } : {}),
-    },
-  }).catch((err) => logger.warn({
-    err,
-    issueId: input.issue.id,
-    interactionId: input.interaction.id,
-    agentId: input.issue.assigneeAgentId,
-  }, "failed to wake assignee on issue interaction resolution"));
+      agentId: input.issue.assigneeAgentId,
+    }, "failed to wake assignee on issue interaction resolution"),
+  });
 }
 
 function diffExecutionParticipants(

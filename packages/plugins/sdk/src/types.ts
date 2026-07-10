@@ -1438,6 +1438,25 @@ export interface PluginIssuesClient {
     companyId: string,
     options?: { authorAgentId?: string },
   ): Promise<IssueThreadInteraction>;
+  /** List all thread interactions on an issue. Requires `issue.interactions.read`. */
+  listInteractions(issueId: string, companyId: string): Promise<IssueThreadInteraction[]>;
+  /**
+   * Accept or reject a pending `request_confirmation` /
+   * `request_checkbox_confirmation` interaction on behalf of a paired board
+   * user. Requires `issue.interactions.respond`.
+   *
+   * The host independently verifies that `actorUserId` is an active human
+   * member of the issue's company before applying the decision — a plugin can
+   * only ever attribute decisions to identities that could have made them in
+   * the web app. Already-resolved interactions converge instead of failing:
+   * `applied: false` with the current server state.
+   */
+  respondInteraction(
+    issueId: string,
+    interactionId: string,
+    input: { action: "accept" | "reject"; actorUserId: string; reason?: string | null },
+    companyId: string,
+  ): Promise<PluginInteractionDecisionResult>;
   suggestTasks(
     issueId: string,
     interaction: Omit<Extract<CreateIssueThreadInteraction, { kind: "suggest_tasks" }>, "kind">,
@@ -1468,6 +1487,61 @@ export interface PluginIssuesClient {
   relations: PluginIssueRelationsClient;
   /** Read compact orchestration summaries. */
   summaries: PluginIssueSummariesClient;
+}
+
+/** Result of a plugin-attributed interaction decision. */
+export interface PluginInteractionDecisionResult {
+  interaction: IssueThreadInteraction;
+  /**
+   * True when this call changed server state; false when the interaction was
+   * already resolved (converge on the returned state instead of failing).
+   */
+  applied: boolean;
+}
+
+/** A board approval as exposed to plugins. */
+export interface PluginApprovalRecord {
+  id: string;
+  companyId: string;
+  type: string;
+  status: string;
+  payload: Record<string, unknown> | null;
+  requestedByAgentId: string | null;
+  requestedByUserId: string | null;
+  decidedByUserId: string | null;
+  decisionNote: string | null;
+  decidedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Result of a plugin-attributed approval decision. */
+export interface PluginApprovalDecisionResult {
+  approval: PluginApprovalRecord;
+  /** False when the approval already carried the requested resolution. */
+  applied: boolean;
+}
+
+/**
+ * `ctx.approvals` — read and decide board approvals.
+ *
+ * Requires `approvals.read` for reads and `approvals.respond` for `decide`.
+ *
+ * `decide` executes on behalf of a board user: the host verifies that
+ * `actorUserId` is an active human member of the approval's company before
+ * applying the decision, mirroring the board route's authorization bar.
+ * Deciding an approval that already carries the requested resolution returns
+ * `applied: false` with the current record (CAS convergence, never an error);
+ * a conflicting resolution throws.
+ */
+export interface PluginApprovalsClient {
+  list(input: { companyId: string; status?: string | null }): Promise<PluginApprovalRecord[]>;
+  get(approvalId: string, companyId: string): Promise<PluginApprovalRecord | null>;
+  decide(
+    approvalId: string,
+    input: { action: "approve" | "reject"; actorUserId: string; decisionNote?: string | null },
+    companyId: string,
+  ): Promise<PluginApprovalDecisionResult>;
 }
 
 /**
@@ -1905,6 +1979,8 @@ export interface PluginContext {
 
   /** Read and manage access memberships and invites. Requires `access.*` capabilities. */
   access: PluginAccessClient;
+  /** Read and decide board approvals. Requires `approvals.read` / `approvals.respond`. */
+  approvals: PluginApprovalsClient;
 
   /** Read and manage authorization grants, policy summaries, previews, and audit entries. Requires `authorization.*` capabilities. */
   authorization: PluginAuthorizationClient;

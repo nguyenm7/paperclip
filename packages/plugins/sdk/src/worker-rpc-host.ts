@@ -931,6 +931,26 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
           }) as Promise<RequestCheckboxConfirmationInteraction>;
         },
 
+        async listInteractions(issueId: string, companyId: string) {
+          return callHost("issues.listInteractions", { issueId, companyId });
+        },
+
+        async respondInteraction(
+          issueId: string,
+          interactionId: string,
+          input: { action: "accept" | "reject"; actorUserId: string; reason?: string | null },
+          companyId: string,
+        ) {
+          return callHost("issues.respondInteraction", {
+            issueId,
+            interactionId,
+            companyId,
+            action: input.action,
+            actorUserId: input.actorUserId,
+            reason: input.reason,
+          });
+        },
+
         documents: {
           async list(issueId: string, companyId: string) {
             return callHost("issues.documents.list", { issueId, companyId });
@@ -1162,6 +1182,33 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
           async revoke(inviteId: string, companyId: string) {
             return callHost("access.invites.revoke", { inviteId, companyId });
           },
+        },
+      },
+
+      approvals: {
+        async list(input) {
+          return callHost("approvals.list", {
+            companyId: input.companyId,
+            status: input.status,
+          });
+        },
+
+        async get(approvalId: string, companyId: string) {
+          return callHost("approvals.get", { approvalId, companyId });
+        },
+
+        async decide(
+          approvalId: string,
+          input: { action: "approve" | "reject"; actorUserId: string; decisionNote?: string | null },
+          companyId: string,
+        ) {
+          return callHost("approvals.decide", {
+            approvalId,
+            companyId,
+            action: input.action,
+            actorUserId: input.actorUserId,
+            decisionNote: input.decisionNote,
+          });
         },
       },
 

@@ -3,6 +3,7 @@ import {
   activityLog,
   agentTaskSessions as agentTaskSessionsTable,
   agents as agentsTable,
+  approvals,
   budgetIncidents,
   costEvents,
   heartbeatRuns,
@@ -32,8 +33,10 @@ import { companyService } from "./companies.js";
 import { agentService } from "./agents.js";
 import { projectService } from "./projects.js";
 import { executionWorkspaceService } from "./execution-workspaces.js";
-import { issueService } from "./issues.js";
-import { issueThreadInteractionService } from "./issue-thread-interactions.js";
+import { issueService, readAcceptedPlanConfirmationTarget } from "./issues.js";
+import { issueThreadInteractionService, queueResolvedInteractionContinuationWakeup } from "./issue-thread-interactions.js";
+import { queueIssueAssignmentWakeup } from "./issue-assignment-wakeup.js";
+import { approvalService } from "./approvals.js";
 import { goalService } from "./goals.js";
 import { documentService } from "./documents.js";
 import { heartbeatService } from "./heartbeat.js";
@@ -543,6 +546,7 @@ export function buildHostServices(
   const authorization = authorizationService(db);
   const budgets = budgetService(db);
   const issueApprovals = issueApprovalService(db);
+  const approvalsSvc = approvalService(db);
   const scopedBus = eventBus.forPlugin(pluginKey);
 
   // Track active session event subscriptions for cleanup
@@ -711,6 +715,37 @@ export function buildHostServices(
       details: pluginActivityDetails(input.details, input.actor),
     });
   };
+
+  /**
+   * Decision writes (interaction respond / approval decide) execute on behalf
+   * of a board user the plugin names. The host never trusts that attribution
+   * blindly: the named identity must be an active human member of the target
+   * company — the same bar `assertBoard` sets for web-app decisions.
+   */
+  const requireActiveDecisionUser = async (companyId: string, actorUserId: unknown): Promise<string> => {
+    const userId = typeof actorUserId === "string" ? actorUserId.trim() : "";
+    if (!userId) throw new Error("actorUserId is required for plugin-attributed decisions");
+    const membership = await access.getMembership(companyId, "user", userId);
+    if (!membership || membership.status !== "active") {
+      throw new Error("actorUserId must be an active human member of this company");
+    }
+    return userId;
+  };
+
+  const serializeApproval = (row: typeof approvals.$inferSelect) => ({
+    id: row.id,
+    companyId: row.companyId,
+    type: row.type,
+    status: row.status,
+    payload: (row.payload ?? null) as Record<string, unknown> | null,
+    requestedByAgentId: row.requestedByAgentId ?? null,
+    requestedByUserId: row.requestedByUserId ?? null,
+    decidedByUserId: row.decidedByUserId ?? null,
+    decisionNote: row.decisionNote ?? null,
+    decidedAt: row.decidedAt ? new Date(row.decidedAt).toISOString() : null,
+    createdAt: new Date(row.createdAt).toISOString(),
+    updatedAt: new Date(row.updatedAt).toISOString(),
+  });
 
   const collectIssueSubtreeIds = async (companyId: string, rootIssueId: string) => {
     const seen = new Set<string>([rootIssueId]);
@@ -2050,6 +2085,239 @@ export function buildHostServices(
           },
         });
         return interaction as any;
+      },
+      async listInteractions(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        await ensurePluginAvailableForCompany(companyId);
+        if (!inCompany(await issues.getById(params.issueId), companyId)) return [];
+        return (await issueThreadInteractionService(db).listForIssue(params.issueId)) as any;
+      },
+      async respondInteraction(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        await ensurePluginAvailableForCompany(companyId);
+        const issue = requireInCompany("Issue", await issues.getById(params.issueId), companyId);
+        const actorUserId = await requireActiveDecisionUser(companyId, params.actorUserId);
+        const interactionsSvc = issueThreadInteractionService(db);
+
+        const current = await interactionsSvc.getById(params.interactionId);
+        if (!current || current.issueId !== issue.id) {
+          throw new Error(`Interaction not found: ${params.interactionId}`);
+        }
+        if (current.kind !== "request_confirmation" && current.kind !== "request_checkbox_confirmation") {
+          throw new Error(`Interactions of kind ${current.kind} cannot be decided through the plugin bridge`);
+        }
+        if (current.status !== "pending") {
+          return { interaction: current, applied: false } as any;
+        }
+
+        type WakeableIssue = { id: string; assigneeAgentId: string | null; status: string };
+        const actor = { agentId: null, userId: actorUserId };
+        let interaction;
+        let createdIssues: WakeableIssue[] = [];
+        let continuationIssue: WakeableIssue | null = null;
+        try {
+          if (params.action === "accept") {
+            const accepted = await interactionsSvc.acceptInteraction(issue, params.interactionId, {}, actor);
+            interaction = accepted.interaction;
+            createdIssues = (accepted.createdIssues ?? []) as WakeableIssue[];
+            continuationIssue = (accepted.continuationIssue ?? null) as WakeableIssue | null;
+          } else {
+            interaction = await interactionsSvc.rejectInteraction(
+              issue,
+              params.interactionId,
+              { reason: params.reason?.trim() || undefined },
+              actor,
+            );
+          }
+        } catch (err) {
+          // Lost a decision race: converge on the server's resolution instead
+          // of failing, whatever that resolution was (CAS semantics).
+          const latest = await interactionsSvc.getById(params.interactionId);
+          if (latest && latest.status !== "pending") {
+            return { interaction: latest, applied: false } as any;
+          }
+          throw err;
+        }
+
+        const decidedAction = params.action === "accept"
+          ? "issue.thread_interaction_accepted"
+          : "issue.thread_interaction_rejected";
+        await logPluginActivity({
+          companyId,
+          action: interaction.status === "expired" ? "issue.thread_interaction_expired" : decidedAction,
+          entityType: "issue",
+          entityId: issue.id,
+          actor: { actorUserId },
+          details: {
+            identifier: issue.identifier,
+            interactionId: interaction.id,
+            interactionKind: interaction.kind,
+            interactionStatus: interaction.status,
+            ...(params.action === "reject"
+              ? {
+                rejectionReason:
+                  interaction.kind === "request_confirmation" || interaction.kind === "request_checkbox_confirmation"
+                    ? (interaction.result?.reason ?? null)
+                    : null,
+              }
+              : {}),
+          },
+        });
+
+        if (continuationIssue) {
+          await logPluginActivity({
+            companyId,
+            action: "issue.updated",
+            entityType: "issue",
+            entityId: issue.id,
+            actor: { actorUserId },
+            details: {
+              identifier: issue.identifier,
+              status: continuationIssue.status,
+              assigneeAgentId: continuationIssue.assigneeAgentId ?? null,
+              source: "request_confirmation_accept",
+              interactionId: interaction.id,
+              _previous: {
+                status: issue.status,
+                assigneeAgentId: issue.assigneeAgentId ?? null,
+              },
+            },
+          });
+        }
+
+        for (const createdIssue of createdIssues) {
+          void queueIssueAssignmentWakeup({
+            heartbeat,
+            issue: createdIssue,
+            reason: "issue_assigned",
+            mutation: "interaction_accept",
+            contextSource: "plugin.interaction.accept",
+            requestedByActorType: "user",
+            requestedByActorId: actorUserId,
+          });
+        }
+
+        const acceptedPlanTarget = interaction.kind === "request_confirmation"
+          ? readAcceptedPlanConfirmationTarget(interaction.payload)
+          : null;
+        const acceptedPlanConfirmation =
+          interaction.kind === "request_confirmation"
+          && interaction.status === "accepted"
+          && acceptedPlanTarget?.issueId === issue.id
+          && acceptedPlanTarget.key === "plan";
+        queueResolvedInteractionContinuationWakeup({
+          heartbeat,
+          issue: continuationIssue ?? issue,
+          interaction,
+          actor: { actorType: "user", actorId: actorUserId },
+          source: params.action === "accept" ? "plugin.interaction.accept" : "plugin.interaction.reject",
+          forceFreshSession: acceptedPlanConfirmation,
+          workspaceRefreshReason: acceptedPlanConfirmation ? "accepted_plan_confirmation" : null,
+        });
+
+        const applied = interaction.status === (params.action === "accept" ? "accepted" : "rejected");
+        return { interaction, applied } as any;
+      },
+    },
+
+    approvals: {
+      async list(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        await ensurePluginAvailableForCompany(companyId);
+        const rows = await approvalsSvc.list(companyId, params.status ?? undefined);
+        return rows.map(serializeApproval);
+      },
+      async get(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        await ensurePluginAvailableForCompany(companyId);
+        const row = await approvalsSvc.getById(params.approvalId);
+        return row && row.companyId === companyId ? serializeApproval(row) : null;
+      },
+      async decide(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        await ensurePluginAvailableForCompany(companyId);
+        const existing = await approvalsSvc.getById(params.approvalId);
+        if (!existing || existing.companyId !== companyId) {
+          throw new Error(`Approval not found: ${params.approvalId}`);
+        }
+        const actorUserId = await requireActiveDecisionUser(companyId, params.actorUserId);
+
+        let approval;
+        let applied;
+        try {
+          const decided = params.action === "approve"
+            ? await approvalsSvc.approve(params.approvalId, actorUserId, params.decisionNote ?? null)
+            : await approvalsSvc.reject(params.approvalId, actorUserId, params.decisionNote ?? null);
+          approval = decided.approval;
+          applied = decided.applied;
+        } catch (err) {
+          // Converge on a conflicting resolution instead of failing.
+          const latest = await approvalsSvc.getById(params.approvalId);
+          if (latest && latest.status !== "pending" && latest.status !== "revision_requested") {
+            return { approval: serializeApproval(latest), applied: false };
+          }
+          throw err;
+        }
+
+        if (applied) {
+          const linkedIssues = await issueApprovals.listIssuesForApproval(approval.id);
+          const linkedIssueIds = linkedIssues.map((row) => row.id);
+          const primaryIssueId = linkedIssueIds[0] ?? null;
+          await logPluginActivity({
+            companyId,
+            action: params.action === "approve" ? "approval.approved" : "approval.rejected",
+            entityType: "approval",
+            entityId: approval.id,
+            actor: { actorUserId },
+            details: {
+              type: approval.type,
+              requestedByAgentId: approval.requestedByAgentId,
+              linkedIssueIds,
+            },
+          });
+          if (approval.requestedByAgentId) {
+            const wakeReason = params.action === "approve" ? "approval_approved" : "approval_rejected";
+            try {
+              await heartbeat.wakeup(approval.requestedByAgentId, {
+                source: "automation",
+                triggerDetail: "system",
+                reason: wakeReason,
+                payload: {
+                  approvalId: approval.id,
+                  approvalStatus: approval.status,
+                  issueId: primaryIssueId,
+                  issueIds: linkedIssueIds,
+                },
+                requestedByActorType: "user",
+                requestedByActorId: actorUserId,
+                contextSnapshot: {
+                  source: params.action === "approve" ? "approval.approved" : "approval.rejected",
+                  approvalId: approval.id,
+                  approvalStatus: approval.status,
+                  issueId: primaryIssueId,
+                  issueIds: linkedIssueIds,
+                  taskId: primaryIssueId,
+                  wakeReason,
+                },
+              });
+            } catch (err) {
+              // Board-route parity: the decision stands even when the
+              // requester wake cannot be queued; record it for the audit trail.
+              await logPluginActivity({
+                companyId,
+                action: "approval.requester_wakeup_failed",
+                entityType: "approval",
+                entityId: approval.id,
+                details: {
+                  requesterAgentId: approval.requestedByAgentId,
+                  linkedIssueIds,
+                  error: err instanceof Error ? err.message : String(err),
+                },
+              });
+            }
+          }
+        }
+        return { approval: serializeApproval(approval), applied };
       },
     },
 

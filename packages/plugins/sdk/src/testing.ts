@@ -39,6 +39,7 @@ import type {
   PluginLocalFolderEntry,
   PluginLocalFolderStatus,
   PluginAccessMember,
+  PluginApprovalRecord,
   PrincipalPermissionGrant,
   PermissionKey,
   PrincipalType,
@@ -105,6 +106,8 @@ export interface TestHarness {
     executionWorkspaces?: PluginExecutionWorkspaceMetadata[];
     accessMembers?: PluginAccessMember[];
     principalGrants?: PrincipalPermissionGrant[];
+    issueInteractions?: IssueThreadInteraction[];
+    approvals?: PluginApprovalRecord[];
   }): void;
   setConfig(config: Record<string, unknown>): void;
   /** Dispatch a host or plugin event to registered handlers. */
@@ -463,6 +466,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
   const blockedByIssueIds = new Map<string, string[]>();
   const issueComments = new Map<string, IssueComment[]>();
   const issueInteractions = new Map<string, IssueThreadInteraction[]>();
+  const approvalRecords = new Map<string, PluginApprovalRecord>();
   const issueDocuments = new Map<string, IssueDocument>();
   const agents = new Map<string, Agent>();
   const goals = new Map<string, Goal>();
@@ -474,6 +478,16 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
   }
   function getPrincipalGrants(companyId: string, principalType: PrincipalType, principalId: string) {
     return principalGrants.get(principalGrantsKey(companyId, principalType, principalId)) ?? [];
+  }
+  function requireActiveUserMember(companyId: string, userId: string) {
+    const active = [...accessMembers.values()].some((member) =>
+      member.companyId === companyId
+      && member.principalType === "user"
+      && member.principalId === userId
+      && member.status === "active");
+    if (!active) {
+      throw new Error(`User ${userId} is not an active member of company ${companyId}`);
+    }
   }
   function setPrincipalGrants(
     companyId: string,
@@ -1712,6 +1726,45 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
       async requestCheckboxConfirmation(issueId, interaction, companyId, options) {
         return this.createInteraction(issueId, { ...interaction, kind: "request_checkbox_confirmation" }, companyId, options) as Promise<any>;
       },
+      async listInteractions(issueId, companyId) {
+        requireCapability(manifest, capabilitySet, "issue.interactions.read");
+        if (!isInCompany(issues.get(issueId), companyId)) return [];
+        return issueInteractions.get(issueId) ?? [];
+      },
+      async respondInteraction(issueId, interactionId, input, companyId) {
+        requireCapability(manifest, capabilitySet, "issue.interactions.respond");
+        const parentIssue = issues.get(issueId);
+        if (!isInCompany(parentIssue, companyId)) {
+          throw new Error(`Issue not found: ${issueId}`);
+        }
+        requireActiveUserMember(parentIssue.companyId, input.actorUserId);
+        const current = issueInteractions.get(issueId) ?? [];
+        const interaction = current.find((entry) => entry.id === interactionId);
+        if (!interaction) throw new Error(`Interaction not found: ${interactionId}`);
+        if (interaction.kind !== "request_confirmation" && interaction.kind !== "request_checkbox_confirmation") {
+          throw new Error(`Interactions of kind ${interaction.kind} cannot be decided`);
+        }
+        if (interaction.status !== "pending") {
+          return { interaction, applied: false };
+        }
+        if (input.action === "reject" && interaction.payload?.rejectRequiresReason && !input.reason?.trim()) {
+          throw new Error("A rejection reason is required");
+        }
+        const now = new Date();
+        const resolved = {
+          ...interaction,
+          status: input.action === "accept" ? "accepted" : "rejected",
+          result: {
+            version: 1,
+            outcome: input.action === "accept" ? "accepted" : "rejected",
+            reason: input.reason ?? null,
+          },
+          resolvedAt: now,
+          updatedAt: now,
+        } as IssueThreadInteraction;
+        issueInteractions.set(issueId, current.map((entry) => (entry.id === interactionId ? resolved : entry)));
+        return { interaction: resolved, applied: true };
+      },
       documents: {
         async list(issueId, companyId) {
           requireCapability(manifest, capabilitySet, "issue.documents.read");
@@ -2176,6 +2229,46 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
         },
       },
     },
+    approvals: {
+      async list(input) {
+        requireCapability(manifest, capabilitySet, "approvals.read");
+        const cid = requireCompanyId(input.companyId);
+        return [...approvalRecords.values()]
+          .filter((approval) => approval.companyId === cid)
+          .filter((approval) => !input.status || approval.status === input.status);
+      },
+      async get(approvalId, companyId) {
+        requireCapability(manifest, capabilitySet, "approvals.read");
+        const cid = requireCompanyId(companyId);
+        const approval = approvalRecords.get(approvalId);
+        return approval && approval.companyId === cid ? approval : null;
+      },
+      async decide(approvalId, input, companyId) {
+        requireCapability(manifest, capabilitySet, "approvals.respond");
+        const cid = requireCompanyId(companyId);
+        const approval = approvalRecords.get(approvalId);
+        if (!approval || approval.companyId !== cid) {
+          throw new Error(`Approval not found: ${approvalId}`);
+        }
+        requireActiveUserMember(cid, input.actorUserId);
+        const target = input.action === "approve" ? "approved" : "rejected";
+        if (approval.status !== "pending" && approval.status !== "revision_requested") {
+          if (approval.status === target) return { approval, applied: false };
+          throw new Error(`Only pending or revision requested approvals can be ${target}`);
+        }
+        const now = new Date().toISOString();
+        const updated: PluginApprovalRecord = {
+          ...approval,
+          status: target,
+          decidedByUserId: input.actorUserId,
+          decisionNote: input.decisionNote ?? null,
+          decidedAt: now,
+          updatedAt: now,
+        };
+        approvalRecords.set(approvalId, updated);
+        return { approval: updated, applied: true };
+      },
+    },
     authorization: {
       grants: {
         async list(input) {
@@ -2347,6 +2440,12 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
       }
       for (const row of input.executionWorkspaces ?? []) executionWorkspaces.set(row.id, row);
       for (const row of input.accessMembers ?? []) accessMembers.set(row.id, row);
+      for (const row of input.issueInteractions ?? []) {
+        const list = issueInteractions.get(row.issueId) ?? [];
+        list.push(row);
+        issueInteractions.set(row.issueId, list);
+      }
+      for (const row of input.approvals ?? []) approvalRecords.set(row.id, row);
       for (const row of input.principalGrants ?? []) {
         const list = principalGrants.get(principalGrantsKey(row.companyId, row.principalType, row.principalId)) ?? [];
         list.push(row);

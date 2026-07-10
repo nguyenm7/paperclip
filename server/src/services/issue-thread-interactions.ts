@@ -1451,3 +1451,89 @@ export function issueThreadInteractionService(db: Db) {
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Continuation wakeups (shared by the board routes and the plugin bridge)
+// ---------------------------------------------------------------------------
+
+/** Minimal structural view of heartbeatService for continuation wakeups. */
+type ContinuationHeartbeat = {
+  wakeup(agentId: string, input: Record<string, unknown>): Promise<{ id: string } | null | undefined>;
+};
+
+function isClosedIssueStatusForContinuation(status: string | null | undefined): status is "done" | "cancelled" {
+  return status === "done" || status === "cancelled";
+}
+
+function readContinuationString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * Queue the assignee wakeup that lets a resolved interaction resume its
+ * issue's agent. Used by the interaction accept/reject/respond routes and by
+ * the plugin bridge's `issues.respondInteraction`, so chat-surface decisions
+ * resume agents exactly like web-app decisions.
+ */
+export function queueResolvedInteractionContinuationWakeup(input: {
+  heartbeat: ContinuationHeartbeat;
+  issue: { id: string; assigneeAgentId: string | null; status: string };
+  interaction: {
+    id: string;
+    kind: string;
+    status: string;
+    continuationPolicy: string;
+    sourceCommentId?: string | null;
+    sourceRunId?: string | null;
+  };
+  actor: { actorType: "user" | "agent"; actorId: string };
+  source: string;
+  forceFreshSession?: boolean;
+  workspaceRefreshReason?: string | null;
+  onError?: (err: unknown) => void;
+}): void {
+  if (
+    input.interaction.continuationPolicy !== "wake_assignee"
+    && input.interaction.continuationPolicy !== "wake_assignee_on_accept"
+  ) return;
+  if (
+    input.interaction.continuationPolicy === "wake_assignee_on_accept"
+    && input.interaction.status !== "accepted"
+  ) return;
+  if (input.interaction.status === "expired") return;
+  if (!input.issue.assigneeAgentId || isClosedIssueStatusForContinuation(input.issue.status)) return;
+
+  const forceFreshSession = input.forceFreshSession === true;
+  const workspaceRefreshReason = readContinuationString(input.workspaceRefreshReason);
+  void input.heartbeat.wakeup(input.issue.assigneeAgentId, {
+    source: "automation",
+    triggerDetail: "system",
+    reason: "issue_commented",
+    payload: {
+      issueId: input.issue.id,
+      interactionId: input.interaction.id,
+      interactionKind: input.interaction.kind,
+      interactionStatus: input.interaction.status,
+      sourceCommentId: input.interaction.sourceCommentId ?? null,
+      sourceRunId: input.interaction.sourceRunId ?? null,
+      mutation: "interaction",
+    },
+    requestedByActorType: input.actor.actorType,
+    requestedByActorId: input.actor.actorId,
+    contextSnapshot: {
+      issueId: input.issue.id,
+      taskId: input.issue.id,
+      interactionId: input.interaction.id,
+      interactionKind: input.interaction.kind,
+      interactionStatus: input.interaction.status,
+      sourceCommentId: input.interaction.sourceCommentId ?? null,
+      sourceRunId: input.interaction.sourceRunId ?? null,
+      wakeReason: "issue_commented",
+      source: input.source,
+      ...(forceFreshSession ? { forceFreshSession: true } : {}),
+      ...(workspaceRefreshReason ? { workspaceRefreshReason } : {}),
+    },
+  }).catch((err) => input.onError?.(err));
+}

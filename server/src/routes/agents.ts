@@ -1277,6 +1277,27 @@ export function agentRoutes(
     await assertBoardCanManageAgentsForCompany(req, targetAgent.companyId);
   }
 
+  // Governance fields that only board/manager actors may set on an agent record.
+  // Agent keys — including an agent patching its own record — are blocked from
+  // touching these fields because they represent spend-control and org-structure
+  // boundaries whose integrity must be managed by a human principal.
+  const AGENT_GOVERNANCE_FIELDS = [
+    "budgetMonthlyCents",
+    "spentMonthlyCents",
+    "status",
+    "reportsTo",
+    "role",
+  ] as const;
+
+  function assertNoAgentGovernanceFieldMutation(req: Request, patch: Record<string, unknown>) {
+    if (req.actor.type !== "agent") return;
+    const blocked = AGENT_GOVERNANCE_FIELDS.filter((key) => hasOwn(patch, key));
+    if (blocked.length === 0) return;
+    throw forbidden(
+      `Agent-authenticated callers cannot modify governance fields (${blocked.join(", ")}). Use a board-authenticated request.`,
+    );
+  }
+
   function assertNoAgentInstructionsConfigMutation(
     req: Request,
     adapterConfig: Record<string, unknown> | null | undefined,
@@ -2750,6 +2771,7 @@ export function agentRoutes(
     }
 
     const patchData = { ...(req.body as Record<string, unknown>) };
+    assertNoAgentGovernanceFieldMutation(req, patchData);
     const replaceAdapterConfig = patchData.replaceAdapterConfig === true;
     delete patchData.replaceAdapterConfig;
     if (hasOwn(patchData, "adapterConfig")) {

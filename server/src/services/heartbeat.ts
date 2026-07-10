@@ -1423,6 +1423,11 @@ export interface ModelProfileApplication {
   configSource: AppliedModelProfileConfigSource | null;
   fallbackReason: string | null;
   adapterConfig: Record<string, unknown> | null;
+  // Provenance of the profile's `model` override specifically: an
+  // adapter-default profile model must not replace an explicit agent model
+  // pin, while an agent-runtime profile model is a per-agent operator opt-in
+  // that may (LOOA-173).
+  modelSource: AppliedModelProfileConfigSource | null;
 }
 
 export type ResolvedWorkspaceForRun = {
@@ -1523,6 +1528,7 @@ export function resolveModelProfileApplication(input: {
       configSource: null,
       fallbackReason: null,
       adapterConfig: null,
+      modelSource: null,
     };
   }
 
@@ -1535,6 +1541,7 @@ export function resolveModelProfileApplication(input: {
       configSource: null,
       fallbackReason: input.profileResolutionFallbackReason ?? "adapter_profile_not_supported",
       adapterConfig: null,
+      modelSource: null,
     };
   }
 
@@ -1547,19 +1554,26 @@ export function resolveModelProfileApplication(input: {
       configSource: null,
       fallbackReason: "agent_runtime_profile_disabled",
       adapterConfig: null,
+      modelSource: null,
     };
   }
 
+  const profileAdapterConfig = {
+    ...parseObject(adapterProfile.adapterConfig),
+    ...runtimeProfile.adapterConfig,
+  };
   return {
     requested,
     requestedBy,
     applied: requested,
     configSource: runtimeProfile.configured ? "agent_runtime" : "adapter_default",
     fallbackReason: null,
-    adapterConfig: {
-      ...parseObject(adapterProfile.adapterConfig),
-      ...runtimeProfile.adapterConfig,
-    },
+    adapterConfig: profileAdapterConfig,
+    modelSource: readNonEmptyString(runtimeProfile.adapterConfig.model)
+      ? "agent_runtime"
+      : readNonEmptyString(profileAdapterConfig.model)
+        ? "adapter_default"
+        : null,
   };
 }
 
@@ -1568,11 +1582,36 @@ export function mergeModelProfileAdapterConfig(input: {
   modelProfile: ModelProfileApplication;
   issueAdapterConfig: Record<string, unknown> | null | undefined;
 }): Record<string, unknown> {
-  return {
+  const merged = {
     ...input.baseConfig,
     ...(input.modelProfile.adapterConfig ?? {}),
     ...(input.issueAdapterConfig ?? {}),
   };
+  // An explicit agent model pin is authoritative: adapter-default profile
+  // models and blank overrides never replace it. Only per-agent runtime
+  // profile models and non-empty issue-level overrides opt into a swap
+  // (LOOA-173).
+  const pinnedModel = readNonEmptyString(input.baseConfig.model);
+  if (!pinnedModel) return merged;
+  if (readNonEmptyString(input.issueAdapterConfig?.model)) return merged;
+  const profileModel = readNonEmptyString(input.modelProfile.adapterConfig?.model);
+  if (
+    profileModel &&
+    input.modelProfile.modelSource === "agent_runtime" &&
+    readNonEmptyString(merged.model) === profileModel
+  ) {
+    return merged;
+  }
+  merged.model = pinnedModel;
+  return merged;
+}
+
+export function resolveEffectiveConfiguredModel(input: {
+  baseConfig: Record<string, unknown>;
+  modelProfile: ModelProfileApplication;
+  issueAdapterConfig: Record<string, unknown> | null | undefined;
+}): string | null {
+  return readConfiguredModelFromAdapterConfig(mergeModelProfileAdapterConfig(input));
 }
 
 function modelProfileRunMetadata(
@@ -1585,6 +1624,7 @@ function modelProfileRunMetadata(
     applied: modelProfile.applied,
     configSource: modelProfile.configSource,
     fallbackReason: modelProfile.fallbackReason,
+    modelSource: modelProfile.modelSource,
   };
 }
 
@@ -7952,7 +7992,46 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         : null,
     });
     const config = parseObject(agent.adapterConfig);
-    const configuredModel = readConfiguredModelFromAdapterConfig(config);
+    let adapterModelProfiles: AdapterModelProfileDefinition[] = [];
+    let profileResolutionFallbackReason: string | null = null;
+    try {
+      adapterModelProfiles = await listAdapterModelProfiles(agent.adapterType);
+    } catch (error) {
+      profileResolutionFallbackReason = "adapter_profile_resolution_failed";
+      logger.warn(
+        {
+          err: error,
+          companyId: agent.companyId,
+          agentId: agent.id,
+          adapterType: agent.adapterType,
+          runId: run.id,
+        },
+        "Failed to resolve adapter model profiles; falling back to primary adapter config",
+      );
+    }
+    const modelProfileApplication = resolveModelProfileApplication({
+      adapterModelProfiles,
+      agentRuntimeConfig: agent.runtimeConfig,
+      issueModelProfile: issueAssigneeOverrides?.modelProfile ?? null,
+      contextSnapshot: context,
+      profileResolutionFallbackReason,
+    });
+    const modelProfileMetadata = modelProfileRunMetadata(modelProfileApplication);
+    if (modelProfileMetadata) {
+      context.paperclipModelProfile = modelProfileMetadata;
+      if (modelProfileApplication.requested) context.modelProfile = modelProfileApplication.requested;
+    } else {
+      delete context.paperclipModelProfile;
+    }
+    // Session model tracking must see the model the run will actually launch
+    // with (pin/profile/issue-override merge), not the raw agent pin — else a
+    // profile-lane swap is invisible to the model-change session reset
+    // (LOOA-173).
+    const effectiveConfiguredModel = resolveEffectiveConfiguredModel({
+      baseConfig: config,
+      modelProfile: modelProfileApplication,
+      issueAdapterConfig: issueAssigneeOverrides?.adapterConfig ?? null,
+    });
     const taskSession = taskKey
       ? await getTaskSession(agent.companyId, agent.id, agent.adapterType, taskKey)
       : null;
@@ -7960,14 +8039,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       sessionCodec.deserialize(taskSession?.sessionParamsJson ?? null),
     );
     const modelChangedSinceTaskSession = shouldResetTaskSessionForModelChange({
-      configuredModel,
+      configuredModel: effectiveConfiguredModel,
       taskSessionParams: taskSessionDecodedParams,
     });
     const resetTaskSession = shouldResetTaskSessionForWake(context) || modelChangedSinceTaskSession;
     const wakeSessionResetReason = describeSessionResetReason(context);
     const taskSessionConfiguredModel = readConfiguredModelFromSessionParams(taskSessionDecodedParams);
     const modelSessionResetReason = modelChangedSinceTaskSession && taskSessionConfiguredModel
-      ? `configured model changed from "${taskSessionConfiguredModel}" to "${configuredModel}"`
+      ? `configured model changed from "${taskSessionConfiguredModel}" to "${effectiveConfiguredModel}"`
       : null;
     const sessionResetReason = [modelSessionResetReason, wakeSessionResetReason]
       .filter((value): value is string => Boolean(value))
@@ -8267,37 +8346,6 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       workspaceConfig: reusableExecutionWorkspaceConfig,
       mode: effectiveExecutionWorkspaceMode,
     });
-    let adapterModelProfiles: AdapterModelProfileDefinition[] = [];
-    let profileResolutionFallbackReason: string | null = null;
-    try {
-      adapterModelProfiles = await listAdapterModelProfiles(agent.adapterType);
-    } catch (error) {
-      profileResolutionFallbackReason = "adapter_profile_resolution_failed";
-      logger.warn(
-        {
-          err: error,
-          companyId: agent.companyId,
-          agentId: agent.id,
-          adapterType: agent.adapterType,
-          runId: run.id,
-        },
-        "Failed to resolve adapter model profiles; falling back to primary adapter config",
-      );
-    }
-    const modelProfileApplication = resolveModelProfileApplication({
-      adapterModelProfiles,
-      agentRuntimeConfig: agent.runtimeConfig,
-      issueModelProfile: issueAssigneeOverrides?.modelProfile ?? null,
-      contextSnapshot: context,
-      profileResolutionFallbackReason,
-    });
-    const modelProfileMetadata = modelProfileRunMetadata(modelProfileApplication);
-    if (modelProfileMetadata) {
-      context.paperclipModelProfile = modelProfileMetadata;
-      if (modelProfileApplication.requested) context.modelProfile = modelProfileApplication.requested;
-    } else {
-      delete context.paperclipModelProfile;
-    }
     const mergedConfig = mergeModelProfileAdapterConfig({
       baseConfig: persistedWorkspaceManagedConfig,
       modelProfile: modelProfileApplication,
@@ -9430,7 +9478,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               agentId: agent.id,
               adapterType: agent.adapterType,
               taskKey,
-              sessionParamsJson: attachConfiguredModelToSessionParams(nextSessionState.params, configuredModel),
+              sessionParamsJson: attachConfiguredModelToSessionParams(nextSessionState.params, effectiveConfiguredModel),
               sessionDisplayId: nextSessionState.displayId,
               lastRunId: finalizedRun.id,
               lastError: outcome === "succeeded" ? null : (adapterResult.errorMessage ?? "run_failed"),
@@ -9513,7 +9561,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             agentId: agent.id,
             adapterType: agent.adapterType,
             taskKey,
-            sessionParamsJson: attachConfiguredModelToSessionParams(previousSessionParams, configuredModel),
+            sessionParamsJson: attachConfiguredModelToSessionParams(previousSessionParams, effectiveConfiguredModel),
             sessionDisplayId: previousSessionDisplayId,
             lastRunId: failedRun.id,
             lastError: message,

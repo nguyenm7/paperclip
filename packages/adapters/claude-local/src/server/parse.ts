@@ -14,6 +14,16 @@ const CLAUDE_TRANSIENT_UPSTREAM_RE =
 const CLAUDE_EXTRA_USAGE_RESET_RE =
   /(?:out\s+of\s+extra\s+usage|extra\s+usage|usage\s+limit\s+reached|usage\s+cap\s+reached|5[-\s]?hour\s+limit\s+reached|weekly\s+limit\s+reached|claude\s+usage\s+limit\s+reached)[\s\S]{0,80}?\bresets?\s+(?:at\s+)?([^\n()]+?)(?:\s*\(([^)]+)\))?(?:[.!]|\n|$)/i;
 
+// Real-time model-safety refusals (e.g. Anthropic's cyber safeguards) are a
+// deterministic function of the request content: the API refuses the same
+// context on every attempt, so they must never be treated as transient
+// upstream failures. The structural signal is the result event's
+// `stop_reason: "refusal"` (and the synthetic assistant message's
+// `stop_details.type: "refusal"`); the wording patterns cover runs where the
+// CLI died before emitting a parseable result event.
+const CLAUDE_SAFETY_REFUSAL_RE =
+  /(?:has\s+safety\s+measures\s+that\s+flagged|safeguards\s+flagged\s+this\s+message|real[-\s]?time[-\s]?cyber[-\s]?safeguards|cyber\s+verification\s+program|refusals-and-fallback|restrictions\s+on\s+violative\s+[\w\s]{0,40}content|model_refusal_no_fallback)/i;
+
 export function parseClaudeStreamJson(stdout: string) {
   let sessionId: string | null = null;
   let model = "";
@@ -220,6 +230,27 @@ export function isClaudeImageProcessingError(parsed: Record<string, unknown>): b
   );
 }
 
+// The Claude CLI stream emits informational `rate_limit_event` lines on
+// healthy runs (`rate_limit_info.status: "allowed"`), and their camelCase
+// fields (`rateLimitType`) match the transient-upstream wording. Without this
+// filter every failed run whose stream carries one of those benign lines is
+// misclassified as transient and retried, even for deterministic failures
+// such as model-safety refusals. Only events that report an actual limit hit
+// may contribute transient signal.
+function stripBenignRateLimitEventLines(stdout: string): string {
+  return stdout
+    .split(/\r?\n/)
+    .filter((rawLine) => {
+      const line = rawLine.trim();
+      if (!line.includes("rate_limit_event")) return true;
+      const event = parseJson(line);
+      if (!event || asString(event.type, "") !== "rate_limit_event") return true;
+      const status = asString(parseObject(event.rate_limit_info).status, "");
+      return status !== "allowed" && status !== "allowed_warning";
+    })
+    .join("\n");
+}
+
 function buildClaudeTransientHaystack(input: {
   parsed?: Record<string, unknown> | null;
   stdout?: string | null;
@@ -233,7 +264,7 @@ function buildClaudeTransientHaystack(input: {
     input.errorMessage ?? "",
     resultText,
     ...parsedErrors,
-    input.stdout ?? "",
+    stripBenignRateLimitEventLines(input.stdout ?? ""),
     input.stderr ?? "",
   ]
     .join("\n")
@@ -391,6 +422,33 @@ export function extractClaudeRetryNotBefore(
   return parseClaudeResetClockTime(match[1] ?? "", now, match[2]);
 }
 
+export function isClaudeSafetyRefusalError(input: {
+  parsed?: Record<string, unknown> | null;
+  stdout?: string | null;
+  stderr?: string | null;
+  errorMessage?: string | null;
+}): boolean {
+  const parsed = input.parsed ?? null;
+  if (parsed) {
+    if (asString(parsed.stop_reason, "").trim().toLowerCase() === "refusal") return true;
+    if (asString(parseObject(parsed.stop_details).type, "").trim().toLowerCase() === "refusal") {
+      return true;
+    }
+    // With a parsed result, match wording only against the failure surfaces —
+    // not the whole stdout stream, where a recovered mid-run refusal-fallback
+    // notice could linger after an unrelated failure.
+    const failureText = [
+      input.errorMessage ?? "",
+      asString(parsed.result, ""),
+      ...extractClaudeErrorMessages(parsed),
+    ].join("\n");
+    return CLAUDE_SAFETY_REFUSAL_RE.test(failureText);
+  }
+  const haystack = buildClaudeTransientHaystack(input);
+  if (!haystack) return false;
+  return CLAUDE_SAFETY_REFUSAL_RE.test(haystack);
+}
+
 export function isClaudeTransientUpstreamError(input: {
   parsed?: Record<string, unknown> | null;
   stdout?: string | null;
@@ -399,6 +457,7 @@ export function isClaudeTransientUpstreamError(input: {
 }): boolean {
   const parsed = input.parsed ?? null;
   // Deterministic failures are handled by their own classifiers.
+  if (isClaudeSafetyRefusalError(input)) return false;
   if (parsed && (isClaudeMaxTurnsResult(parsed) || isClaudeUnknownSessionError(parsed) || isClaudePoisonedPreviousMessageIdError(parsed) || isClaudeImageProcessingError(parsed))) {
     return false;
   }

@@ -939,6 +939,18 @@ function isWorkspaceValidationFailedRun(
   return run?.errorCode === WORKSPACE_VALIDATION_FAILURE_CODE;
 }
 
+// Model-safety refusals are deterministic for the run's context: the upstream
+// API refuses the same content on every attempt. Scheduling transient retries
+// only burns the retry budget while the non-terminal retry run holds the
+// issue's execution lock and starves the assignee's writes (LOOA-170).
+const MODEL_SAFETY_REFUSAL_ERROR_CODE = "claude_safety_refusal";
+
+function isModelSafetyRefusalRun(
+  run: Pick<typeof heartbeatRuns.$inferSelect, "errorCode"> | null | undefined,
+) {
+  return run?.errorCode === MODEL_SAFETY_REFUSAL_ERROR_CODE;
+}
+
 async function hasGitMetadata(cwd: string | null | undefined) {
   const normalized = readNonEmptyString(cwd);
   if (!normalized) return false;
@@ -6052,6 +6064,27 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const retryReason = opts?.retryReason ?? BOUNDED_TRANSIENT_HEARTBEAT_RETRY_REASON;
     const wakeReason = opts?.wakeReason ?? BOUNDED_TRANSIENT_HEARTBEAT_RETRY_WAKE_REASON;
     const maxAttempts = Math.max(0, Math.floor(opts?.maxAttempts ?? BOUNDED_TRANSIENT_HEARTBEAT_RETRY_MAX_ATTEMPTS));
+    if (retryReason === BOUNDED_TRANSIENT_HEARTBEAT_RETRY_REASON && isModelSafetyRefusalRun(run)) {
+      // Belt-and-braces for callers that reach this scheduler without the
+      // finalize-path transient gate (e.g. the public scheduleBoundedRetry
+      // wrapper): a safety refusal repeats identically on every attempt.
+      await appendRunEvent(run, await nextRunEventSeq(run.id), {
+        eventType: "lifecycle",
+        stream: "system",
+        level: "warn",
+        message: "Transient retry suppressed: model-safety refusals are deterministic for the run context",
+        payload: {
+          retryReason,
+          errorCode: run.errorCode,
+        },
+      });
+      return {
+        outcome: "not_scheduled" as const,
+        reason: "Model-safety refusals are deterministic for the run context; no automatic retry",
+        errorCode: MODEL_SAFETY_REFUSAL_ERROR_CODE,
+        issueId: readNonEmptyString(parseObject(run.contextSnapshot).issueId),
+      };
+    }
     const nextAttempt = (run.scheduledRetryAttempt ?? 0) + 1;
     const baseSchedule = opts?.delayMs != null
       ? nextAttempt <= maxAttempts
@@ -9282,6 +9315,42 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           }
         } else if (outcome === "failed" && readTransientRecoveryContractFromRun(livenessRun)) {
           await scheduleBoundedRetryForRun(livenessRun, agent);
+        } else if (outcome === "failed" && isModelSafetyRefusalRun(livenessRun) && issueId) {
+          // Fail closed but visibly: no retry is scheduled (the refusal is
+          // deterministic), releaseIssueExecutionAndPromote below frees the
+          // execution lock, and the refusal is surfaced on the woken issue so
+          // the assignee/board can see why the wake never executed.
+          try {
+            const existingRunComment = await findRunIssueComment(livenessRun.id, livenessRun.companyId, issueId);
+            if (!existingRunComment) {
+              const refusalFirstLine =
+                readNonEmptyString(livenessRun.error)
+                  ?.split(/\r?\n/)
+                  .map((line) => line.trim())
+                  .find(Boolean) ?? null;
+              const refusalDetail =
+                refusalFirstLine && refusalFirstLine.length > 240
+                  ? `${refusalFirstLine.slice(0, 237)}...`
+                  : refusalFirstLine;
+              await issuesSvc.addComment(
+                issueId,
+                "Automated run stopped by an upstream model-safety refusal " +
+                  `(\`${MODEL_SAFETY_REFUSAL_ERROR_CODE}\`${refusalDetail ? `: ${refusalDetail}` : ""}). ` +
+                  "The model deterministically refuses this run's wake context, so Paperclip will not " +
+                  "retry automatically and has released the issue's execution lock. " +
+                  "If wakes on this issue keep hitting this refusal, reduce or relocate the sensitive " +
+                  "content that lands in the wake context (for example, move detailed vulnerability " +
+                  "writeups into linked issue documents) so the assignee can pick the work up directly.",
+                { runId: livenessRun.id },
+                { authorType: "system" },
+              );
+            }
+          } catch (err) {
+            await onLog(
+              "stderr",
+              `[paperclip] Failed to post safety-refusal comment: ${err instanceof Error ? err.message : String(err)}\n`,
+            );
+          }
         }
         const issueCommentPolicyResult = await finalizeIssueCommentPolicy(livenessRun, agent);
         await releaseIssueExecutionAndPromote(livenessRun);

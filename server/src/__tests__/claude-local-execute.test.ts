@@ -1183,6 +1183,83 @@ describe("claude execute", () => {
     }
   });
 
+  it("classifies model-safety refusals as permanent claude_safety_refusal, even with benign rate_limit_event stream lines (LOOA-170)", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-execute-refusal-"));
+    const workspace = path.join(root, "workspace");
+    const commandPath = path.join(root, "claude");
+    await fs.mkdir(workspace, { recursive: true });
+    // Reproduces the incident stream: the informational rate_limit_event that
+    // healthy runs emit (status "allowed"), followed by the refusal result.
+    const rateLimitEventLine = JSON.stringify({
+      type: "rate_limit_event",
+      rate_limit_info: {
+        status: "allowed",
+        resetsAt: 1783701000,
+        rateLimitType: "five_hour",
+        overageStatus: "allowed",
+        isUsingOverage: false,
+      },
+    });
+    const refusalResultLine = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      session_id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      is_error: true,
+      stop_reason: "refusal",
+      result:
+        "API Error: Opus 4.8 has safety measures that flagged this message for a cybersecurity topic. " +
+        "To learn about the Cyber Verification Program and apply for access, visit our help center: " +
+        "https://support.claude.com/en/articles/14604842-real-time-cyber-safeguards-on-claude.\n\n" +
+        "Request ID: req_011CctNStRSS5Q2de9yRuVis",
+      total_cost_usd: 2.77,
+    });
+    await writeTextFailingClaudeCommand(commandPath, {
+      stdout: `${rateLimitEventLine}\n${refusalResultLine}\n`,
+      exitCode: 1,
+    });
+
+    const previousHome = process.env.HOME;
+    process.env.HOME = root;
+
+    try {
+      const result = await execute({
+        runId: "run-claude-safety-refusal",
+        agent: {
+          id: "agent-1",
+          companyId: "company-1",
+          name: "Claude Coder",
+          adapterType: "claude_local",
+          adapterConfig: {},
+        },
+        runtime: {
+          sessionId: null,
+          sessionParams: null,
+          sessionDisplayId: null,
+          taskKey: null,
+        },
+        config: {
+          command: commandPath,
+          cwd: workspace,
+          promptTemplate: "Follow the paperclip heartbeat.",
+        },
+        context: {},
+        authToken: "run-jwt-token",
+        onLog: async () => {},
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.errorCode).toBe("claude_safety_refusal");
+      expect(result.errorFamily ?? null).toBeNull();
+      expect(result.retryNotBefore ?? null).toBeNull();
+      expect(result.resultJson?.errorFamily).toBeUndefined();
+      expect(result.errorMessage ?? "").toContain("safety measures");
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("auto-rotates session on previous_message_id 400 (synthetic-msg poisoning) and succeeds on retry", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-exec-poisoned-msgid-"));
     const { workspace, commandPath, capturePath, statePath, restore } = await setupExecuteEnv(root, {

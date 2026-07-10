@@ -1,11 +1,38 @@
 import { describe, expect, it } from "vitest";
 import {
   extractClaudeRetryNotBefore,
+  isClaudeSafetyRefusalError,
   isClaudeTransientUpstreamError,
   isClaudePoisonedPreviousMessageIdError,
   isClaudeUnknownSessionError,
   isClaudeImageProcessingError,
 } from "./parse.js";
+
+// Verbatim shapes from the LOOA-170 incident (runs 0f9dbfa4/2604b568/edce6fcb,
+// 2026-07-10): a real-time cyber-safeguard refusal whose stream also carried a
+// benign informational rate_limit_event line.
+const SAFETY_REFUSAL_RESULT_TEXT =
+  "API Error: Opus 4.8 has safety measures that flagged this message for a cybersecurity topic. " +
+  "To learn about the Cyber Verification Program and apply for access, visit our help center: " +
+  "https://support.claude.com/en/articles/14604842-real-time-cyber-safeguards-on-claude.\n\n" +
+  "Request ID: req_011CctNStRSS5Q2de9yRuVis";
+const BENIGN_RATE_LIMIT_EVENT_LINE = JSON.stringify({
+  type: "rate_limit_event",
+  rate_limit_info: {
+    status: "allowed",
+    resetsAt: 1783701000,
+    rateLimitType: "five_hour",
+    overageStatus: "allowed",
+    isUsingOverage: false,
+  },
+});
+const SAFETY_REFUSAL_RESULT_EVENT = {
+  type: "result",
+  subtype: "success",
+  is_error: true,
+  stop_reason: "refusal",
+  result: SAFETY_REFUSAL_RESULT_TEXT,
+};
 
 describe("isClaudeTransientUpstreamError", () => {
   it("classifies the 'out of extra usage' subscription window failure as transient", () => {
@@ -106,6 +133,113 @@ describe("isClaudeTransientUpstreamError", () => {
           is_error: true,
           result: "API Error: 400 diagnostics.previous_message_id: must be the `id` from a prior /v1/messages response (starts with `msg_`)",
         },
+      }),
+    ).toBe(false);
+  });
+
+  it("does not classify model-safety refusals as transient", () => {
+    expect(
+      isClaudeTransientUpstreamError({
+        parsed: SAFETY_REFUSAL_RESULT_EVENT,
+      }),
+    ).toBe(false);
+    expect(
+      isClaudeTransientUpstreamError({
+        errorMessage: `Claude run failed: subtype=success: ${SAFETY_REFUSAL_RESULT_TEXT}`,
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores benign allowed rate_limit_event stream lines (LOOA-170 regression)", () => {
+    // The exact incident shape: a deterministic refusal whose stdout also
+    // carries the informational rate_limit_event that every healthy stream
+    // emits. `rateLimitType` must not read as transient rate-limit signal.
+    expect(
+      isClaudeTransientUpstreamError({
+        parsed: SAFETY_REFUSAL_RESULT_EVENT,
+        stdout: [BENIGN_RATE_LIMIT_EVENT_LINE, JSON.stringify(SAFETY_REFUSAL_RESULT_EVENT)].join("\n"),
+      }),
+    ).toBe(false);
+    // Same benign line next to an unrelated deterministic failure.
+    expect(
+      isClaudeTransientUpstreamError({
+        errorMessage: "Invalid request_error: Unknown parameter 'foo'.",
+        stdout: BENIGN_RATE_LIMIT_EVENT_LINE,
+      }),
+    ).toBe(false);
+    // A rate_limit_event that reports an actual limit hit still counts.
+    expect(
+      isClaudeTransientUpstreamError({
+        errorMessage: "Claude exited with code 1",
+        stdout: JSON.stringify({
+          type: "rate_limit_event",
+          rate_limit_info: { status: "rejected", rateLimitType: "five_hour" },
+        }),
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("isClaudeSafetyRefusalError", () => {
+  it("detects the structural stop_reason refusal on the result event", () => {
+    expect(
+      isClaudeSafetyRefusalError({
+        parsed: SAFETY_REFUSAL_RESULT_EVENT,
+      }),
+    ).toBe(true);
+    expect(
+      isClaudeSafetyRefusalError({
+        parsed: {
+          is_error: true,
+          stop_details: { type: "refusal", category: "cyber" },
+          result: "refused",
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("detects the refusal wording when no structural stop_reason is present", () => {
+    expect(
+      isClaudeSafetyRefusalError({
+        parsed: {
+          subtype: "success",
+          is_error: true,
+          result: SAFETY_REFUSAL_RESULT_TEXT,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isClaudeSafetyRefusalError({
+        errorMessage:
+          "This request triggered restrictions on violative cyber content and was blocked under Anthropic's Usage Policy.",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not flag ordinary failures or transient upstream errors", () => {
+    expect(
+      isClaudeSafetyRefusalError({
+        parsed: { is_error: true, result: "You're out of extra usage. Resets at 4pm (America/Chicago)." },
+      }),
+    ).toBe(false);
+    expect(
+      isClaudeSafetyRefusalError({
+        errorMessage: "Claude exited with code 1",
+        stderr: "HTTP 429: Too Many Requests",
+      }),
+    ).toBe(false);
+    // A recovered mid-run refusal fallback in the stream must not taint an
+    // unrelated failure when a parsed result is available.
+    expect(
+      isClaudeSafetyRefusalError({
+        parsed: { is_error: true, result: "Timed out waiting for tool output." },
+        stdout: JSON.stringify({
+          type: "system",
+          subtype: "model_refusal_fallback",
+          trigger: "refusal",
+          original_model: "claude-fable-5",
+          fallback_model: "claude-opus-4-8",
+        }),
       }),
     ).toBe(false);
   });

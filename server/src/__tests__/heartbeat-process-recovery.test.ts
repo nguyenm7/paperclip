@@ -1339,6 +1339,72 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(comments).toHaveLength(0);
   });
 
+  it("treats model-safety refusals as permanent: no retry run, execution lock released, system comment posted (LOOA-170)", async () => {
+    mockAdapterExecute.mockResolvedValueOnce({
+      exitCode: 1,
+      signal: null,
+      timedOut: false,
+      errorCode: "claude_safety_refusal",
+      errorMessage:
+        "Claude run failed: subtype=success: API Error: Opus 4.8 has safety measures that flagged this message for a cybersecurity topic.",
+      provider: "anthropic",
+      model: "claude-fable-5",
+      resultJson: { stop_reason: "refusal" },
+    });
+
+    const { agentId, runId, issueId } = await seedQueuedIssueRunFixture();
+    const heartbeat = heartbeatService(db);
+
+    await heartbeat.resumeQueuedRuns();
+    await waitForRunToSettle(heartbeat, runId);
+
+    // The refusal comment is posted during finalize, after the run row turns
+    // terminal; poll for it instead of racing the tail of finalization.
+    const refusalComment = await waitForValue(async () => {
+      const rows = await db.select().from(issueComments).where(eq(issueComments.issueId, issueId));
+      return rows.find((row) => row.createdByRunId === runId) ?? null;
+    });
+    expect(refusalComment?.authorType).toBe("system");
+    expect(refusalComment?.body).toContain("model-safety refusal");
+    expect(refusalComment?.body).toContain("claude_safety_refusal");
+    expect(refusalComment?.body).toContain("safety measures");
+
+    // Deterministic refusal ⇒ terminal failure with no transient retry. A
+    // liveness continuation run (fresh context, not a replay of the refused
+    // wake snapshot) is allowed; a scheduled_retry of the refusal is not.
+    const failedRun = await heartbeat.getRun(runId);
+    expect(failedRun?.status).toBe("failed");
+    expect(failedRun?.errorCode).toBe("claude_safety_refusal");
+    expect(failedRun?.scheduledRetryAt).toBeNull();
+
+    const runs = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.agentId, agentId));
+    const transientRetries = runs.filter(
+      (row) => row.status === "scheduled_retry" || row.scheduledRetryReason === "transient_failure",
+    );
+    expect(transientRetries).toHaveLength(0);
+
+    // The execution lock must not stay pinned to the refused run (or move to
+    // a queued doomed retry of it, which is what starved assignee writes in
+    // LOOA-170). A live continuation run may legitimately hold it instead.
+    const issue = await waitForValue(async () => {
+      const row = await db
+        .select()
+        .from(issues)
+        .where(eq(issues.id, issueId))
+        .then((rows) => rows[0] ?? null);
+      return row && row.executionRunId !== runId && row.checkoutRunId !== runId ? row : null;
+    });
+    expect(issue?.executionRunId).not.toBe(runId);
+    expect(issue?.checkoutRunId).not.toBe(runId);
+    expect(issue?.status).toBe("in_progress");
+
+    // Let the liveness continuation settle so it cannot leak into other tests.
+    await waitForHeartbeatIdle(db);
+  });
+
   it("blocks a git-sensitive local adapter before launch when a project-workspace-linked issue is missing its project id", async () => {
     const { companyId, agentId, runId, issueId } = await seedQueuedIssueRunFixture();
     const projectId = randomUUID();

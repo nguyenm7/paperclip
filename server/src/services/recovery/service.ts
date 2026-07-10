@@ -190,6 +190,9 @@ const NON_RETRYABLE_CONTINUATION_ERROR_CODES = new Set<string>([
   "budget_exhausted",
   "issue_paused",
   "issue_dependencies_blocked",
+  // Model-safety refusals repeat identically for the same context; a
+  // continuation relaunch would hit the same refusal (LOOA-170).
+  "claude_safety_refusal",
 ]);
 
 const CONTINUATION_RECOVERY_TRANSIENT_MAX_ATTEMPTS = 3;

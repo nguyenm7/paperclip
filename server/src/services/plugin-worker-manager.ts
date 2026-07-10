@@ -544,6 +544,11 @@ export function createPluginWorkerHandle(
     const invocation: PluginInvocationContext = {
       id: randomUUID(),
       scope,
+      // TTL-bounded invocations advertise their expiry so the worker stops
+      // echoing the id once the entry is gone (host and worker share a clock —
+      // workers are forked children) and falls back to its background
+      // invocation instead of sending a stale id we would reject as unknown.
+      ...(ttlMs !== undefined ? { expiresAtMs: Date.now() + ttlMs } : {}),
     };
     const entry: ActiveInvocation = { scope };
     if (ttlMs !== undefined) {
@@ -948,6 +953,17 @@ export function createPluginWorkerHandle(
     attachStdioHandlers(child);
     startedAt = Date.now();
 
+    // Standing invocation for worker background work — plugin timers, retry
+    // drains, and async continuations that outlive the dispatch they were
+    // scheduled from make worker→host calls with no ambient invocation.
+    // Company-unrestricted (the same trust level as a runJob dispatch), one
+    // per spawn, no TTL: it dies with the process via rejectAllPending().
+    // Side effect: while a worker is running, at least one invocation is
+    // always active, so the id-less allowance in contextForWorkerMessage
+    // never applies to workers on the current SDK — the anti-scope-escape
+    // guard is deterministic instead of timing-dependent (LOOA-195).
+    const backgroundInvocation = registerInvocation({});
+
     // Send the initialize RPC call
     const initParams: InitializeParams = {
       manifest: options.manifest,
@@ -955,6 +971,7 @@ export function createPluginWorkerHandle(
       instanceInfo: options.instanceInfo,
       apiVersion: options.apiVersion,
       databaseNamespace: options.databaseNamespace ?? null,
+      backgroundInvocation,
     };
 
     try {

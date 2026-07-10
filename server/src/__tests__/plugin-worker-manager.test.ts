@@ -481,4 +481,129 @@ describe("plugin-worker-manager stderr failure context", () => {
       await handle.stop().catch(() => undefined);
     }
   });
+
+  it("accepts worker calls carrying the background invocation while a company invocation is active", async () => {
+    // Background timers (reconcile sweeps, retry drains) have no dispatch
+    // invocation. Before the background-invocation fix their id-less calls
+    // were rejected whenever any company invocation was active. Now the host
+    // mints a standing company-unrestricted invocation per spawn and the
+    // worker attaches its id instead.
+    let releaseFirstCall!: () => void;
+    const firstCallGate = new Promise<void>((resolve) => {
+      releaseFirstCall = resolve;
+    });
+    const companiesGet = vi.fn(async (params: { companyId: string }) => {
+      if (companiesGet.mock.calls.length === 1) await firstCallGate;
+      return { id: params.companyId };
+    });
+    const hostHandlers = createHostClientHandlers({
+      pluginId: "test.plugin",
+      capabilities: ["companies.read"],
+      services: {
+        companies: {
+          get: companiesGet,
+        },
+      } as unknown as HostServices,
+    });
+    const handle = createPluginWorkerHandle("test.plugin", {
+      entrypointPath: INVOCATION_SCOPE_WORKER_ENTRYPOINT,
+      manifest: TEST_MANIFEST,
+      config: {},
+      instanceInfo: {
+        instanceId: "instance-1",
+        hostVersion: "1.0.0",
+      },
+      apiVersion: 1,
+      hostHandlers,
+    });
+
+    try {
+      await handle.start();
+
+      const heldData = handle.call("getData", {
+        key: "probe",
+        companyId: "company-1",
+        params: {
+          mode: "echo",
+          requestedCompanyId: "company-1",
+        },
+      } as HostToWorkerMethods["getData"][0]);
+      await vi.waitFor(() => expect(companiesGet).toHaveBeenCalledTimes(1));
+
+      // The nested call carries the background invocation id, not the id of
+      // the (company-2 scoped) dispatch that transported it — and it may
+      // touch a different company because the background scope is
+      // company-unrestricted, like runJob dispatches.
+      await expect(handle.call("getData", {
+        key: "probe",
+        companyId: "company-2",
+        params: {
+          mode: "background",
+          requestedCompanyId: "company-1",
+        },
+      } as HostToWorkerMethods["getData"][0])).resolves.toMatchObject({ id: "company-1" });
+
+      releaseFirstCall();
+      await expect(heldData).resolves.toMatchObject({ id: "company-1" });
+    } finally {
+      releaseFirstCall();
+      await handle.stop().catch(() => undefined);
+    }
+  });
+
+  it("rejects id-less worker calls even when no dispatch invocation is active", async () => {
+    // The standing background invocation means at least one scope entry is
+    // always active while the worker runs, so the historical id-less
+    // allowance (which made the guard timing-dependent) never applies to
+    // workers whose host minted a background invocation.
+    const companiesGet = vi.fn(async () => ({ id: "company-b" }));
+    const hostHandlers = createHostClientHandlers({
+      pluginId: "test.plugin",
+      capabilities: ["companies.read"],
+      services: {
+        companies: {
+          get: companiesGet,
+        },
+      } as unknown as HostServices,
+    });
+    const handle = createPluginWorkerHandle("test.plugin", {
+      entrypointPath: INVOCATION_SCOPE_WORKER_ENTRYPOINT,
+      manifest: TEST_MANIFEST,
+      config: {},
+      instanceInfo: {
+        instanceId: "instance-1",
+        hostVersion: "1.0.0",
+      },
+      apiVersion: 1,
+      hostHandlers,
+    });
+
+    try {
+      await handle.start();
+
+      // performAction with no company anywhere derives no dispatch scope, so
+      // before the background invocation this id-less nested call would have
+      // been allowed through the timing-dependent gap.
+      await expect(handle.call("performAction", {
+        key: "probe",
+        params: {
+          mode: "omit",
+          requestedCompanyId: "company-b",
+        },
+        actorContext: {
+          type: "system",
+          userId: null,
+          agentId: null,
+          runId: null,
+          companyId: null,
+        },
+        renderEnvironment: null,
+      })).rejects.toMatchObject({
+        code: PLUGIN_RPC_ERROR_CODES.INVOCATION_SCOPE_DENIED,
+      });
+      expect(companiesGet).not.toHaveBeenCalled();
+    } finally {
+      await handle.stop().catch(() => undefined);
+    }
+  });
 });

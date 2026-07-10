@@ -296,3 +296,188 @@ describe("worker invocation scope propagation", () => {
     }
   });
 });
+
+describe("worker background invocation", () => {
+  interface RecordedCall {
+    companyId: string;
+    invocationId: string | null;
+  }
+
+  function createHarness(setup: Parameters<typeof definePlugin>[0]["setup"]) {
+    const hostToWorker = new PassThrough();
+    const workerToHost = new PassThrough();
+    const hostReadline = createInterface({ input: workerToHost });
+    const pending = new Map<string, (response: JsonRpcResponse) => void>();
+    const recorded: RecordedCall[] = [];
+    let nextRequestId = 1;
+
+    const worker = startWorkerRpcHost({
+      plugin: definePlugin({ setup }),
+      stdin: hostToWorker,
+      stdout: workerToHost,
+    });
+
+    hostReadline.on("line", (line) => {
+      const message = parseMessage(line);
+      if (isJsonRpcResponse(message)) {
+        pending.get(String(message.id))?.(message);
+        pending.delete(String(message.id));
+        return;
+      }
+      if (!isJsonRpcRequest(message)) return;
+
+      if (message.method === "companies.get") {
+        const companyId = String((message.params as { companyId?: string }).companyId);
+        recorded.push({
+          companyId,
+          invocationId:
+            (message as { paperclipInvocationId?: string }).paperclipInvocationId ?? null,
+        });
+        hostToWorker.write(
+          serializeMessage(createSuccessResponse(message.id, { id: companyId })),
+        );
+        return;
+      }
+
+      // Ack anything else the worker calls during setup (events.subscribe, …)
+      hostToWorker.write(serializeMessage(createSuccessResponse(message.id, {})));
+    });
+
+    function sendRequest(method: string, params: unknown, invocation?: PluginInvocationContext) {
+      const id = `host-${nextRequestId++}`;
+      const request = {
+        ...createRequest(method, params, id),
+        ...(invocation ? { paperclipInvocation: invocation } : {}),
+      };
+      const result = new Promise<unknown>((resolve, reject) => {
+        pending.set(id, (response) => {
+          if ("error" in response && response.error) {
+            reject(new Error(response.error.message));
+            return;
+          }
+          resolve((response as { result?: unknown }).result);
+        });
+      });
+      hostToWorker.write(serializeMessage(request));
+      return result;
+    }
+
+    function sendNotification(method: string, params: unknown, invocation?: PluginInvocationContext) {
+      hostToWorker.write(serializeMessage({
+        jsonrpc: "2.0",
+        method,
+        params,
+        ...(invocation ? { paperclipInvocation: invocation } : {}),
+      } as never));
+    }
+
+    async function waitForRecorded(count: number, timeoutMs = 2_000): Promise<void> {
+      const deadline = Date.now() + timeoutMs;
+      while (recorded.length < count) {
+        if (Date.now() > deadline) {
+          throw new Error(`timed out waiting for ${count} recorded calls (got ${recorded.length})`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    }
+
+    function destroy() {
+      worker.stop();
+      hostReadline.close();
+      hostToWorker.destroy();
+      workerToHost.destroy();
+    }
+
+    return { sendRequest, sendNotification, waitForRecorded, recorded, destroy };
+  }
+
+  const INIT_PARAMS = {
+    manifest: {
+      id: "paperclip.background-test",
+      apiVersion: 1,
+      version: "1.0.0",
+      displayName: "Background invocation test",
+      description: "Background invocation test",
+      author: "Paperclip",
+      categories: ["automation"],
+      capabilities: ["companies.read"],
+      entrypoints: { worker: "dist/worker.js" },
+    },
+    config: {},
+    instanceInfo: { instanceId: "test", hostVersion: "0.0.0" },
+    apiVersion: 1,
+    backgroundInvocation: { id: "bg-1", scope: {} },
+  };
+
+  it("attaches the background invocation outside dispatches and after a dispatch completes", async () => {
+    const harness = createHarness(async (ctx) => {
+      // Setup-time host call: runs under the initialize dispatch, which
+      // carries no invocation — must ride the background one.
+      await ctx.companies.get("setup-co");
+      ctx.actions.register("kick", async () => {
+        await ctx.companies.get("inline-co");
+        // Scheduled inside the dispatch but fires after the response is
+        // sent — the host has already cleared the dispatch invocation.
+        setTimeout(() => void ctx.companies.get("later-co"), 10);
+        return { ok: true };
+      });
+    });
+
+    try {
+      await expect(harness.sendRequest("initialize", INIT_PARAMS)).resolves.toMatchObject({ ok: true });
+
+      await expect(harness.sendRequest(
+        "performAction",
+        { key: "kick", params: {} },
+        { id: "inv-kick", scope: { companyId: "company-a" } },
+      )).resolves.toEqual({ ok: true });
+
+      await harness.waitForRecorded(3);
+      expect(harness.recorded).toEqual([
+        { companyId: "setup-co", invocationId: "bg-1" },
+        { companyId: "inline-co", invocationId: "inv-kick" },
+        { companyId: "later-co", invocationId: "bg-1" },
+      ]);
+    } finally {
+      harness.destroy();
+    }
+  });
+
+  it("stops echoing expired notification invocations and falls back to the background one", async () => {
+    const harness = createHarness(async (ctx) => {
+      ctx.events.on("test.event", async (event) => {
+        await ctx.companies.get(String((event.payload as { co: string }).co));
+      });
+    });
+
+    try {
+      await expect(harness.sendRequest("initialize", INIT_PARAMS)).resolves.toMatchObject({ ok: true });
+
+      const baseEvent = {
+        eventType: "test.event",
+        companyId: "company-a",
+        entityType: "issue",
+        entityId: "issue-1",
+      };
+      harness.sendNotification(
+        "onEvent",
+        { event: { ...baseEvent, payload: { co: "fresh-co" } } },
+        { id: "inv-fresh", scope: { companyId: "company-a" }, expiresAtMs: Date.now() + 60_000 },
+      );
+      await harness.waitForRecorded(1);
+      harness.sendNotification(
+        "onEvent",
+        { event: { ...baseEvent, payload: { co: "stale-co" } } },
+        { id: "inv-stale", scope: { companyId: "company-a" }, expiresAtMs: Date.now() - 1_000 },
+      );
+      await harness.waitForRecorded(2);
+
+      expect(harness.recorded).toEqual([
+        { companyId: "fresh-co", invocationId: "inv-fresh" },
+        { companyId: "stale-co", invocationId: "bg-1" },
+      ]);
+    } finally {
+      harness.destroy();
+    }
+  });
+});

@@ -101,6 +101,8 @@ export interface JsonRpcInvocationScope {
 export interface JsonRpcInvocationContext {
   readonly id: string;
   readonly scope: JsonRpcInvocationScope;
+  /** Absolute epoch-ms expiry for TTL-bounded invocations. See {@link PluginInvocationContext.expiresAtMs}. */
+  readonly expiresAtMs?: number;
 }
 
 /**
@@ -279,6 +281,15 @@ export interface PluginInvocationScope {
 export interface PluginInvocationContext {
   id: string;
   scope: PluginInvocationScope;
+  /**
+   * Absolute epoch-ms expiry for TTL-bounded invocations (host and worker
+   * share the same machine clock — workers are forked children of the host).
+   * The host drops the scope entry at this instant, so workers must stop
+   * echoing the id past it and fall back to their background invocation.
+   * Absent on request-scoped invocations, which the host clears when it
+   * receives the worker's response.
+   */
+  expiresAtMs?: number;
 }
 
 /**
@@ -315,6 +326,15 @@ export interface InitializeParams {
   apiVersion: number;
   /** Host-derived plugin database namespace, when the manifest declares database access. */
   databaseNamespace?: string | null;
+  /**
+   * Standing invocation for worker-initiated ("background") host calls —
+   * timers, retry drains, and async work that outlives the dispatch it was
+   * scheduled from. Minted by the host once per worker spawn with a
+   * company-unrestricted scope (the same trust level as a `runJob` dispatch)
+   * and valid until the process exits. When present, the SDK attaches it to
+   * every worker→host call that has no live ambient invocation.
+   */
+  backgroundInvocation?: PluginInvocationContext | null;
 }
 
 /**

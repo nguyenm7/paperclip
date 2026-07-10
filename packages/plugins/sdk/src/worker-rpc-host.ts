@@ -287,6 +287,36 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
   let databaseNamespace: string | null = null;
   const invocationContextStorage = new AsyncLocalStorage<PluginInvocationContext>();
 
+  // Standing invocation for background host calls (set from InitializeParams).
+  // Timers, retry drains, and post-dispatch continuations attach this id when
+  // no live ambient invocation exists — without it those calls are id-less and
+  // the host rejects them whenever any invocation scope is active.
+  let backgroundInvocation: PluginInvocationContext | null = null;
+
+  // Request dispatches whose host-side scope entry is already gone. The host
+  // clears a request invocation the moment it receives our response, so work
+  // scheduled inside the dispatch (setTimeout, fire-and-forget promises) must
+  // not echo its id afterwards — the host would reject it as unknown.
+  const completedInvocations = new WeakSet<PluginInvocationContext>();
+
+  /**
+   * The invocation to attach to an outbound worker→host message: the ambient
+   * dispatch invocation while it is still valid host-side (not completed, not
+   * past its TTL), else the standing background invocation when the host
+   * minted one at initialize.
+   */
+  function outboundInvocation(): PluginInvocationContext | null {
+    const ambient = invocationContextStorage.getStore();
+    if (
+      ambient &&
+      !completedInvocations.has(ambient) &&
+      (ambient.expiresAtMs === undefined || Date.now() < ambient.expiresAtMs)
+    ) {
+      return ambient;
+    }
+    return backgroundInvocation;
+  }
+
   // Plugin handler registrations (populated during setup())
   const eventHandlers: EventRegistration[] = [];
   const jobHandlers = new Map<string, (job: PluginJobContext) => Promise<void>>();
@@ -375,7 +405,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
       });
 
       try {
-        const activeInvocation = invocationContextStorage.getStore();
+        const activeInvocation = outboundInvocation();
         const request = {
           ...createRequest(method, params, id),
           ...(activeInvocation ? { paperclipInvocationId: activeInvocation.id } : {}),
@@ -392,7 +422,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
    */
   function notifyHost(method: string, params: unknown): void {
     try {
-      const activeInvocation = invocationContextStorage.getStore();
+      const activeInvocation = outboundInvocation();
       sendMessage({
         ...createNotification(method, params),
         ...(activeInvocation ? { paperclipInvocationId: activeInvocation.id } : {}),
@@ -1355,6 +1385,13 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
           : PLUGIN_RPC_ERROR_CODES.WORKER_ERROR;
 
       sendMessage(createErrorResponse(id, errorCode, errorMessage));
+    } finally {
+      // The host clears a request-scoped invocation as soon as it receives our
+      // response. Anything still holding this context via AsyncLocalStorage
+      // (timers, detached promises) must fall back to the background invocation.
+      if (request.paperclipInvocation) {
+        completedInvocations.add(request.paperclipInvocation);
+      }
     }
   }
 
@@ -1443,6 +1480,9 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
     manifest = params.manifest;
     currentConfig = params.config;
     databaseNamespace = params.databaseNamespace ?? null;
+    // Must be set before setup() runs — setup-time host calls (state reads,
+    // events.subscribe) have no ambient invocation and ride the background one.
+    backgroundInvocation = params.backgroundInvocation ?? null;
 
     // Call the plugin's setup function
     await plugin.definition.setup(ctx);

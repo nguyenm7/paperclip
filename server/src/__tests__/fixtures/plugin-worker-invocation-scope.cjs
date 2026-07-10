@@ -1,6 +1,7 @@
 const readline = require("node:readline");
 
 let nextRequestId = 1;
+let backgroundInvocationId = null;
 const pendingNested = new Map();
 
 function send(message) {
@@ -25,6 +26,12 @@ function sendNestedHostRequest(originalRequest, invocationId) {
     nestedRequest.paperclipInvocationId = invocationId;
   } else if (mode === "unknown") {
     nestedRequest.paperclipInvocationId = "unknown-invocation";
+  } else if (mode === "background") {
+    // Background work (timers, retry drains) attaches the standing invocation
+    // the host minted at initialize instead of a dispatch-scoped id.
+    if (backgroundInvocationId) {
+      nestedRequest.paperclipInvocationId = backgroundInvocationId;
+    }
   }
 
   pendingNested.set(nestedId, originalRequest.id);
@@ -63,6 +70,7 @@ rl.on("line", (line) => {
   const method = message && typeof message.method === "string" ? message.method : null;
 
   if (method === "initialize") {
+    backgroundInvocationId = message.params?.backgroundInvocation?.id ?? null;
     send({
       jsonrpc: "2.0",
       id: message.id,

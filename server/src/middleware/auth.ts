@@ -21,7 +21,7 @@ interface ActorMiddlewareOptions {
 
 export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHandler {
   const boardAuth = boardAuthService(db);
-  return async (req, _res, next) => {
+  return async (req, res, next) => {
     req.actor =
       opts.deploymentMode === "local_trusted"
         ? {
@@ -101,9 +101,26 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       return;
     }
 
+    // A presented bearer credential that fails to resolve must never fall
+    // through to the ambient actor seeded above. Under local_trusted that
+    // actor is the implicit board admin, so falling through would *elevate*
+    // revoked keys, expired run JWTs, and terminated agents instead of
+    // denying them — silently voiding key revocation and agent termination
+    // (LOOA-165). Presenting a credential is a claim of identity: if the
+    // claim cannot be resolved, reject with 401.
+    const rejectUnresolvedBearer = (reason: string) => {
+      req.actor = { type: "none", source: "none" };
+      logger.warn(
+        { reason, method: req.method, url: req.originalUrl },
+        "Rejected bearer token that resolved to no principal",
+      );
+      res.set("WWW-Authenticate", 'Bearer error="invalid_token"');
+      res.status(401).json({ error: "Invalid or expired credential" });
+    };
+
     const token = authHeader.slice("bearer ".length).trim();
     if (!token) {
-      next();
+      rejectUnresolvedBearer("empty_bearer_token");
       return;
     }
 
@@ -139,7 +156,10 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
     if (!key) {
       const claims = verifyLocalAgentJwt(token);
       if (!claims) {
-        next();
+        // Covers garbage tokens, expired/invalid run JWTs, and revoked agent
+        // keys — the key lookup above filters on revokedAt, so a revoked key
+        // lands here as "no principal".
+        rejectUnresolvedBearer("unresolvable_token");
         return;
       }
 
@@ -150,12 +170,12 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         .then((rows) => rows[0] ?? null);
 
       if (!agentRecord || agentRecord.companyId !== claims.company_id) {
-        next();
+        rejectUnresolvedBearer("agent_jwt_company_mismatch");
         return;
       }
 
       if (agentRecord.status === "terminated" || agentRecord.status === "pending_approval") {
-        next();
+        rejectUnresolvedBearer("agent_jwt_inactive_agent");
         return;
       }
 
@@ -183,7 +203,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       .then((rows) => rows[0] ?? null);
 
     if (!agentRecord || agentRecord.status === "terminated" || agentRecord.status === "pending_approval") {
-      next();
+      rejectUnresolvedBearer("agent_key_inactive_agent");
       return;
     }
 

@@ -417,4 +417,68 @@ describe("plugin-worker-manager stderr failure context", () => {
       await handle.stop().catch(() => undefined);
     }
   });
+
+  it("gives job dispatches a valid company-unrestricted invocation even while a company invocation is active", async () => {
+    // Hold the first (company-scoped getData) invocation open so its scope
+    // entry is active when the job's nested host call arrives. Before the
+    // runJob scope fix, jobs ran without an invocation and their id-less
+    // nested calls were rejected as scope escapes in exactly this situation.
+    let releaseFirstCall!: () => void;
+    const firstCallGate = new Promise<void>((resolve) => {
+      releaseFirstCall = resolve;
+    });
+    const companiesGet = vi.fn(async (params: { companyId: string }) => {
+      if (companiesGet.mock.calls.length === 1) await firstCallGate;
+      return { id: params.companyId };
+    });
+    const hostHandlers = createHostClientHandlers({
+      pluginId: "test.plugin",
+      capabilities: ["companies.read"],
+      services: {
+        companies: {
+          get: companiesGet,
+        },
+      } as unknown as HostServices,
+    });
+    const handle = createPluginWorkerHandle("test.plugin", {
+      entrypointPath: INVOCATION_SCOPE_WORKER_ENTRYPOINT,
+      manifest: TEST_MANIFEST,
+      config: {},
+      instanceInfo: {
+        instanceId: "instance-1",
+        hostVersion: "1.0.0",
+      },
+      apiVersion: 1,
+      hostHandlers,
+    });
+
+    try {
+      await handle.start();
+
+      const heldData = handle.call("getData", {
+        key: "probe",
+        companyId: "company-1",
+        params: {
+          mode: "echo",
+          requestedCompanyId: "company-1",
+        },
+      } as HostToWorkerMethods["getData"][0]);
+      await vi.waitFor(() => expect(companiesGet).toHaveBeenCalledTimes(1));
+
+      await expect(handle.call("runJob", {
+        job: {
+          jobKey: "daily-digest",
+          runId: "run-1",
+          trigger: "manual",
+          scheduledAt: new Date().toISOString(),
+        },
+      } as HostToWorkerMethods["runJob"][0])).resolves.toMatchObject({ id: "company-1" });
+
+      releaseFirstCall();
+      await expect(heldData).resolves.toMatchObject({ id: "company-1" });
+    } finally {
+      releaseFirstCall();
+      await handle.stop().catch(() => undefined);
+    }
+  });
 });

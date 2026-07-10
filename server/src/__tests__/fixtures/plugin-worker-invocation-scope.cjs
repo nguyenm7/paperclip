@@ -68,7 +68,7 @@ rl.on("line", (line) => {
       id: message.id,
       result: {
         ok: true,
-        supportedMethods: ["getData", "performAction"],
+        supportedMethods: ["getData", "performAction", "runJob"],
       },
     });
     return;
@@ -76,6 +76,16 @@ rl.on("line", (line) => {
 
   if (method === "getData" || method === "performAction") {
     sendNestedHostRequest(message, message.paperclipInvocation?.id);
+    return;
+  }
+
+  if (method === "runJob") {
+    // Job handlers issue nested host calls under the invocation the host
+    // attached to the dispatch (none before the runJob scope fix).
+    sendNestedHostRequest(
+      { id: message.id, params: { params: { mode: "echo", requestedCompanyId: "company-1" } } },
+      message.paperclipInvocation?.id,
+    );
     return;
   }
 

@@ -528,6 +528,15 @@ export function createPluginWorkerHandle(
       return companyId ? { companyId } : null;
     }
 
+    // Scheduled/manual job dispatches are host-initiated and plugin-level
+    // (no company in their params), so give them a valid company-unrestricted
+    // invocation. Without one, the job handler's worker→host calls arrive
+    // id-less and are rejected as scope escapes whenever any company-scoped
+    // invocation is active — with event notifications holding scope entries
+    // for MAX_RPC_TIMEOUT_MS, that made cron jobs fail near-deterministically
+    // on any active instance.
+    if (method === "runJob") return {};
+
     return null;
   }
 

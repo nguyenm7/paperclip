@@ -1,5 +1,6 @@
 import { UserPlus, Lightbulb, ShieldAlert, ShieldCheck } from "lucide-react";
 import { formatCents } from "../lib/utils";
+import { MarkdownBody } from "./MarkdownBody";
 
 export const typeLabel: Record<string, string> = {
   hire_agent: "Hire Agent",
@@ -161,6 +162,66 @@ export function BoardApprovalPayload({
   );
 }
 
+type ApprovalImage = { attachmentId: string; caption: string | null };
+
+/**
+ * Conventional `payload.images: [{ attachmentId, caption? }]` — lets a card
+ * carry the asset being decided (gate policy Rule 0) without markdown in
+ * `summary`. Content is served by the auth-gated attachment route; the
+ * browser session authorizes the <img> request.
+ */
+function parseApprovalImages(value: unknown): ApprovalImage[] {
+  if (!Array.isArray(value)) return [];
+  const images: ApprovalImage[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    const attachmentId =
+      typeof record.attachmentId === "string" ? record.attachmentId.trim() : "";
+    if (!attachmentId) continue;
+    const caption = firstNonEmptyString(record.caption);
+    images.push({ attachmentId, caption });
+  }
+  return images;
+}
+
+function attachmentContentPath(attachmentId: string): string {
+  return `/api/attachments/${encodeURIComponent(attachmentId)}/content`;
+}
+
+function ApprovalImageStrip({ images }: { images: ApprovalImage[] }) {
+  if (images.length === 0) return null;
+  return (
+    <div className="space-y-1.5">
+      <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">Assets</p>
+      <div className="flex flex-wrap gap-2">
+        {images.map((image, index) => {
+          const src = attachmentContentPath(image.attachmentId);
+          return (
+            <a
+              key={`${image.attachmentId}-${index}`}
+              href={src}
+              target="_blank"
+              rel="noreferrer"
+              className="block max-w-full"
+            >
+              <img
+                src={src}
+                alt={image.caption ?? "Approval asset"}
+                loading="lazy"
+                className="max-h-72 max-w-full rounded-md border border-border/60 object-contain"
+              />
+              {image.caption && (
+                <span className="mt-1 block text-xs text-muted-foreground">{image.caption}</span>
+              )}
+            </a>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function BoardApprovalPayloadContent({ payload }: { payload: Record<string, unknown> }) {
   const risks = Array.isArray(payload.risks)
     ? payload.risks
@@ -173,6 +234,7 @@ function BoardApprovalPayloadContent({ payload }: { payload: Record<string, unkn
   const recommendedAction = firstNonEmptyString(payload.recommendedAction);
   const nextActionOnApproval = firstNonEmptyString(payload.nextActionOnApproval);
   const proposedComment = firstNonEmptyString(payload.proposedComment);
+  const images = parseApprovalImages(payload.images);
 
   return (
     <div className="mt-4 space-y-3.5 text-sm">
@@ -185,21 +247,22 @@ function BoardApprovalPayloadContent({ payload }: { payload: Record<string, unkn
       {summary && (
         <div className="space-y-1">
           <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">Summary</p>
-          <p className="leading-6 text-foreground/90">{summary}</p>
+          <MarkdownBody className="text-sm leading-6 text-foreground/90">{summary}</MarkdownBody>
         </div>
       )}
+      <ApprovalImageStrip images={images} />
       {recommendedAction && (
         <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3.5 py-3">
           <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-amber-700 dark:text-amber-300">
             Recommended action
           </p>
-          <p className="mt-1 leading-6 text-foreground">{recommendedAction}</p>
+          <MarkdownBody className="mt-1 text-sm leading-6 text-foreground">{recommendedAction}</MarkdownBody>
         </div>
       )}
       {nextActionOnApproval && (
         <div className="rounded-lg border border-border/60 bg-background/60 px-3.5 py-3">
           <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">On approval</p>
-          <p className="mt-1 leading-6 text-foreground">{nextActionOnApproval}</p>
+          <MarkdownBody className="mt-1 text-sm leading-6 text-foreground">{nextActionOnApproval}</MarkdownBody>
         </div>
       )}
       {risks.length > 0 && (

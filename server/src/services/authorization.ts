@@ -84,6 +84,7 @@ export type AuthorizationDecision = {
     | "allow_simple_company_member"
     | "allow_manager_chain"
     | "allow_mention_grant"
+    | "allow_creator_grant"
     | "deny_unauthenticated"
     | "deny_company_boundary"
     | "deny_missing_membership"
@@ -556,6 +557,18 @@ export function authorizationService(db: Db) {
         ),
       );
     return rows.some((row) => extractAgentMentionIds(row.body).includes(agentId));
+  }
+
+  // created_by_agent_id is written once at creation from the authenticated
+  // actor and is not reachable through issue updates, so it cannot be
+  // self-granted after the fact.
+  async function agentCreatedIssue(issueId: string, agentId: string) {
+    const row = await db
+      .select({ createdByAgentId: issues.createdByAgentId })
+      .from(issues)
+      .where(eq(issues.id, issueId))
+      .then((rows) => rows[0] ?? null);
+    return row?.createdByAgentId === agentId;
   }
 
   async function loadIssue(issueId: string): Promise<IssueAuthorizationRow | null> {
@@ -1200,19 +1213,31 @@ export function authorizationService(db: Db) {
           explanation: "Allowed because the issue has no agent assignee.",
         });
       }
-      // A mention summons an agent into a thread it does not own; the summons
-      // must carry the right to reply there. Comment-only: issue:mutate
-      // (status, assignee, description) stays bound to the assignee.
-      if (
-        input.action === "issue:comment" &&
-        resource?.issueId &&
-        (await agentMentionedOnIssue(resource.issueId, actorAgentId))
-      ) {
-        return allow({
-          action: input.action,
-          reason: "allow_mention_grant",
-          explanation: "Allowed because the actor was @-mentioned in this issue's comment thread.",
-        });
+      // Two comment-only grants; issue:mutate (status, assignee, description)
+      // stays bound to the assignee in both cases.
+      //
+      // Creator grant: delegation must not be write-once. The agent that
+      // created an issue keeps the comment lane after assigning it away, so a
+      // delegator can amend its own brief instead of filing a superseding
+      // issue and racing the assignee's next heartbeat.
+      //
+      // Mention grant: a mention summons an agent into a thread it does not
+      // own; the summons must carry the right to reply there.
+      if (input.action === "issue:comment" && resource?.issueId) {
+        if (await agentCreatedIssue(resource.issueId, actorAgentId)) {
+          return allow({
+            action: input.action,
+            reason: "allow_creator_grant",
+            explanation: "Allowed because the actor created this issue and keeps comment rights after delegating it.",
+          });
+        }
+        if (await agentMentionedOnIssue(resource.issueId, actorAgentId)) {
+          return allow({
+            action: input.action,
+            reason: "allow_mention_grant",
+            explanation: "Allowed because the actor was @-mentioned in this issue's comment thread.",
+          });
+        }
       }
     }
     if (

@@ -1921,10 +1921,11 @@ export function issueRoutes(
     return true;
   }
 
-  // Comment writes get one extra allow path over general issue mutation: an
-  // agent that was @-mentioned in this issue's thread may reply with a comment
-  // even though the issue is assigned to someone else. A mention-wake summons
-  // the agent into the thread, so it must also be sufficient to answer there.
+  // Comment writes get two extra allow paths over general issue mutation: the
+  // agent that created the issue keeps comment rights after assigning it away
+  // (a delegator must be able to amend its own brief), and an agent that was
+  // @-mentioned in this issue's thread may reply there (a mention-wake summons
+  // the agent into the thread, so it must also be sufficient to answer).
   // Everything else (PATCH, checkout-lock semantics, deny shapes) stays on the
   // standard mutation gate, so the assignee boundary is not weakened.
   async function assertAgentIssueCommentAllowed(

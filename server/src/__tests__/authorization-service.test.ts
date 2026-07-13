@@ -73,6 +73,7 @@ async function createIssue(
     projectId?: string | null;
     parentId?: string | null;
     assigneeAgentId?: string | null;
+    createdByAgentId?: string | null;
   } = {},
 ) {
   return db
@@ -86,6 +87,7 @@ async function createIssue(
       projectId: input.projectId ?? null,
       parentId: input.parentId ?? null,
       assigneeAgentId: input.assigneeAgentId ?? null,
+      createdByAgentId: input.createdByAgentId ?? null,
     })
     .returning()
     .then((rows) => rows[0]!);
@@ -1026,6 +1028,62 @@ describeEmbeddedPostgres("authorization service", () => {
 
     const decision = await authorizationService(db).decide({
       actor: { type: "agent", agentId: mentioned.id, companyId: company.id, source: "agent_key" },
+      action: "issue:comment",
+      resource: {
+        type: "issue",
+        companyId: company.id,
+        issueId: otherIssue.id,
+        assigneeAgentId: assignee.id,
+      },
+    });
+
+    expect(decision.allowed).toBe(false);
+  });
+
+  it("grants issue:comment to the issue creator after delegation without granting issue:mutate", async () => {
+    const company = await createCompany(db, "CreatorGrant");
+    const creator = await createAgent(db, company.id);
+    const assignee = await createAgent(db, company.id);
+    const issue = await createIssue(db, company.id, {
+      assigneeAgentId: assignee.id,
+      createdByAgentId: creator.id,
+    });
+
+    const actor = {
+      type: "agent" as const,
+      agentId: creator.id,
+      companyId: company.id,
+      source: "agent_key" as const,
+    };
+    const resource = {
+      type: "issue" as const,
+      companyId: company.id,
+      issueId: issue.id,
+      assigneeAgentId: assignee.id,
+    };
+
+    const comment = await authorizationService(db).decide({ actor, action: "issue:comment", resource });
+    expect(comment).toMatchObject({ allowed: true, reason: "allow_creator_grant" });
+
+    const mutate = await authorizationService(db).decide({ actor, action: "issue:mutate", resource });
+    expect(mutate.allowed).toBe(false);
+  });
+
+  it("does not grant issue:comment to the creator of a different issue", async () => {
+    const company = await createCompany(db, "CreatorGrantScope");
+    const creator = await createAgent(db, company.id);
+    const assignee = await createAgent(db, company.id);
+    await createIssue(db, company.id, {
+      assigneeAgentId: assignee.id,
+      createdByAgentId: creator.id,
+    });
+    const otherIssue = await createIssue(db, company.id, {
+      assigneeAgentId: assignee.id,
+      createdByAgentId: assignee.id,
+    });
+
+    const decision = await authorizationService(db).decide({
+      actor: { type: "agent", agentId: creator.id, companyId: company.id, source: "agent_key" },
       action: "issue:comment",
       resource: {
         type: "issue",

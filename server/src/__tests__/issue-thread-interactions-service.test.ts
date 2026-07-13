@@ -67,6 +67,22 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
     await tempDb?.cleanup();
   });
 
+  async function seedAssigneeAgent(companyId: string) {
+    const agentId = randomUUID();
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "CodexCoder",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    return agentId;
+  }
+
   async function seedConfirmationIssue(title = "Comment supersede") {
     const companyId = randomUUID();
     const goalId = randomUUID();
@@ -79,6 +95,7 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
       requireBoardApprovalForNewAgents: false,
     });
     await instanceSettingsService(db).updateExperimental({ enableIsolatedWorkspaces: false });
+    const assigneeAgentId = await seedAssigneeAgent(companyId);
     await db.insert(goals).values({
       id: goalId,
       companyId,
@@ -93,9 +110,10 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
       title: "Parent issue",
       status: "in_progress",
       priority: "medium",
+      assigneeAgentId,
     });
 
-    return { companyId, goalId, issueId };
+    return { companyId, goalId, issueId, assigneeAgentId };
   }
 
   it("accepts suggested tasks by creating a rooted issue tree under the current issue", async () => {
@@ -138,6 +156,7 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
       status: "in_progress",
       priority: "medium",
       requestDepth: 2,
+      assigneeAgentId,
     });
 
     const created = await interactionsSvc.create({
@@ -264,6 +283,7 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
       status: "in_progress",
       priority: "medium",
       requestDepth: 2,
+      assigneeAgentId: await seedAssigneeAgent(companyId),
     });
 
     const created = await interactionsSvc.create({
@@ -345,6 +365,7 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
       title: "Parent issue",
       status: "in_progress",
       priority: "medium",
+      assigneeAgentId: await seedAssigneeAgent(companyId),
     });
 
     const created = await interactionsSvc.create({
@@ -412,6 +433,7 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
       title: "Question parent",
       status: "todo",
       priority: "medium",
+      assigneeAgentId: await seedAssigneeAgent(companyId),
     });
 
     const created = await interactionsSvc.create({
@@ -513,6 +535,7 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
       title: "Question parent",
       status: "in_review",
       priority: "medium",
+      assigneeAgentId: await seedAssigneeAgent(companyId),
     });
 
     const created = await interactionsSvc.create({
@@ -606,6 +629,7 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
       title: "Parent issue",
       status: "in_progress",
       priority: "medium",
+      assigneeAgentId: agentId,
     });
     await db.insert(heartbeatRuns).values({
       id: runId,
@@ -682,6 +706,7 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
       title: "Parent issue",
       status: "in_progress",
       priority: "medium",
+      assigneeAgentId: await seedAssigneeAgent(companyId),
     });
 
     const created = await interactionsSvc.create({
@@ -1249,6 +1274,7 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
       title: "Parent issue",
       status: "in_progress",
       priority: "medium",
+      assigneeAgentId: await seedAssigneeAgent(companyId),
     });
     await db.insert(documents).values({
       id: documentId,
@@ -1402,6 +1428,7 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
         status: "in_progress",
         priority: "medium",
         executionWorkspaceId,
+        assigneeAgentId: await seedAssigneeAgent(companyId),
       });
 
       const created = await interactionsSvc.create({

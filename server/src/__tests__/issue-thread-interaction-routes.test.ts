@@ -49,7 +49,15 @@ vi.mock("../telemetry.js", () => ({
 }));
 
 function registerModuleMocks() {
-  vi.doMock("../services/index.js", () => ({
+  vi.doMock("../services/index.js", async () => ({
+    // The interaction routes resolve continuation wakeups through the service
+    // index; pass the real implementation through so the tests exercise the
+    // actual wake policy against the mocked heartbeat service.
+    queueResolvedInteractionContinuationWakeup: (
+      await vi.importActual<typeof import("../services/issue-thread-interactions.js")>(
+        "../services/issue-thread-interactions.js",
+      )
+    ).queueResolvedInteractionContinuationWakeup,
     companyService: () => ({
       getById: vi.fn(async () => ({ id: "company-1", attachmentMaxBytes: 10 * 1024 * 1024 })),
     }),

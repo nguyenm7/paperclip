@@ -39,6 +39,7 @@ import {
   suggestTasksResultSchema,
 } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
+import { logger } from "../middleware/logger.js";
 import { issueService, listUnfinalizedExecutionWorkspaceIds } from "./issues.js";
 
 type InteractionActor = {
@@ -813,6 +814,34 @@ export function issueThreadInteractionService(db: Db) {
         });
       }
 
+      if (
+        data.continuationPolicy === "wake_assignee"
+        || data.continuationPolicy === "wake_assignee_on_accept"
+      ) {
+        const wakeTarget = await db
+          .select({
+            assigneeAgentId: issues.assigneeAgentId,
+            assigneeUserId: issues.assigneeUserId,
+          })
+          .from(issues)
+          .where(eq(issues.id, issue.id))
+          .then((rows) => rows[0] ?? null);
+        // A user-assigned confirmation created by an agent stays resumable: acceptance
+        // returns the issue to the creator agent (shouldReturnAcceptedConfirmationToCreatorAgent).
+        const resumableViaCreatorAgent =
+          Boolean(wakeTarget?.assigneeUserId)
+          && Boolean(actor.agentId)
+          && isRequestConfirmationLikeKind(data.kind);
+        if (!wakeTarget?.assigneeAgentId && !resumableViaCreatorAgent) {
+          throw unprocessable(
+            `Refusing to create a ${data.kind} interaction with continuationPolicy "${data.continuationPolicy}" on an issue with no assigned agent: `
+              + "once decided it would wake nobody and the work would never resume. "
+              + 'Assign the issue to an agent first, or use continuationPolicy "none".',
+            { issueId: issue.id, continuationPolicy: data.continuationPolicy },
+          );
+        }
+      }
+
       let created: IssueThreadInteractionRow;
       try {
         [created] = await db
@@ -1503,7 +1532,21 @@ export function queueResolvedInteractionContinuationWakeup(input: {
     && input.interaction.status !== "accepted"
   ) return;
   if (input.interaction.status === "expired") return;
-  if (!input.issue.assigneeAgentId || isClosedIssueStatusForContinuation(input.issue.status)) return;
+  if (isClosedIssueStatusForContinuation(input.issue.status)) return;
+  if (!input.issue.assigneeAgentId) {
+    // Should be unreachable: create/update/release guards keep wake-continuation
+    // interactions pointed at an assignee. Reaching it means a decision resolved
+    // into a black hole — decided, but nobody woken.
+    logger.error({
+      issueId: input.issue.id,
+      interactionId: input.interaction.id,
+      interactionKind: input.interaction.kind,
+      interactionStatus: input.interaction.status,
+      continuationPolicy: input.interaction.continuationPolicy,
+      source: input.source,
+    }, "resolved interaction has a wake_assignee continuation but the issue has no assignee: waking nobody");
+    return;
+  }
 
   const forceFreshSession = input.forceFreshSession === true;
   const workspaceRefreshReason = readContinuationString(input.workspaceRefreshReason);

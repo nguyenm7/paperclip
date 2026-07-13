@@ -3116,6 +3116,30 @@ async function countBlockedInboxIssues(dbOrTx: any, companyId: string, filters?:
   }, 0);
 }
 
+// Kinds/policies are inlined (not imported from issue-thread-interactions.js) because
+// that module already imports issueService — importing back would be circular.
+function isConfirmationLikeInteractionKind(kind: string) {
+  return kind === "request_confirmation" || kind === "request_checkbox_confirmation";
+}
+
+async function listPendingWakeContinuationInteractions(
+  dbOrTx: any,
+  issueId: string,
+): Promise<Array<{ id: string; kind: string; createdByAgentId: string | null }>> {
+  return dbOrTx
+    .select({
+      id: issueThreadInteractions.id,
+      kind: issueThreadInteractions.kind,
+      createdByAgentId: issueThreadInteractions.createdByAgentId,
+    })
+    .from(issueThreadInteractions)
+    .where(and(
+      eq(issueThreadInteractions.issueId, issueId),
+      eq(issueThreadInteractions.status, "pending"),
+      inArray(issueThreadInteractions.continuationPolicy, ["wake_assignee", "wake_assignee_on_accept"]),
+    ));
+}
+
 export function issueService(db: Db) {
   const instanceSettings = instanceSettingsService(db);
   const treeControlSvc = issueTreeControlService(db);
@@ -4877,6 +4901,11 @@ export function issueService(db: Db) {
       if (data.status === "in_progress" && !data.assigneeAgentId && !data.assigneeUserId) {
         throw unprocessable("in_progress issues require an assignee");
       }
+      if (data.status === "in_review" && !data.assigneeAgentId && !data.assigneeUserId) {
+        throw unprocessable(
+          "in_review issues require an assignee: an unassigned review is a decision nobody can be woken to act on",
+        );
+      }
       return db.transaction(async (tx) => {
         const defaultCompanyGoal = await getDefaultCompanyGoal(tx, companyId);
         let projectWorkspaceId = issueData.projectWorkspaceId ?? null;
@@ -5155,6 +5184,46 @@ export function issueService(db: Db) {
             ).get(id)?.unresolvedBlockerIssueIds ?? [];
         if (unresolvedBlockerIssueIds.length > 0) {
           throw unprocessable("Issue is blocked by unresolved blockers", { unresolvedBlockerIssueIds });
+        }
+      }
+      const nextStatusForAssigneeGuards = (patch.status ?? existing.status) as string;
+      const assigneeFieldTouched =
+        issueData.assigneeAgentId !== undefined || issueData.assigneeUserId !== undefined;
+      // Only enforce on updates that produce the state (status/assignee touched), so a
+      // pre-existing violation can still be repaired by unrelated field edits.
+      if (
+        nextStatusForAssigneeGuards === "in_review"
+        && !nextAssigneeAgentId
+        && !nextAssigneeUserId
+        && (patch.status === "in_review" || assigneeFieldTouched)
+      ) {
+        throw unprocessable(
+          "in_review issues require an assignee: an unassigned review is a decision nobody can be woken to act on",
+        );
+      }
+      if (
+        assigneeFieldTouched
+        && !nextAssigneeAgentId
+        && nextStatusForAssigneeGuards !== "done"
+        && nextStatusForAssigneeGuards !== "cancelled"
+      ) {
+        const pendingWakeContinuations = await listPendingWakeContinuationInteractions(dbOrTx, id);
+        if (pendingWakeContinuations.length > 0) {
+          // Confirmation-like interactions created by an agent survive a hand-off to a
+          // user assignee: acceptance returns the issue to the creator agent.
+          const resumableViaCreatorAgent =
+            Boolean(nextAssigneeUserId)
+            && pendingWakeContinuations.every(
+              (interaction) =>
+                Boolean(interaction.createdByAgentId)
+                && isConfirmationLikeInteractionKind(interaction.kind),
+            );
+          if (!resumableViaCreatorAgent) {
+            throw unprocessable(
+              "Cannot remove the assignee: pending interactions on this issue have a wake_assignee continuation that would wake nobody once decided. Resolve or cancel those interactions first, or reassign to another agent instead.",
+              { pendingInteractionIds: pendingWakeContinuations.map((interaction) => interaction.id) },
+            );
+          }
         }
       }
       const shouldValidateNextAssignee =
@@ -5849,6 +5918,23 @@ export function issueService(db: Db) {
               actorRunId: actorRunId ?? null,
             });
           }
+        }
+
+        // Release clears the assignee, which would orphan any pending wake_assignee
+        // continuation. Agents must resolve/cancel the gate or reassign instead;
+        // system-initiated releases proceed but scream.
+        const pendingWakeContinuations = await listPendingWakeContinuationInteractions(tx, id);
+        if (pendingWakeContinuations.length > 0) {
+          if (actorAgentId) {
+            throw conflict(
+              "Cannot release: pending interactions on this issue have a wake_assignee continuation, and releasing would leave nobody to wake once they are decided. Resolve or cancel those interactions first, or reassign the issue instead.",
+              { pendingInteractionIds: pendingWakeContinuations.map((interaction) => interaction.id) },
+            );
+          }
+          logger.error({
+            issueId: id,
+            pendingInteractionIds: pendingWakeContinuations.map((interaction) => interaction.id),
+          }, "release is orphaning pending wake_assignee interactions: the issue no longer has an assignee to wake");
         }
 
         const updated = await tx

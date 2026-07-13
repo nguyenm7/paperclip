@@ -65,6 +65,7 @@ import {
   writePluginLocalFolderTextAtomic,
 } from "./plugin-local-folders.js";
 import { createPluginSecretsHandler } from "./plugin-secrets-handler.js";
+import { getStorageService } from "../storage/index.js";
 import { logActivity } from "./activity-log.js";
 import type { PluginEventBus } from "./plugin-event-bus.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
@@ -489,6 +490,37 @@ if (_logFlushInterval.unref) _logFlushInterval.unref();
  */
 /** Maximum time (ms) to keep a session event subscription alive before forcing cleanup. */
 const SESSION_EVENT_SUBSCRIPTION_TIMEOUT_MS = 30 * 60 * 1_000; // 30 minutes
+
+/**
+ * Hard ceiling for attachment bytes served over the worker RPC channel
+ * (`issues.getAttachmentContent`). The content crosses the stdio bridge as one
+ * base64 JSON line, so this bounds worst-case host/worker memory per call; an
+ * attachment over the cap throws rather than truncates (LOOA-247).
+ */
+const PLUGIN_ATTACHMENT_CONTENT_MAX_BYTES = 25 * 1024 * 1024;
+
+/** Attachment row → plugin-facing metadata. Storage internals (provider, object key) stay host-side. */
+function serializePluginAttachment(row: {
+  id: string;
+  issueId: string;
+  issueCommentId: string | null;
+  contentType: string | null;
+  byteSize: number | null;
+  sha256: string | null;
+  originalFilename: string | null;
+  createdAt: Date | string;
+}) {
+  return {
+    id: row.id,
+    issueId: row.issueId,
+    issueCommentId: row.issueCommentId ?? null,
+    contentType: row.contentType ?? "application/octet-stream",
+    byteSize: Number(row.byteSize ?? 0),
+    sha256: row.sha256 ?? null,
+    originalFilename: row.originalFilename ?? null,
+    createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
+  };
+}
 
 export function buildHostServices(
   db: Db,
@@ -2220,6 +2252,50 @@ export function buildHostServices(
 
         const applied = interaction.status === (params.action === "accept" ? "accepted" : "rejected");
         return { interaction, applied } as any;
+      },
+      async listAttachments(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        await ensurePluginAvailableForCompany(companyId);
+        if (!inCompany(await issues.getById(params.issueId), companyId)) return [];
+        const rows = await issues.listAttachments(params.issueId);
+        return rows.map(serializePluginAttachment);
+      },
+      async getAttachmentContent(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        await ensurePluginAvailableForCompany(companyId);
+        const attachment = await issues.getAttachmentById(params.attachmentId);
+        // Unknown and cross-company ids are byte-identical to the caller — no existence leak.
+        if (!attachment || attachment.companyId !== companyId) return null;
+        const requested =
+          typeof params.maxBytes === "number" && Number.isFinite(params.maxBytes) && params.maxBytes > 0
+            ? Math.floor(params.maxBytes)
+            : PLUGIN_ATTACHMENT_CONTENT_MAX_BYTES;
+        const cap = Math.min(requested, PLUGIN_ATTACHMENT_CONTENT_MAX_BYTES);
+        const byteSize = Number(attachment.byteSize ?? 0);
+        if (byteSize > cap) {
+          throw new Error(
+            `Attachment ${attachment.id} is ${byteSize} bytes, over the ${cap}-byte plugin content cap`,
+          );
+        }
+        const object = await getStorageService().getObject(companyId, attachment.objectKey);
+        const chunks: Buffer[] = [];
+        for await (const chunk of object.stream) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array));
+        }
+        const content = Buffer.concat(chunks);
+        await logPluginActivity({
+          companyId,
+          action: "issue.attachment_content_read",
+          entityType: "issue",
+          entityId: attachment.issueId,
+          details: {
+            attachmentId: attachment.id,
+            contentType: attachment.contentType,
+            byteSize: content.length,
+            originalFilename: attachment.originalFilename,
+          },
+        });
+        return { ...serializePluginAttachment(attachment), contentBase64: content.toString("base64") };
       },
     },
 

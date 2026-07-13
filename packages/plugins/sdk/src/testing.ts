@@ -40,6 +40,7 @@ import type {
   PluginLocalFolderStatus,
   PluginAccessMember,
   PluginApprovalRecord,
+  PluginIssueAttachment,
   PrincipalPermissionGrant,
   PermissionKey,
   PrincipalType,
@@ -108,6 +109,8 @@ export interface TestHarness {
     principalGrants?: PrincipalPermissionGrant[];
     issueInteractions?: IssueThreadInteraction[];
     approvals?: PluginApprovalRecord[];
+    /** Attachment rows for `ctx.issues.listAttachments`/`getAttachmentContent`; `contentBase64` backs the content read. */
+    issueAttachments?: Array<PluginIssueAttachment & { companyId: string; contentBase64?: string }>;
   }): void;
   setConfig(config: Record<string, unknown>): void;
   /** Dispatch a host or plugin event to registered handlers. */
@@ -467,6 +470,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
   const issueComments = new Map<string, IssueComment[]>();
   const issueInteractions = new Map<string, IssueThreadInteraction[]>();
   const approvalRecords = new Map<string, PluginApprovalRecord>();
+  const issueAttachmentRecords = new Map<string, PluginIssueAttachment & { companyId: string; contentBase64?: string }>();
   const issueDocuments = new Map<string, IssueDocument>();
   const agents = new Map<string, Agent>();
   const goals = new Map<string, Goal>();
@@ -1765,6 +1769,24 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
         issueInteractions.set(issueId, current.map((entry) => (entry.id === interactionId ? resolved : entry)));
         return { interaction: resolved, applied: true };
       },
+      async listAttachments(issueId, companyId) {
+        requireCapability(manifest, capabilitySet, "issue.attachments.read");
+        if (!isInCompany(issues.get(issueId), companyId)) return [];
+        return [...issueAttachmentRecords.values()]
+          .filter((row) => row.issueId === issueId && row.companyId === companyId)
+          .map(({ companyId: _companyId, contentBase64: _content, ...meta }) => meta);
+      },
+      async getAttachmentContent(attachmentId, companyId, options) {
+        requireCapability(manifest, capabilitySet, "issue.attachments.read");
+        const row = issueAttachmentRecords.get(attachmentId);
+        if (!row || row.companyId !== companyId) return null;
+        const maxBytes = options?.maxBytes ?? 25 * 1024 * 1024;
+        if (row.byteSize > maxBytes) {
+          throw new Error(`Attachment ${attachmentId} exceeds the ${maxBytes}-byte content cap`);
+        }
+        const { companyId: _companyId, contentBase64, ...meta } = row;
+        return { ...meta, contentBase64: contentBase64 ?? "" };
+      },
       documents: {
         async list(issueId, companyId) {
           requireCapability(manifest, capabilitySet, "issue.documents.read");
@@ -2446,6 +2468,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
         issueInteractions.set(row.issueId, list);
       }
       for (const row of input.approvals ?? []) approvalRecords.set(row.id, row);
+      for (const row of input.issueAttachments ?? []) issueAttachmentRecords.set(row.id, row);
       for (const row of input.principalGrants ?? []) {
         const list = principalGrants.get(principalGrantsKey(row.companyId, row.principalType, row.principalId)) ?? [];
         list.push(row);

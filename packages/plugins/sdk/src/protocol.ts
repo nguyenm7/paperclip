@@ -68,6 +68,8 @@ import type {
   PluginApprovalRecord,
   PluginApprovalDecisionResult,
   PluginInteractionDecisionResult,
+  PluginIssueAttachment,
+  PluginIssueAttachmentContent,
 } from "./types.js";
 import type {
   PluginHealthDiagnostics,
@@ -1173,6 +1175,14 @@ export interface WorkerToHostMethods {
       reason?: string | null;
     },
     result: PluginInteractionDecisionResult,
+  ];
+  "issues.listAttachments": [
+    params: { issueId: string; companyId: string },
+    result: PluginIssueAttachment[],
+  ];
+  "issues.getAttachmentContent": [
+    params: { attachmentId: string; companyId: string; maxBytes?: number | null },
+    result: PluginIssueAttachmentContent | null,
   ];
 
   // Approvals

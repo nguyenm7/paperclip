@@ -173,3 +173,58 @@ describe("createHostClientHandlers invocation company scope", () => {
     expect(searchAudit).not.toHaveBeenCalled();
   });
 });
+
+describe("issue attachment content bridge (LOOA-247)", () => {
+  function attachmentServices() {
+    const listAttachments = vi.fn(async () => []);
+    const getAttachmentContent = vi.fn(async () => null);
+    const services = {
+      issues: { listAttachments, getAttachmentContent },
+    } as unknown as HostServices;
+    return { services, listAttachments, getAttachmentContent };
+  }
+
+  it("rejects both attachment methods without issue.attachments.read — no other read capability implies bytes", async () => {
+    const { services, listAttachments, getAttachmentContent } = attachmentServices();
+    const handlers = createHostClientHandlers({
+      pluginId: "paperclip.test",
+      capabilities: ["issues.read", "issue.comments.read", "issue.documents.read", "approvals.read"],
+      services,
+    });
+
+    await expect(
+      handlers["issues.listAttachments"]({ issueId: "issue-a", companyId: "company-a" }),
+    ).rejects.toBeInstanceOf(CapabilityDeniedError);
+    await expect(
+      handlers["issues.getAttachmentContent"]({ attachmentId: "att-a", companyId: "company-a" }),
+    ).rejects.toMatchObject({
+      name: "CapabilityDeniedError",
+      message: expect.stringContaining("issue.attachments.read"),
+    });
+    expect(listAttachments).not.toHaveBeenCalled();
+    expect(getAttachmentContent).not.toHaveBeenCalled();
+  });
+
+  it("delegates with issue.attachments.read and still enforces invocation company scope", async () => {
+    const { services, getAttachmentContent } = attachmentServices();
+    const handlers = createHostClientHandlers({
+      pluginId: "paperclip.test",
+      capabilities: ["issue.attachments.read"],
+      services,
+    });
+
+    await expect(
+      handlers["issues.getAttachmentContent"](
+        { attachmentId: "att-a", companyId: "company-b" },
+        { invocationScope: { companyId: "company-a" } },
+      ),
+    ).rejects.toBeInstanceOf(InvocationScopeDeniedError);
+    expect(getAttachmentContent).not.toHaveBeenCalled();
+
+    await handlers["issues.getAttachmentContent"](
+      { attachmentId: "att-a", companyId: "company-a" },
+      { invocationScope: { companyId: "company-a" } },
+    );
+    expect(getAttachmentContent).toHaveBeenCalledTimes(1);
+  });
+});

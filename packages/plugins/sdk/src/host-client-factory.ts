@@ -235,6 +235,8 @@ export interface HostServices {
     createInteraction(params: WorkerToHostMethods["issues.createInteraction"][0]): Promise<WorkerToHostMethods["issues.createInteraction"][1]>;
     listInteractions(params: WorkerToHostMethods["issues.listInteractions"][0]): Promise<WorkerToHostMethods["issues.listInteractions"][1]>;
     respondInteraction(params: WorkerToHostMethods["issues.respondInteraction"][0]): Promise<WorkerToHostMethods["issues.respondInteraction"][1]>;
+    listAttachments(params: WorkerToHostMethods["issues.listAttachments"][0]): Promise<WorkerToHostMethods["issues.listAttachments"][1]>;
+    getAttachmentContent(params: WorkerToHostMethods["issues.getAttachmentContent"][0]): Promise<WorkerToHostMethods["issues.getAttachmentContent"][1]>;
   };
 
   /** Provides `approvals.list`, `approvals.get`, `approvals.decide`. */
@@ -450,6 +452,8 @@ const METHOD_CAPABILITY_MAP: Record<WorkerToHostMethodName, PluginCapability | n
   "issues.createInteraction": "issue.interactions.create",
   "issues.listInteractions": "issue.interactions.read",
   "issues.respondInteraction": "issue.interactions.respond",
+  "issues.listAttachments": "issue.attachments.read",
+  "issues.getAttachmentContent": "issue.attachments.read",
 
   // Approvals
   "approvals.list": "approvals.read",
@@ -860,6 +864,12 @@ export function createHostClientHandlers(
     }),
     "issues.respondInteraction": gated("issues.respondInteraction", async (params) => {
       return services.issues.respondInteraction(params);
+    }),
+    "issues.listAttachments": gated("issues.listAttachments", async (params) => {
+      return services.issues.listAttachments(params);
+    }),
+    "issues.getAttachmentContent": gated("issues.getAttachmentContent", async (params) => {
+      return services.issues.getAttachmentContent(params);
     }),
 
     // Approvals

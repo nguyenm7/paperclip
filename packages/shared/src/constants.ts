@@ -823,6 +823,7 @@ export const PLUGIN_CAPABILITIES = [
   "issue.subtree.read",
   "issue.comments.read",
   "issue.documents.read",
+  "issue.attachments.read",
   "agents.read",
   "goals.read",
   "goals.create",

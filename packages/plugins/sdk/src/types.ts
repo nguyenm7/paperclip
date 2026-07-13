@@ -1481,12 +1481,51 @@ export interface PluginIssuesClient {
     companyId: string,
     options?: { authorAgentId?: string },
   ): Promise<RequestCheckboxConfirmationInteraction>;
+  /**
+   * List an issue's attachments (metadata only, no bytes). Requires
+   * `issue.attachments.read`.
+   */
+  listAttachments(issueId: string, companyId: string): Promise<PluginIssueAttachment[]>;
+  /**
+   * Read one attachment's raw content for authorized re-delivery (e.g.
+   * uploading a board-approval image to a chat transport). Returns null for
+   * unknown ids and for ids outside the invoking company (no existence
+   * leak). Bytes cross the worker RPC channel base64-encoded and are capped
+   * host-side; an attachment over the cap throws rather than truncates.
+   * Requires `issue.attachments.read`.
+   */
+  getAttachmentContent(
+    attachmentId: string,
+    companyId: string,
+    options?: { maxBytes?: number },
+  ): Promise<PluginIssueAttachmentContent | null>;
   /** Read and write issue documents. Requires `issue.documents.read` / `issue.documents.write`. */
   documents: PluginIssueDocumentsClient;
   /** Read and write blocker relationships. */
   relations: PluginIssueRelationsClient;
   /** Read compact orchestration summaries. */
   summaries: PluginIssueSummariesClient;
+}
+
+/**
+ * Issue attachment metadata as exposed to plugins. Storage internals
+ * (provider, object key) are deliberately absent — plugins address
+ * attachments only by id, through the capability-gated bridge.
+ */
+export interface PluginIssueAttachment {
+  id: string;
+  issueId: string;
+  issueCommentId: string | null;
+  contentType: string;
+  byteSize: number;
+  sha256: string | null;
+  originalFilename: string | null;
+  createdAt: string;
+}
+
+/** One attachment's bytes, base64-encoded for the RPC channel. */
+export interface PluginIssueAttachmentContent extends PluginIssueAttachment {
+  contentBase64: string;
 }
 
 /** Result of a plugin-attributed interaction decision. */

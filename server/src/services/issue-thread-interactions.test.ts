@@ -399,6 +399,63 @@ describe("issueThreadInteractionService", () => {
       expect(state.issueTouches).toHaveLength(0);
     });
 
+    it("withdraws a pending checkbox confirmation with the shared confirmation outcome", async () => {
+      const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+      const state = createFakeDb({
+        interactionRow: confirmationRow({
+          kind: "request_checkbox_confirmation",
+          payload: {
+            version: 1,
+            prompt: "Pick the files to delete",
+            options: [{ id: "file-1", label: "File 1" }],
+            defaultSelectedOptionIds: [],
+            minSelected: 0,
+            allowDeclineReason: true,
+          },
+        }),
+      });
+      const svc = issueThreadInteractionService(state.db as never);
+
+      const { interaction, applied } = await svc.withdrawInteraction(
+        ISSUE_REF,
+        "interaction-3",
+        { reason: "The option list is stale" },
+        { agentId: "agent-1" },
+      );
+
+      expect(applied).toBe(true);
+      expect(interaction.status).toBe("withdrawn");
+      // The checkbox result schema must accept a withdrawal without
+      // selectedOptionIds — hydration re-parses this on every later read.
+      expect(interaction.result).toEqual({
+        version: 1,
+        outcome: "withdrawn_by_creator",
+        reason: "The option list is stale",
+      });
+      expect(interaction.resolvedByUserId).toBeNull();
+    });
+
+    it("fails closed with 409 when a concurrent resolution wins the pending-guarded update", async () => {
+      const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+      const state = createFakeDb({ interactionRow: confirmationRow() });
+      // Double-withdraw race: the pre-check reads a pending row, but another
+      // request resolves the card before this one's guarded UPDATE runs, so
+      // the status = 'pending' predicate matches zero rows.
+      state.db.update = vi.fn(() => ({
+        set: () => ({
+          where: () => ({ returning: async () => [] }),
+        }),
+      }));
+      const svc = issueThreadInteractionService(state.db as never);
+
+      await expect(svc.withdrawInteraction(
+        ISSUE_REF,
+        "interaction-3",
+        {},
+        { agentId: "agent-1" },
+      )).rejects.toMatchObject({ status: 409 });
+    });
+
     it("returns 404 for interactions on another issue", async () => {
       const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
       const state = createFakeDb({

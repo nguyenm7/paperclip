@@ -1019,6 +1019,24 @@ describe.sequential("issue thread interaction routes", () => {
     expect(mockInteractionService.withdrawInteraction).not.toHaveBeenCalled();
   });
 
+  it("rejects agents from another company with 403 before reaching the service", async () => {
+    const app = await createApp({
+      type: "agent",
+      agentId: CREATED_AGENT_ID,
+      companyId: "company-2",
+      runId: "run-1",
+    });
+
+    const res = await request(app)
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-4/withdraw")
+      .send({});
+
+    expect(res.status).toBe(403);
+    expect(mockInteractionService.withdrawInteraction).not.toHaveBeenCalled();
+    expect(mockLogActivity).not.toHaveBeenCalled();
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+  });
+
   it("propagates the service's creator check as 403 for non-creator agents", async () => {
     const { HttpError } = await import("../errors.js");
     mockInteractionService.withdrawInteraction.mockRejectedValueOnce(

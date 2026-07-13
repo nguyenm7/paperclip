@@ -19,6 +19,7 @@ const mockInteractionService = vi.hoisted(() => ({
   expireRequestConfirmationsSupersededByHistoricalComments: vi.fn(),
   answerQuestions: vi.fn(),
   cancelQuestions: vi.fn(),
+  withdrawInteraction: vi.fn(),
 }));
 
 const mockHeartbeatService = vi.hoisted(() => ({
@@ -313,6 +314,37 @@ describe.sequential("issue thread interaction routes", () => {
       createdAt: "2026-04-20T12:00:00.000Z",
       updatedAt: "2026-04-20T12:05:00.000Z",
       resolvedAt: "2026-04-20T12:05:00.000Z",
+    });
+    mockInteractionService.withdrawInteraction.mockResolvedValue({
+      interaction: {
+        id: "interaction-4",
+        companyId: "company-1",
+        issueId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        kind: "request_confirmation",
+        status: "withdrawn",
+        continuationPolicy: "wake_assignee",
+        idempotencyKey: null,
+        sourceCommentId: null,
+        sourceRunId: "run-1",
+        createdByAgentId: CREATED_AGENT_ID,
+        createdByUserId: null,
+        resolvedByAgentId: CREATED_AGENT_ID,
+        resolvedByUserId: null,
+        payload: {
+          version: 1,
+          prompt: "Confirm?",
+          supersedeOnUserComment: true,
+        },
+        result: {
+          version: 1,
+          outcome: "withdrawn_by_creator",
+          reason: "Stale card",
+        },
+        createdAt: "2026-04-20T12:00:00.000Z",
+        updatedAt: "2026-04-20T12:05:00.000Z",
+        resolvedAt: "2026-04-20T12:05:00.000Z",
+      },
+      applied: true,
     });
     mockDbSelect.mockImplementation(() => ({ from: mockDbSelectFrom }));
     mockDbSelectFrom.mockImplementation(() => ({ where: mockDbSelectWhere }));
@@ -909,5 +941,133 @@ describe.sequential("issue thread interaction routes", () => {
         userId: null,
       },
     );
+  });
+
+  // LOOA-294 authz matrix: withdraw is agent-only and creator-scoped; the
+  // board keeps accept/reject/cancel. Mirrors approval-decision-auth.test.ts.
+  it("lets a creator agent withdraw its card, logs a withdrawal, and skips the wake when the creator is the assignee", async () => {
+    mockIssueService.getById.mockResolvedValue(createIssue({ assigneeAgentId: CREATED_AGENT_ID }));
+    const app = await createApp({
+      type: "agent",
+      agentId: CREATED_AGENT_ID,
+      companyId: "company-1",
+      runId: "run-1",
+    });
+
+    const res = await request(app)
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-4/withdraw")
+      .send({ reason: "Stale card" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("withdrawn");
+    expect(res.body.resolvedByUserId).toBeNull();
+    expect(mockInteractionService.withdrawInteraction).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }),
+      "interaction-4",
+      expect.objectContaining({ reason: "Stale card" }),
+      { agentId: CREATED_AGENT_ID, userId: null },
+    );
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "issue.thread_interaction_withdrawn",
+        details: expect.objectContaining({
+          interactionId: "interaction-4",
+          interactionStatus: "withdrawn",
+          withdrawnReason: "Stale card",
+        }),
+      }),
+    );
+    // The creator initiated the retraction from a live run — no self-wake.
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+  });
+
+  it("wakes a different assignee still parked on the withdrawn gate", async () => {
+    // Default issue fixture is assigned to ASSIGNEE_AGENT_ID while the
+    // creator/withdrawing agent is CREATED_AGENT_ID.
+    const app = await createApp({
+      type: "agent",
+      agentId: CREATED_AGENT_ID,
+      companyId: "company-1",
+      runId: "run-1",
+    });
+
+    const res = await request(app)
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-4/withdraw")
+      .send({ reason: "Stale card" });
+
+    expect(res.status).toBe(200);
+    expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
+      ASSIGNEE_AGENT_ID,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          interactionId: "interaction-4",
+          interactionStatus: "withdrawn",
+        }),
+      }),
+    );
+  });
+
+  it("rejects withdraw from board actors with 403 and never reaches the service", async () => {
+    const app = await createApp();
+
+    const res = await request(app)
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-4/withdraw")
+      .send({});
+
+    expect(res.status).toBe(403);
+    expect(mockInteractionService.withdrawInteraction).not.toHaveBeenCalled();
+  });
+
+  it("propagates the service's creator check as 403 for non-creator agents", async () => {
+    const { HttpError } = await import("../errors.js");
+    mockInteractionService.withdrawInteraction.mockRejectedValueOnce(
+      new HttpError(403, "Agents may only withdraw interactions they created"),
+    );
+    const app = await createApp({
+      type: "agent",
+      agentId: ASSIGNEE_AGENT_ID,
+      companyId: "company-1",
+      runId: "run-1",
+    });
+
+    const res = await request(app)
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-4/withdraw")
+      .send({});
+
+    expect(res.status).toBe(403);
+    expect(mockLogActivity).not.toHaveBeenCalled();
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+  });
+
+  it("returns the converged card without logging or waking when withdraw is a no-op", async () => {
+    mockInteractionService.withdrawInteraction.mockResolvedValueOnce({
+      interaction: {
+        id: "interaction-4",
+        companyId: "company-1",
+        issueId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        kind: "request_confirmation",
+        status: "withdrawn",
+        continuationPolicy: "wake_assignee",
+        payload: { version: 1, prompt: "Confirm?", supersedeOnUserComment: true },
+        result: { version: 1, outcome: "withdrawn_by_creator", reason: null },
+      },
+      applied: false,
+    });
+    const app = await createApp({
+      type: "agent",
+      agentId: CREATED_AGENT_ID,
+      companyId: "company-1",
+      runId: "run-1",
+    });
+
+    const res = await request(app)
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-4/withdraw")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("withdrawn");
+    expect(mockLogActivity).not.toHaveBeenCalled();
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
   });
 });

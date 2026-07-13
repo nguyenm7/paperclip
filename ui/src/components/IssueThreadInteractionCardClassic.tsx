@@ -10,7 +10,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import type { Agent } from "@paperclipai/shared";
-import { AlertTriangle, CheckCircle2, ChevronRight, CircleDashed, GitBranch, ListChecks, Loader2, MessageSquareQuote, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronRight, CircleDashed, GitBranch, ListChecks, Loader2, MessageSquareQuote, Undo2, XCircle } from "lucide-react";
 import { Link } from "@/lib/router";
 import { formatAssigneeUserLabel } from "../lib/assignees";
 import {
@@ -100,6 +100,8 @@ function statusLabel(status: IssueThreadInteraction["status"]) {
       return "Answered";
     case "cancelled":
       return "Cancelled";
+    case "withdrawn":
+      return "Withdrawn by author";
     case "expired":
       return "Expired";
     case "failed":
@@ -133,6 +135,8 @@ function statusIcon(status: IssueThreadInteraction["status"]) {
     case "cancelled":
     case "failed":
       return XCircle;
+    case "withdrawn":
+      return Undo2;
     case "expired":
       return AlertTriangle;
     default:
@@ -153,6 +157,11 @@ function statusClasses(status: IssueThreadInteraction["status"]) {
       return {
         shell: "border-rose-400/70 bg-transparent",
         badge: "border-rose-500/60 bg-rose-500/10 text-rose-900 dark:bg-rose-500/15 dark:text-rose-100",
+      };
+    case "withdrawn":
+      return {
+        shell: "border-slate-400/70 bg-transparent",
+        badge: "border-slate-500/60 bg-slate-500/10 text-slate-900 dark:bg-slate-500/15 dark:text-slate-100",
       };
     case "failed":
     case "expired":
@@ -939,6 +948,15 @@ function AskUserQuestionsCard({
           <div className="font-semibold">Question cancelled</div>
           {interaction.result?.cancellationReason ? (
             <p className="mt-1">{interaction.result.cancellationReason}</p>
+          ) : (
+            <p className="mt-1">No answer was recorded.</p>
+          )}
+        </div>
+      ) : interaction.status === "withdrawn" ? (
+        <div className="rounded-2xl border border-slate-300/60 bg-slate-50/85 p-4 text-sm leading-6 text-slate-950 dark:border-slate-500/40 dark:bg-slate-500/10 dark:text-slate-100">
+          <div className="font-semibold">Withdrawn by the requesting agent</div>
+          {interaction.result?.withdrawnReason ? (
+            <p className="mt-1">{interaction.result.withdrawnReason}</p>
           ) : (
             <p className="mt-1">No answer was recorded.</p>
           )}

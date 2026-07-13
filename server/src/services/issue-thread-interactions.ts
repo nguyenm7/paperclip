@@ -16,6 +16,7 @@ import type {
   CancelIssueThreadInteraction,
   CreateIssueThreadInteraction,
   IssueThreadInteraction,
+  IssueThreadInteractionResult,
   RequestCheckboxConfirmationInteraction,
   RequestConfirmationInteraction,
   RequestConfirmationTarget,
@@ -23,6 +24,7 @@ import type {
   RespondIssueThreadInteraction,
   SuggestTasksInteraction,
   SuggestTasksResultCreatedTask,
+  WithdrawIssueThreadInteraction,
 } from "@paperclipai/shared";
 import {
   acceptIssueThreadInteractionSchema,
@@ -37,8 +39,9 @@ import {
   requestConfirmationResultSchema,
   suggestTasksPayloadSchema,
   suggestTasksResultSchema,
+  withdrawIssueThreadInteractionSchema,
 } from "@paperclipai/shared";
-import { conflict, notFound, unprocessable } from "../errors.js";
+import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { issueService, listUnfinalizedExecutionWorkspaceIds } from "./issues.js";
 
@@ -1477,6 +1480,81 @@ export function issueThreadInteractionService(db: Db) {
 
       await touchIssue(db, issue.id);
       return hydrateInteraction(updated);
+    },
+
+    // Creator-agent retraction of the agent's own card — the interaction
+    // analogue of POST /approvals/:id/withdraw (LOOA-294, LOOA-231 semantics).
+    // Records a terminal "withdrawn" status with resolved_by_agent_id only;
+    // resolved_by_user_id stays NULL so a withdrawal can never be counted or
+    // displayed as a board decision.
+    withdrawInteraction: async (
+      issue: { id: string; companyId: string },
+      interactionId: string,
+      input: WithdrawIssueThreadInteraction,
+      actor: InteractionActor,
+    ): Promise<{ interaction: IssueThreadInteraction; applied: boolean }> => {
+      const data = withdrawIssueThreadInteractionSchema.parse(input);
+      if (!actor.agentId) {
+        throw forbidden("Withdraw is the creator-agent primitive; board members decide with accept/reject/cancel instead.");
+      }
+
+      const current = await db
+        .select()
+        .from(issueThreadInteractions)
+        .where(eq(issueThreadInteractions.id, interactionId))
+        .then((rows) => rows[0] ?? null);
+
+      if (!current) throw notFound("Interaction not found");
+      if (current.companyId !== issue.companyId || current.issueId !== issue.id) {
+        throw notFound("Interaction not found");
+      }
+      if (!current.createdByAgentId || current.createdByAgentId !== actor.agentId) {
+        throw forbidden("Agents may only withdraw interactions they created");
+      }
+      if (current.status !== "pending") {
+        // Idempotent convergence: re-withdrawing an already-withdrawn card is
+        // a no-op, any other resolution is a conflict.
+        if (current.status === "withdrawn") {
+          return { interaction: hydrateInteraction(current), applied: false };
+        }
+        throw conflict("Interaction has already been resolved");
+      }
+
+      const reason = data.reason?.trim() || null;
+      const withdrawnResult = ((): IssueThreadInteractionResult => {
+        switch (current.kind) {
+          case "request_confirmation":
+          case "request_checkbox_confirmation":
+            return { version: 1, outcome: "withdrawn_by_creator", reason };
+          case "ask_user_questions":
+            return { version: 1, answers: [], withdrawnReason: reason };
+          default:
+            return { version: 1, withdrawnReason: reason };
+        }
+      })();
+
+      const [updated] = await db
+        .update(issueThreadInteractions)
+        .set({
+          status: "withdrawn",
+          result: withdrawnResult,
+          resolvedByAgentId: actor.agentId,
+          resolvedByUserId: null,
+          resolvedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(and(
+          eq(issueThreadInteractions.id, interactionId),
+          eq(issueThreadInteractions.status, "pending"),
+        ))
+        .returning();
+
+      if (!updated) {
+        throw conflict("Interaction has already been resolved");
+      }
+
+      await touchIssue(db, issue.id);
+      return { interaction: hydrateInteraction(updated), applied: true };
     },
   };
 }

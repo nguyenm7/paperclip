@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Agent } from "@paperclipai/shared";
-import { AlertTriangle, CheckCircle2, ChevronRight, CircleDashed, FileText, GitBranch, ImagePlus, ListChecks, Loader2, MessageSquareQuote, X, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronRight, CircleDashed, FileText, GitBranch, ImagePlus, ListChecks, Loader2, MessageSquareQuote, Undo2, X, XCircle } from "lucide-react";
 import { Link } from "@/lib/router";
 import { formatAssigneeUserLabel } from "../lib/assignees";
 import {
@@ -89,6 +89,8 @@ function statusLabel(status: IssueThreadInteraction["status"]) {
       return "Answered";
     case "cancelled":
       return "Cancelled";
+    case "withdrawn":
+      return "Withdrawn by author";
     case "expired":
       return "Expired";
     case "failed":
@@ -122,6 +124,8 @@ function statusIcon(status: IssueThreadInteraction["status"]) {
     case "cancelled":
     case "failed":
       return XCircle;
+    case "withdrawn":
+      return Undo2;
     case "expired":
       return AlertTriangle;
     default:
@@ -142,6 +146,11 @@ function statusClasses(status: IssueThreadInteraction["status"]) {
       return {
         shell: "border-rose-400/70 bg-transparent",
         badge: "border-rose-500/60 bg-rose-500/10 text-rose-900 dark:bg-rose-500/15 dark:text-rose-100",
+      };
+    case "withdrawn":
+      return {
+        shell: "border-slate-400/70 bg-transparent",
+        badge: "border-slate-500/60 bg-slate-500/10 text-slate-900 dark:bg-slate-500/15 dark:text-slate-100",
       };
     case "failed":
     case "expired":
@@ -186,6 +195,13 @@ function planStatusClasses(status: IssueThreadInteraction["status"]) {
         badge: "border-red-500/60 bg-red-500/10 text-red-900 dark:bg-red-500/15 dark:text-red-100",
         label: "Changes requested",
         Icon: XCircle,
+      };
+    case "withdrawn":
+      return {
+        shell: "border-2 border-slate-400/80 bg-transparent",
+        badge: "border-slate-500/60 bg-slate-500/10 text-slate-900 dark:bg-slate-500/15 dark:text-slate-100",
+        label: "Withdrawn by author",
+        Icon: Undo2,
       };
     case "failed":
     case "expired":
@@ -560,6 +576,20 @@ function SuggestTasksCard({
             !interaction.result?.rejectionReason && "text-rose-900/75",
           )}>
             {interaction.result?.rejectionReason || "No reason provided."}
+          </p>
+        </div>
+      ) : null}
+
+      {interaction.status === "withdrawn" ? (
+        <div className="rounded-sm border border-slate-500/60 bg-slate-500/10 px-4 py-3 text-sm text-slate-900 dark:text-slate-100">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-600 dark:text-slate-300">
+            Withdrawn by the requesting agent
+          </div>
+          <p className={cn(
+            "mt-1 leading-6",
+            !interaction.result?.withdrawnReason && "text-slate-900/75 dark:text-slate-100/75",
+          )}>
+            {interaction.result?.withdrawnReason || "No reason provided."}
           </p>
         </div>
       ) : null}
@@ -980,6 +1010,15 @@ function AskUserQuestionsCard({
             <p className="mt-1">No answer was recorded.</p>
           )}
         </div>
+      ) : interaction.status === "withdrawn" ? (
+        <div className="rounded-2xl border border-slate-300/60 bg-slate-50/85 p-4 text-sm leading-6 text-slate-950 dark:border-slate-500/40 dark:bg-slate-500/10 dark:text-slate-100">
+          <div className="font-semibold">Withdrawn by the requesting agent</div>
+          {interaction.result?.withdrawnReason ? (
+            <p className="mt-1">{interaction.result.withdrawnReason}</p>
+          ) : (
+            <p className="mt-1">No answer was recorded.</p>
+          )}
+        </div>
       ) : (
         <div className="space-y-3">
           {questions.map((question) => {
@@ -1150,6 +1189,22 @@ function RequestConfirmationResolution({
               <ChevronRight className="h-3.5 w-3.5 text-amber-700" />
             ) : null}
             <RequestConfirmationTargetChip interaction={interaction} target={target} />
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (interaction.status === "withdrawn") {
+    return (
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center gap-2 text-sm leading-6 text-foreground">
+          <span className="font-medium">Withdrawn by the requesting agent — no board decision was made</span>
+          <RequestConfirmationTargetChip interaction={interaction} target={target} />
+        </div>
+        {interaction.result?.reason ? (
+          <div className="rounded-sm border-l-2 border-slate-500/70 bg-slate-500/10 px-3 py-2 text-sm leading-6 text-slate-900 dark:text-slate-100">
+            <MarkdownBody>{interaction.result.reason}</MarkdownBody>
           </div>
         ) : null}
       </div>
@@ -1515,6 +1570,10 @@ function RequestCheckboxConfirmationResolution({
   }
 
   if (interaction.status === "expired") {
+    return <RequestConfirmationResolution interaction={interaction as unknown as RequestConfirmationInteraction} />;
+  }
+
+  if (interaction.status === "withdrawn") {
     return <RequestConfirmationResolution interaction={interaction as unknown as RequestConfirmationInteraction} />;
   }
 

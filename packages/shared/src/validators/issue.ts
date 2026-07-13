@@ -619,6 +619,7 @@ export const suggestTasksResultSchema = z.object({
   createdTasks: z.array(suggestTasksResultCreatedTaskSchema).max(50).optional(),
   skippedClientKeys: z.array(z.string().trim().min(1).max(120)).max(50).optional(),
   rejectionReason: z.string().trim().max(4000).nullable().optional(),
+  withdrawnReason: z.string().trim().max(4000).nullable().optional(),
 });
 
 export const askUserQuestionsQuestionOptionSchema = z.object({
@@ -678,6 +679,7 @@ export const askUserQuestionsResultSchema = z.object({
   answers: z.array(askUserQuestionsAnswerSchema).max(20),
   cancelled: z.literal(true).optional(),
   cancellationReason: z.string().trim().max(4000).nullable().optional(),
+  withdrawnReason: z.string().trim().max(4000).nullable().optional(),
   summaryMarkdown: z.string().max(20000).nullable().optional(),
 });
 
@@ -829,7 +831,7 @@ export const requestCheckboxConfirmationPayloadSchema = z.object({
 
 export const requestConfirmationResultSchema = z.object({
   version: z.literal(1),
-  outcome: z.enum(["accepted", "rejected", "superseded_by_comment", "stale_target"]),
+  outcome: z.enum(["accepted", "rejected", "superseded_by_comment", "stale_target", "withdrawn_by_creator"]),
   reason: z.string().trim().max(4000).nullable().optional(),
   commentId: z.string().uuid().nullable().optional(),
   staleTarget: requestConfirmationTargetSchema.nullable().optional(),
@@ -942,6 +944,11 @@ export const cancelIssueThreadInteractionSchema = z.object({
   reason: z.string().trim().max(4000).optional(),
 });
 export type CancelIssueThreadInteraction = z.infer<typeof cancelIssueThreadInteractionSchema>;
+
+export const withdrawIssueThreadInteractionSchema = z.object({
+  reason: z.string().trim().max(4000).optional(),
+});
+export type WithdrawIssueThreadInteraction = z.infer<typeof withdrawIssueThreadInteractionSchema>;
 
 export const respondIssueThreadInteractionSchema = z.object({
   answers: z.array(askUserQuestionsAnswerSchema).max(20),

@@ -212,4 +212,263 @@ describe("issueThreadInteractionService", () => {
     expect(state.interactionUpdates).toHaveLength(1);
     expect(state.issueTouches).toHaveLength(1);
   });
+
+  // LOOA-294: creator withdraw — the agent-side retraction primitive. These
+  // mirror the approval withdraw semantics (LOOA-231): creator-only, never a
+  // board decision, idempotent on re-withdraw, conflict on any other terminal.
+  describe("withdrawInteraction", () => {
+    const ISSUE_REF = { id: "11111111-1111-4111-8111-111111111111", companyId: "company-1" };
+
+    function confirmationRow(overrides: Record<string, unknown> = {}) {
+      return {
+        id: "interaction-3",
+        companyId: "company-1",
+        issueId: ISSUE_REF.id,
+        kind: "request_confirmation",
+        status: "pending",
+        continuationPolicy: "wake_assignee",
+        idempotencyKey: null,
+        sourceCommentId: null,
+        sourceRunId: null,
+        title: "Confirm the thing",
+        summary: null,
+        createdByAgentId: "agent-1",
+        createdByUserId: null,
+        resolvedByAgentId: null,
+        resolvedByUserId: null,
+        payload: {
+          version: 1,
+          prompt: "Confirm?",
+          supersedeOnUserComment: true,
+        },
+        result: null,
+        resolvedAt: null,
+        createdAt: new Date("2026-04-20T10:00:00.000Z"),
+        updatedAt: new Date("2026-04-20T10:00:00.000Z"),
+        ...overrides,
+      };
+    }
+
+    it("lets the creator agent withdraw a pending confirmation without recording a board decision", async () => {
+      const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+      const state = createFakeDb({ interactionRow: confirmationRow() });
+      const svc = issueThreadInteractionService(state.db as never);
+
+      const { interaction, applied } = await svc.withdrawInteraction(
+        ISSUE_REF,
+        "interaction-3",
+        { reason: "The world changed under this card" },
+        { agentId: "agent-1" },
+      );
+
+      expect(applied).toBe(true);
+      expect(interaction.status).toBe("withdrawn");
+      expect(interaction.result).toEqual({
+        version: 1,
+        outcome: "withdrawn_by_creator",
+        reason: "The world changed under this card",
+      });
+      expect(interaction.resolvedByAgentId).toBe("agent-1");
+      expect(interaction.resolvedByUserId).toBeNull();
+      expect(state.interactionUpdates).toHaveLength(1);
+      expect(state.issueTouches).toHaveLength(1);
+    });
+
+    it("records withdrawnReason for ask_user_questions withdrawals", async () => {
+      const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+      const state = createFakeDb({
+        interactionRow: confirmationRow({
+          kind: "ask_user_questions",
+          payload: {
+            version: 1,
+            questions: [
+              {
+                id: "scope",
+                prompt: "Pick one scope",
+                selectionMode: "single",
+                options: [{ id: "phase-1", label: "Phase 1" }],
+              },
+            ],
+          },
+        }),
+      });
+      const svc = issueThreadInteractionService(state.db as never);
+
+      const { interaction, applied } = await svc.withdrawInteraction(
+        ISSUE_REF,
+        "interaction-3",
+        { reason: "Question no longer applies" },
+        { agentId: "agent-1" },
+      );
+
+      expect(applied).toBe(true);
+      expect(interaction.status).toBe("withdrawn");
+      expect(interaction.result).toEqual({
+        version: 1,
+        answers: [],
+        withdrawnReason: "Question no longer applies",
+      });
+      expect(interaction.resolvedByUserId).toBeNull();
+    });
+
+    it("rejects non-creator agents with 403", async () => {
+      const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+      const state = createFakeDb({ interactionRow: confirmationRow() });
+      const svc = issueThreadInteractionService(state.db as never);
+
+      await expect(svc.withdrawInteraction(
+        ISSUE_REF,
+        "interaction-3",
+        {},
+        { agentId: "agent-2" },
+      )).rejects.toMatchObject({ status: 403 });
+      expect(state.interactionUpdates).toHaveLength(0);
+    });
+
+    it("rejects actors without an agent identity with 403", async () => {
+      const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+      const state = createFakeDb({ interactionRow: confirmationRow() });
+      const svc = issueThreadInteractionService(state.db as never);
+
+      await expect(svc.withdrawInteraction(
+        ISSUE_REF,
+        "interaction-3",
+        {},
+        { userId: "local-board" },
+      )).rejects.toMatchObject({ status: 403 });
+      expect(state.interactionUpdates).toHaveLength(0);
+    });
+
+    it("rejects board-created interactions even for the resolving agent", async () => {
+      const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+      const state = createFakeDb({
+        interactionRow: confirmationRow({ createdByAgentId: null, createdByUserId: "local-board" }),
+      });
+      const svc = issueThreadInteractionService(state.db as never);
+
+      await expect(svc.withdrawInteraction(
+        ISSUE_REF,
+        "interaction-3",
+        {},
+        { agentId: "agent-1" },
+      )).rejects.toMatchObject({ status: 403 });
+    });
+
+    it("conflicts on interactions already resolved by the board", async () => {
+      const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+      const state = createFakeDb({
+        interactionRow: confirmationRow({
+          status: "accepted",
+          resolvedByUserId: "local-board",
+          result: { version: 1, outcome: "accepted" },
+        }),
+      });
+      const svc = issueThreadInteractionService(state.db as never);
+
+      await expect(svc.withdrawInteraction(
+        ISSUE_REF,
+        "interaction-3",
+        {},
+        { agentId: "agent-1" },
+      )).rejects.toMatchObject({ status: 409 });
+      expect(state.interactionUpdates).toHaveLength(0);
+    });
+
+    it("converges without a second write when the card is already withdrawn", async () => {
+      const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+      const state = createFakeDb({
+        interactionRow: confirmationRow({
+          status: "withdrawn",
+          resolvedByAgentId: "agent-1",
+          result: { version: 1, outcome: "withdrawn_by_creator", reason: null },
+          resolvedAt: new Date("2026-04-20T11:00:00.000Z"),
+        }),
+      });
+      const svc = issueThreadInteractionService(state.db as never);
+
+      const { interaction, applied } = await svc.withdrawInteraction(
+        ISSUE_REF,
+        "interaction-3",
+        {},
+        { agentId: "agent-1" },
+      );
+
+      expect(applied).toBe(false);
+      expect(interaction.status).toBe("withdrawn");
+      expect(state.interactionUpdates).toHaveLength(0);
+      expect(state.issueTouches).toHaveLength(0);
+    });
+
+    it("withdraws a pending checkbox confirmation with the shared confirmation outcome", async () => {
+      const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+      const state = createFakeDb({
+        interactionRow: confirmationRow({
+          kind: "request_checkbox_confirmation",
+          payload: {
+            version: 1,
+            prompt: "Pick the files to delete",
+            options: [{ id: "file-1", label: "File 1" }],
+            defaultSelectedOptionIds: [],
+            minSelected: 0,
+            allowDeclineReason: true,
+          },
+        }),
+      });
+      const svc = issueThreadInteractionService(state.db as never);
+
+      const { interaction, applied } = await svc.withdrawInteraction(
+        ISSUE_REF,
+        "interaction-3",
+        { reason: "The option list is stale" },
+        { agentId: "agent-1" },
+      );
+
+      expect(applied).toBe(true);
+      expect(interaction.status).toBe("withdrawn");
+      // The checkbox result schema must accept a withdrawal without
+      // selectedOptionIds — hydration re-parses this on every later read.
+      expect(interaction.result).toEqual({
+        version: 1,
+        outcome: "withdrawn_by_creator",
+        reason: "The option list is stale",
+      });
+      expect(interaction.resolvedByUserId).toBeNull();
+    });
+
+    it("fails closed with 409 when a concurrent resolution wins the pending-guarded update", async () => {
+      const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+      const state = createFakeDb({ interactionRow: confirmationRow() });
+      // Double-withdraw race: the pre-check reads a pending row, but another
+      // request resolves the card before this one's guarded UPDATE runs, so
+      // the status = 'pending' predicate matches zero rows.
+      state.db.update = vi.fn(() => ({
+        set: () => ({
+          where: () => ({ returning: async () => [] }),
+        }),
+      }));
+      const svc = issueThreadInteractionService(state.db as never);
+
+      await expect(svc.withdrawInteraction(
+        ISSUE_REF,
+        "interaction-3",
+        {},
+        { agentId: "agent-1" },
+      )).rejects.toMatchObject({ status: 409 });
+    });
+
+    it("returns 404 for interactions on another issue", async () => {
+      const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+      const state = createFakeDb({
+        interactionRow: confirmationRow({ issueId: "99999999-9999-4999-8999-999999999999" }),
+      });
+      const svc = issueThreadInteractionService(state.db as never);
+
+      await expect(svc.withdrawInteraction(
+        ISSUE_REF,
+        "interaction-3",
+        {},
+        { agentId: "agent-1" },
+      )).rejects.toMatchObject({ status: 404 });
+    });
+  });
 });

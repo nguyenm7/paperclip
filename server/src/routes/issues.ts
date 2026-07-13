@@ -50,6 +50,7 @@ import {
   updateDocumentAnnotationThreadSchema,
   upsertIssueDocumentSchema,
   updateIssueSchema,
+  withdrawIssueThreadInteractionSchema,
   getClosedIsolatedExecutionWorkspaceMessage,
   isClosedIsolatedExecutionWorkspace,
   isUuidLike,
@@ -6439,6 +6440,75 @@ export function issueRoutes(
         actor,
         source: "issue.interaction.cancel",
       });
+
+      res.json(interaction);
+    },
+  );
+
+  // Creator-agent retraction of the agent's own issue-thread card — parity
+  // with POST /approvals/:id/withdraw (LOOA-294). Board members keep
+  // accept/reject/cancel; agents get exactly one remedy for a card the world
+  // invalidated, and only for cards they created themselves.
+  router.post(
+    "/issues/:id/interactions/:interactionId/withdraw",
+    validate(withdrawIssueThreadInteractionSchema),
+    async (req, res) => {
+      const id = req.params.id as string;
+      const interactionId = req.params.interactionId as string;
+      const issue = await svc.getById(id);
+      if (!issue) {
+        res.status(404).json({ error: "Issue not found" });
+        return;
+      }
+      assertCompanyAccess(req, issue.companyId);
+      if (req.actor.type !== "agent" || !req.actor.agentId) {
+        throw forbidden(
+          "Withdraw is the creator-agent primitive; board members decide with accept/reject/cancel instead.",
+        );
+      }
+
+      const actor = getActorInfo(req);
+      const { interaction, applied } = await issueThreadInteractionService(db).withdrawInteraction(
+        issue,
+        interactionId,
+        req.body,
+        { agentId: req.actor.agentId, userId: null },
+      );
+
+      if (applied) {
+        await logActivity(db, {
+          companyId: issue.companyId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          agentId: actor.agentId,
+          runId: actor.runId,
+          action: "issue.thread_interaction_withdrawn",
+          entityType: "issue",
+          entityId: issue.id,
+          details: {
+            interactionId: interaction.id,
+            interactionKind: interaction.kind,
+            interactionStatus: interaction.status,
+            withdrawnReason: typeof req.body.reason === "string" && req.body.reason.trim()
+              ? req.body.reason.trim()
+              : null,
+          },
+        });
+
+        // The creator initiated the retraction, so waking them about it would
+        // fabricate a board-decision wake (they are already in a live run).
+        // Only a *different* assignee still parked on this gate needs the
+        // standard continuation wake to avoid stranding in in_review.
+        if (issue.assigneeAgentId && issue.assigneeAgentId !== req.actor.agentId) {
+          queueResolvedInteractionContinuationWakeup({
+            heartbeat,
+            issue,
+            interaction,
+            actor,
+            source: "issue.interaction.withdraw",
+          });
+        }
+      }
 
       res.json(interaction);
     },

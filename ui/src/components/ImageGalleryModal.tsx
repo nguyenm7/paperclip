@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { ChevronLeft, ChevronRight, Download, X } from "lucide-react";
-import type { IssueAttachment } from "@paperclipai/shared";
+
+/** Minimal shape the gallery needs; `IssueAttachment` satisfies it structurally. */
+export interface GalleryImage {
+  contentPath: string;
+  originalFilename?: string | null;
+}
 
 interface ImageGalleryModalProps {
-  images: IssueAttachment[];
+  images: GalleryImage[];
   initialIndex: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;

@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { UserPlus, Lightbulb, ShieldAlert, ShieldCheck } from "lucide-react";
-import { formatCents } from "../lib/utils";
+import { cn, formatCents } from "../lib/utils";
+import { ImageGalleryModal, type GalleryImage } from "./ImageGalleryModal";
 import { MarkdownBody } from "./MarkdownBody";
 
 export const typeLabel: Record<string, string> = {
@@ -189,8 +191,17 @@ function attachmentContentPath(attachmentId: string): string {
   return `/api/attachments/${encodeURIComponent(attachmentId)}/content`;
 }
 
-function ApprovalImageStrip({ images }: { images: ApprovalImage[] }) {
+function ApprovalImageStrip({
+  images,
+  onImageClick,
+}: {
+  images: ApprovalImage[];
+  onImageClick: (src: string) => void;
+}) {
   if (images.length === 0) return null;
+  // A lone asset is usually the thing being decided (gate policy Rule 0), so it
+  // gets the full column; the height cap is for strips of several thumbnails.
+  const single = images.length === 1;
   return (
     <div className="space-y-1.5">
       <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">Assets</p>
@@ -203,13 +214,21 @@ function ApprovalImageStrip({ images }: { images: ApprovalImage[] }) {
               href={src}
               target="_blank"
               rel="noreferrer"
-              className="block max-w-full"
+              className={single ? "block w-full" : "block max-w-full"}
+              onClick={(event) => {
+                if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                event.preventDefault();
+                onImageClick(src);
+              }}
             >
               <img
                 src={src}
                 alt={image.caption ?? "Approval asset"}
                 loading="lazy"
-                className="max-h-72 max-w-full rounded-md border border-border/60 object-contain"
+                className={cn(
+                  "max-w-full rounded-md border border-border/60 object-contain",
+                  single ? "w-full" : "max-h-72",
+                )}
               />
               {image.caption && (
                 <span className="mt-1 block text-xs text-muted-foreground">{image.caption}</span>
@@ -235,6 +254,15 @@ function BoardApprovalPayloadContent({ payload }: { payload: Record<string, unkn
   const nextActionOnApproval = firstNonEmptyString(payload.nextActionOnApproval);
   const proposedComment = firstNonEmptyString(payload.proposedComment);
   const images = parseApprovalImages(payload.images);
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+
+  const stripSources: GalleryImage[] = images.map((image) => ({
+    contentPath: attachmentContentPath(image.attachmentId),
+    originalFilename: image.caption,
+  }));
+  const lightboxIndex = lightboxSrc
+    ? stripSources.findIndex((image) => image.contentPath === lightboxSrc)
+    : -1;
 
   return (
     <div className="mt-4 space-y-3.5 text-sm">
@@ -247,22 +275,22 @@ function BoardApprovalPayloadContent({ payload }: { payload: Record<string, unkn
       {summary && (
         <div className="space-y-1">
           <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">Summary</p>
-          <MarkdownBody className="text-sm leading-6 text-foreground/90">{summary}</MarkdownBody>
+          <MarkdownBody className="text-sm leading-6 text-foreground/90" onImageClick={setLightboxSrc}>{summary}</MarkdownBody>
         </div>
       )}
-      <ApprovalImageStrip images={images} />
+      <ApprovalImageStrip images={images} onImageClick={setLightboxSrc} />
       {recommendedAction && (
         <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3.5 py-3">
           <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-amber-700 dark:text-amber-300">
             Recommended action
           </p>
-          <MarkdownBody className="mt-1 text-sm leading-6 text-foreground">{recommendedAction}</MarkdownBody>
+          <MarkdownBody className="mt-1 text-sm leading-6 text-foreground" onImageClick={setLightboxSrc}>{recommendedAction}</MarkdownBody>
         </div>
       )}
       {nextActionOnApproval && (
         <div className="rounded-lg border border-border/60 bg-background/60 px-3.5 py-3">
           <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">On approval</p>
-          <MarkdownBody className="mt-1 text-sm leading-6 text-foreground">{nextActionOnApproval}</MarkdownBody>
+          <MarkdownBody className="mt-1 text-sm leading-6 text-foreground" onImageClick={setLightboxSrc}>{nextActionOnApproval}</MarkdownBody>
         </div>
       )}
       {risks.length > 0 && (
@@ -287,6 +315,16 @@ function BoardApprovalPayloadContent({ payload }: { payload: Record<string, unkn
             {proposedComment}
           </pre>
         </div>
+      )}
+      {lightboxSrc && (
+        <ImageGalleryModal
+          images={lightboxIndex >= 0 ? stripSources : [{ contentPath: lightboxSrc }]}
+          initialIndex={Math.max(lightboxIndex, 0)}
+          open
+          onOpenChange={(open) => {
+            if (!open) setLightboxSrc(null);
+          }}
+        />
       )}
     </div>
   );

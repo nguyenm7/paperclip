@@ -161,4 +161,92 @@ describe("ApprovalPayloadRenderer", () => {
       root.unmount();
     });
   });
+
+  it("renders a single-image strip at column width and keeps the cap for multi-image strips", () => {
+    const root = renderPayload({
+      type: "request_board_approval",
+      payload: {
+        summary: "One image is the decision.",
+        images: [{ attachmentId: "att-1", caption: "Contact sheet" }],
+      },
+    });
+
+    const single = container.querySelector('img[src="/api/attachments/att-1/content"]');
+    expect(single?.classList.contains("w-full")).toBe(true);
+    expect(single?.classList.contains("max-h-72")).toBe(false);
+
+    act(() => {
+      root.unmount();
+    });
+
+    const multiRoot = renderPayload({
+      type: "request_board_approval",
+      payload: {
+        summary: "Pick a variant.",
+        images: [{ attachmentId: "att-1" }, { attachmentId: "att-2" }],
+      },
+    });
+
+    const thumbs = Array.from(container.querySelectorAll("img"));
+    expect(thumbs).toHaveLength(2);
+    for (const thumb of thumbs) {
+      expect(thumb.classList.contains("max-h-72")).toBe(true);
+      expect(thumb.classList.contains("w-full")).toBe(false);
+    }
+
+    act(() => {
+      multiRoot.unmount();
+    });
+  });
+
+  it("opens the lightbox when an inline summary image is clicked", () => {
+    const root = renderPayload({
+      type: "request_board_approval",
+      payload: {
+        summary: "![Cycle 04 contact sheet](/api/attachments/att-9/content)",
+      },
+    });
+
+    const inline = container.querySelector('img[src="/api/attachments/att-9/content"]');
+    expect(inline).not.toBeNull();
+    act(() => {
+      inline!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog?.querySelector("img")?.getAttribute("src")).toBe(
+      "/api/attachments/att-9/content",
+    );
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
+  it("opens the lightbox from the Assets strip instead of navigating away", () => {
+    const root = renderPayload({
+      type: "request_board_approval",
+      payload: {
+        summary: "Pick a variant.",
+        images: [{ attachmentId: "att-1", caption: "Contact sheet" }],
+      },
+    });
+
+    const stripImage = container.querySelector('img[src="/api/attachments/att-1/content"]');
+    expect(stripImage).not.toBeNull();
+    act(() => {
+      stripImage!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog?.querySelector("img")?.getAttribute("src")).toBe(
+      "/api/attachments/att-1/content",
+    );
+
+    act(() => {
+      root.unmount();
+    });
+  });
 });

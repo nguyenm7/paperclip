@@ -1,16 +1,17 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, like, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
   companyMemberships,
   heartbeatRuns,
   instanceUserRoles,
+  issueComments,
   issues,
   principalPermissionGrants,
   projects,
 } from "@paperclipai/db";
 import type { PermissionKey, PrincipalType } from "@paperclipai/shared";
-import { LOW_TRUST_REVIEW_PRESET, type LowTrustBoundary } from "@paperclipai/shared";
+import { extractAgentMentionIds, LOW_TRUST_REVIEW_PRESET, type LowTrustBoundary } from "@paperclipai/shared";
 import {
   LOW_TRUST_ISSUE_ANCESTRY_MAX_DEPTH,
   isIssueWithinLowTrustBoundary,
@@ -45,6 +46,7 @@ export type AuthorizationAction =
   | "agent:read"
   | "agent:wake"
   | "company_scope:read"
+  | "issue:comment"
   | "issue:mutate"
   | "issue:read"
   | "project:read"
@@ -81,6 +83,7 @@ export type AuthorizationDecision = {
     | "allow_company_member"
     | "allow_simple_company_member"
     | "allow_manager_chain"
+    | "allow_mention_grant"
     | "deny_unauthenticated"
     | "deny_company_boundary"
     | "deny_missing_membership"
@@ -118,7 +121,7 @@ function permissionForAction(action: AuthorizationAction): PermissionKey | null 
   ) {
     return null;
   }
-  if (action === "issue:mutate") return null;
+  if (action === "issue:mutate" || action === "issue:comment") return null;
   return action;
 }
 
@@ -535,6 +538,26 @@ export function authorizationService(db: Db) {
       .then((rows) => rows[0] ?? null);
   }
 
+  // A structured @-mention in the issue's comment thread is the durable record
+  // behind an issue_comment_mentioned wake; it is what grants issue:comment to
+  // a non-assignee agent. Agent ids are UUIDs, so the LIKE marker contains no
+  // wildcard characters; extractAgentMentionIds re-verifies each candidate so a
+  // bare `agent://<id>` substring outside a mention link never grants access.
+  async function agentMentionedOnIssue(issueId: string, agentId: string) {
+    const marker = `agent://${agentId}`;
+    const rows = await db
+      .select({ body: issueComments.body })
+      .from(issueComments)
+      .where(
+        and(
+          eq(issueComments.issueId, issueId),
+          isNull(issueComments.deletedAt),
+          like(issueComments.body, `%${marker}%`),
+        ),
+      );
+    return rows.some((row) => extractAgentMentionIds(row.body).includes(agentId));
+  }
+
   async function loadIssue(issueId: string): Promise<IssueAuthorizationRow | null> {
     return db
       .select({
@@ -753,7 +776,11 @@ export function authorizationService(db: Db) {
         : lowTrustDeny("Project is outside this low-trust boundary.");
     }
 
-    if (input.action === "issue:read" || input.action === "issue:mutate") {
+    if (
+      input.action === "issue:read" ||
+      input.action === "issue:mutate" ||
+      input.action === "issue:comment"
+    ) {
       if (input.resource.type !== "issue") {
         return lowTrustDeny("Low-trust issue access is missing an issue resource.");
       }
@@ -956,7 +983,10 @@ export function authorizationService(db: Db) {
               explanation: "Allowed by active cloud tenant company membership.",
             });
           }
-          if (input.action === "issue:mutate" && membership.membershipRole !== "viewer") {
+          if (
+            (input.action === "issue:mutate" || input.action === "issue:comment") &&
+            membership.membershipRole !== "viewer"
+          ) {
             return allow({
               action: input.action,
               reason: "allow_company_member",
@@ -1154,7 +1184,7 @@ export function authorizationService(db: Db) {
       });
     }
 
-    if (input.action === "issue:mutate") {
+    if (input.action === "issue:mutate" || input.action === "issue:comment") {
       const resource = input.resource.type === "issue" ? input.resource : null;
       if (resource?.assigneeAgentId === actorAgentId) {
         return allow({
@@ -1168,6 +1198,20 @@ export function authorizationService(db: Db) {
           action: input.action,
           reason: "allow_company_agent",
           explanation: "Allowed because the issue has no agent assignee.",
+        });
+      }
+      // A mention summons an agent into a thread it does not own; the summons
+      // must carry the right to reply there. Comment-only: issue:mutate
+      // (status, assignee, description) stays bound to the assignee.
+      if (
+        input.action === "issue:comment" &&
+        resource?.issueId &&
+        (await agentMentionedOnIssue(resource.issueId, actorAgentId))
+      ) {
+        return allow({
+          action: input.action,
+          reason: "allow_mention_grant",
+          explanation: "Allowed because the actor was @-mentioned in this issue's comment thread.",
         });
       }
     }

@@ -608,6 +608,49 @@ describe("agent issue mutation checkout ownership", () => {
     expect(mockStorageService.deleteObject).not.toHaveBeenCalled();
   });
 
+  it("lets a mention-granted peer agent post a comment without weakening the PATCH boundary", async () => {
+    // A mention-wake must be sufficient to reply in the thread the agent was
+    // mentioned in (LOOA-246): issue:comment carries the mention grant, while
+    // issue:mutate (PATCH) stays bound to the assignee.
+    mockAccessService.decide.mockImplementation(async (input: { action: string }) => {
+      if (input.action === "issue:comment") {
+        return {
+          allowed: true,
+          action: input.action,
+          reason: "allow_mention_grant",
+          explanation: "Allowed because the actor was @-mentioned in this issue's comment thread.",
+        };
+      }
+      const allowed =
+        input.action === "tasks:assign" ||
+        input.action === "issue:read" ||
+        input.action === "issue:mutate" ||
+        input.action === "company_scope:read";
+      return {
+        allowed,
+        action: input.action,
+        reason: allowed ? "allow_explicit_grant" : "deny_missing_grant",
+        explanation: allowed ? "Allowed by test default." : "Missing permission.",
+      };
+    });
+    const app = await createApp(peerActor());
+
+    const commentRes = await request(app)
+      .post(`/api/issues/${issueId}/comments`)
+      .send({ body: "Reply from the mentioned agent" });
+    expect(commentRes.status, JSON.stringify(commentRes.body)).toBe(201);
+    expect(mockIssueService.addComment).toHaveBeenCalledWith(
+      issueId,
+      "Reply from the mentioned agent",
+      expect.any(Object),
+      expect.any(Object),
+    );
+
+    const patchRes = await request(app).patch(`/api/issues/${issueId}`).send({ title: "Blocked" });
+    expect(patchRes.status, JSON.stringify(patchRes.body)).toBe(409);
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+  });
+
   it("rejects the checked-out owner without a run id on attachment upload (401)", async () => {
     // Regression: an agent-authenticated client (e.g. the CLI's attachment:upload)
     // that fails to send X-Paperclip-Run-Id must be rejected — mutating your own

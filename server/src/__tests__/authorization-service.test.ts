@@ -6,6 +6,7 @@ import {
   companyMemberships,
   createDb,
   instanceUserRoles,
+  issueComments,
   issues,
   principalPermissionGrants,
   projects,
@@ -127,6 +128,7 @@ describeEmbeddedPostgres("authorization service", () => {
     await db.delete(principalPermissionGrants);
     await db.delete(companyMemberships);
     await db.delete(instanceUserRoles);
+    await db.delete(issueComments);
     await db.delete(issues);
     await db.delete(agents);
     await db.delete(projects);
@@ -911,5 +913,128 @@ describeEmbeddedPostgres("authorization service", () => {
       allowed: true,
       grant: { permissionKey: "tasks:assign" },
     });
+  });
+
+  it("grants issue:comment to an agent @-mentioned in the issue thread without granting issue:mutate", async () => {
+    const company = await createCompany(db, "MentionGrant");
+    const assignee = await createAgent(db, company.id);
+    const mentioned = await createAgent(db, company.id);
+    const issue = await createIssue(db, company.id, { assigneeAgentId: assignee.id });
+    await db.insert(issueComments).values({
+      companyId: company.id,
+      issueId: issue.id,
+      authorAgentId: assignee.id,
+      authorType: "agent",
+      body: `Please take a look, [@Reviewer](agent://${mentioned.id}).`,
+    });
+
+    const actor = {
+      type: "agent" as const,
+      agentId: mentioned.id,
+      companyId: company.id,
+      source: "agent_key" as const,
+    };
+    const resource = {
+      type: "issue" as const,
+      companyId: company.id,
+      issueId: issue.id,
+      assigneeAgentId: assignee.id,
+    };
+
+    const comment = await authorizationService(db).decide({ actor, action: "issue:comment", resource });
+    expect(comment).toMatchObject({ allowed: true, reason: "allow_mention_grant" });
+
+    const mutate = await authorizationService(db).decide({ actor, action: "issue:mutate", resource });
+    expect(mutate.allowed).toBe(false);
+  });
+
+  it("denies issue:comment to a non-assignee agent that was never mentioned", async () => {
+    const company = await createCompany(db, "MentionGrantNone");
+    const assignee = await createAgent(db, company.id);
+    const outsider = await createAgent(db, company.id);
+    const issue = await createIssue(db, company.id, { assigneeAgentId: assignee.id });
+    await db.insert(issueComments).values({
+      companyId: company.id,
+      issueId: issue.id,
+      authorAgentId: assignee.id,
+      authorType: "agent",
+      body: "No mentions in this thread.",
+    });
+
+    const decision = await authorizationService(db).decide({
+      actor: { type: "agent", agentId: outsider.id, companyId: company.id, source: "agent_key" },
+      action: "issue:comment",
+      resource: {
+        type: "issue",
+        companyId: company.id,
+        issueId: issue.id,
+        assigneeAgentId: assignee.id,
+      },
+    });
+
+    expect(decision.allowed).toBe(false);
+  });
+
+  it("ignores mentions in deleted comments and bare agent:// substrings for issue:comment", async () => {
+    const company = await createCompany(db, "MentionGrantEdge");
+    const assignee = await createAgent(db, company.id);
+    const mentioned = await createAgent(db, company.id);
+    const issue = await createIssue(db, company.id, { assigneeAgentId: assignee.id });
+    await db.insert(issueComments).values({
+      companyId: company.id,
+      issueId: issue.id,
+      authorAgentId: assignee.id,
+      authorType: "agent",
+      body: `Deleted summons for [@Reviewer](agent://${mentioned.id}).`,
+      deletedAt: new Date(),
+    });
+    await db.insert(issueComments).values({
+      companyId: company.id,
+      issueId: issue.id,
+      authorAgentId: assignee.id,
+      authorType: "agent",
+      body: `Raw reference without a mention link: agent://${mentioned.id}`,
+    });
+
+    const decision = await authorizationService(db).decide({
+      actor: { type: "agent", agentId: mentioned.id, companyId: company.id, source: "agent_key" },
+      action: "issue:comment",
+      resource: {
+        type: "issue",
+        companyId: company.id,
+        issueId: issue.id,
+        assigneeAgentId: assignee.id,
+      },
+    });
+
+    expect(decision.allowed).toBe(false);
+  });
+
+  it("does not grant issue:comment on a different issue than the one carrying the mention", async () => {
+    const company = await createCompany(db, "MentionGrantScope");
+    const assignee = await createAgent(db, company.id);
+    const mentioned = await createAgent(db, company.id);
+    const mentionIssue = await createIssue(db, company.id, { assigneeAgentId: assignee.id });
+    const otherIssue = await createIssue(db, company.id, { assigneeAgentId: assignee.id });
+    await db.insert(issueComments).values({
+      companyId: company.id,
+      issueId: mentionIssue.id,
+      authorAgentId: assignee.id,
+      authorType: "agent",
+      body: `Summons for [@Reviewer](agent://${mentioned.id}).`,
+    });
+
+    const decision = await authorizationService(db).decide({
+      actor: { type: "agent", agentId: mentioned.id, companyId: company.id, source: "agent_key" },
+      action: "issue:comment",
+      resource: {
+        type: "issue",
+        companyId: company.id,
+        issueId: otherIssue.id,
+        assigneeAgentId: assignee.id,
+      },
+    });
+
+    expect(decision.allowed).toBe(false);
   });
 });

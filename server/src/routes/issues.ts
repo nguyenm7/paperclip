@@ -1740,7 +1740,7 @@ export function issueRoutes(
       assigneeUserId: string | null;
       status: string;
     },
-    action: "issue:read" | "issue:mutate",
+    action: "issue:read" | "issue:mutate" | "issue:comment",
   ) {
     return access.decide({
       actor: req.actor,
@@ -1919,6 +1919,37 @@ export function issueRoutes(
       });
     }
     return true;
+  }
+
+  // Comment writes get one extra allow path over general issue mutation: an
+  // agent that was @-mentioned in this issue's thread may reply with a comment
+  // even though the issue is assigned to someone else. A mention-wake summons
+  // the agent into the thread, so it must also be sufficient to answer there.
+  // Everything else (PATCH, checkout-lock semantics, deny shapes) stays on the
+  // standard mutation gate, so the assignee boundary is not weakened.
+  async function assertAgentIssueCommentAllowed(
+    req: Request,
+    res: Response,
+    issue: {
+      id: string;
+      companyId: string;
+      projectId: string | null;
+      parentId: string | null;
+      status: string;
+      assigneeAgentId: string | null;
+      assigneeUserId: string | null;
+    },
+  ) {
+    if (
+      req.actor.type === "agent" &&
+      req.actor.agentId &&
+      issue.assigneeAgentId &&
+      issue.assigneeAgentId !== req.actor.agentId
+    ) {
+      const decision = await decideIssueAccess(req, issue, "issue:comment");
+      if (decision.allowed) return true;
+    }
+    return assertAgentIssueMutationAllowed(req, res, issue);
   }
 
   function isStatusOnlyCheapRecoveryContext(contextSnapshot: unknown) {
@@ -6657,7 +6688,7 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, issue.companyId);
-    if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+    if (!(await assertAgentIssueCommentAllowed(req, res, issue))) return;
     if (!assertStructuredCommentFieldsAllowed(req, res, {
       presentation: req.body.presentation,
       metadata: req.body.metadata,

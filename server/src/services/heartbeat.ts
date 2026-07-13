@@ -197,6 +197,10 @@ import {
 } from "./low-trust-runtime-containment.js";
 import { resolveCoreTrustPreset, type TrustPresetResolution } from "./trust-preset-resolver.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
+import {
+  PROVIDER_CLIENT_ERROR_COMMENT_MARKER,
+  surfaceProviderClientError,
+} from "./provider-client-error-escalation.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -7276,6 +7280,33 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     }
   }
 
+  async function maybeSurfaceProviderClientError(
+    run: typeof heartbeatRuns.$inferSelect,
+    agent: typeof agents.$inferSelect,
+  ) {
+    await surfaceProviderClientError(
+      { run, agent },
+      {
+        findExistingEscalation: (runId, companyId, issueId) =>
+          db
+            .select({ id: issueComments.id })
+            .from(issueComments)
+            .where(
+              and(
+                eq(issueComments.companyId, companyId),
+                eq(issueComments.issueId, issueId),
+                eq(issueComments.createdByRunId, runId),
+                sql`${issueComments.body} like ${`%${PROVIDER_CLIENT_ERROR_COMMENT_MARKER}%`}`,
+              ),
+            )
+            .limit(1)
+            .then((rows) => rows[0] ?? null),
+        addSystemIssueComment: (issueId, body, runId) =>
+          issuesSvc.addComment(issueId, body, { runId }, { authorType: "system" }),
+      },
+    );
+  }
+
   function mergeRunStopMetadataForAgent(
     agent: Pick<typeof agents.$inferSelect, "adapterType" | "adapterConfig">,
     outcome: "succeeded" | "failed" | "cancelled" | "timed_out",
@@ -9331,6 +9362,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         });
         const livenessRun = finalizedRun;
         await refreshContinuationSummaryForRun(livenessRun, agent);
+        if (outcome === "failed") {
+          try {
+            await maybeSurfaceProviderClientError(livenessRun, agent);
+          } catch (err) {
+            await onLog(
+              "stderr",
+              `[paperclip] Failed to post provider client-error escalation: ${err instanceof Error ? err.message : String(err)}\n`,
+            );
+          }
+        }
         const skipRunIssueComment = parseObject(livenessRun.contextSnapshot).skipIssueComment === true;
         if (issueId && outcome === "succeeded" && !skipRunIssueComment) {
           try {
@@ -9549,6 +9590,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         });
         const livenessRun = await classifyAndPersistRunLiveness(failedRun) ?? failedRun;
         await refreshContinuationSummaryForRun(livenessRun, agent);
+        try {
+          await maybeSurfaceProviderClientError(livenessRun, agent);
+        } catch (err) {
+          logger.warn(
+            { err, runId: livenessRun.id },
+            "failed to post provider client-error escalation",
+          );
+        }
         if (!isWorkspaceValidationFailedRun(livenessRun)) {
           await finalizeIssueCommentPolicy(livenessRun, agent);
         }

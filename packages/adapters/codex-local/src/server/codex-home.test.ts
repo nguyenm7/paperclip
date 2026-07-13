@@ -193,4 +193,42 @@ describe("codex managed home", () => {
     }
   });
 
+  it("refreshes a managed models cache when the shared cache is newer", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-codex-cache-"));
+    try {
+      const sharedCodexHome = path.join(root, "shared-codex-home");
+      const paperclipHome = path.join(root, "paperclip-home");
+      const managedCodexHome = path.join(
+        paperclipHome,
+        "instances",
+        "default",
+        "companies",
+        "company-1",
+        "codex-home",
+      );
+      const sharedCache = path.join(sharedCodexHome, "models_cache.json");
+      const managedCache = path.join(managedCodexHome, "models_cache.json");
+
+      await fs.mkdir(sharedCodexHome, { recursive: true });
+      await fs.mkdir(managedCodexHome, { recursive: true });
+      await fs.writeFile(managedCache, '{"fetched_at":"stale"}', "utf8");
+      await fs.utimes(managedCache, new Date(1_000), new Date(1_000));
+      await fs.writeFile(sharedCache, '{"fetched_at":"fresh"}', "utf8");
+      await fs.utimes(sharedCache, new Date(2_000), new Date(2_000));
+
+      await prepareManagedCodexHome(
+        {
+          CODEX_HOME: sharedCodexHome,
+          PAPERCLIP_HOME: paperclipHome,
+          PAPERCLIP_INSTANCE_ID: "default",
+        },
+        async () => {},
+        "company-1",
+      );
+
+      expect(await fs.readFile(managedCache, "utf8")).toBe('{"fetched_at":"fresh"}');
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });

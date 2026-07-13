@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import type { AdapterExecutionContext } from "@paperclipai/adapter-utils";
 import { resolvePaperclipInstanceRootForAdapter } from "@paperclipai/adapter-utils/server-utils";
 
 const TRUTHY_ENV_RE = /^(1|true|yes|on)$/i;
 const COPIED_SHARED_FILES = ["config.json", "config.toml", "instructions.md"] as const;
+const REFRESHED_SHARED_FILES = ["models_cache.json"] as const;
 const SYMLINKED_SHARED_FILES = ["auth.json"] as const;
 
 function nonEmpty(value: string | undefined): string | null {
@@ -103,6 +105,23 @@ async function ensureCopiedFile(target: string, source: string): Promise<void> {
   await fs.copyFile(source, target);
 }
 
+async function refreshCopiedFile(target: string, source: string): Promise<void> {
+  const [sourceStat, targetStat] = await Promise.all([
+    fs.stat(source),
+    fs.stat(target).catch(() => null),
+  ]);
+  if (targetStat && targetStat.mtimeMs >= sourceStat.mtimeMs) return;
+
+  await ensureParentDir(target);
+  const temporary = `${target}.paperclip-${process.pid}-${randomUUID()}.tmp`;
+  try {
+    await fs.copyFile(source, temporary);
+    await fs.rename(temporary, target);
+  } finally {
+    await fs.rm(temporary, { force: true }).catch(() => {});
+  }
+}
+
 /**
  * Writes an `auth.json` containing only `OPENAI_API_KEY` so the codex CLI can
  * authenticate via API key. Overwrites any existing file or symlink at that
@@ -153,6 +172,15 @@ export async function prepareManagedCodexHome(
       const source = path.join(sourceHome, name);
       if (!(await pathExists(source))) continue;
       await ensureCopiedFile(path.join(targetHome, name), source);
+    }
+
+    // Unlike operator-owned config, the model catalog is an advisory cache.
+    // Refresh it when the shared Codex CLI has fetched a newer copy so
+    // pre-flight capability checks do not age out permanently in managed homes.
+    for (const name of REFRESHED_SHARED_FILES) {
+      const source = path.join(sourceHome, name);
+      if (!(await pathExists(source))) continue;
+      await refreshCopiedFile(path.join(targetHome, name), source);
     }
 
     await onLog(

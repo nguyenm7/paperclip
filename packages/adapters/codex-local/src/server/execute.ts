@@ -48,6 +48,7 @@ import { pathExists, prepareManagedCodexHome, resolveManagedCodexHomeDir, resolv
 import { prepareCodexRuntimeConfig } from "./runtime-config.js";
 import { resolveCodexDesiredSkillNames } from "./skills.js";
 import { buildCodexExecArgs } from "./codex-args.js";
+import { validateCodexReasoningEffort } from "./reasoning-effort.js";
 import { SANDBOX_INSTALL_COMMAND } from "../index.js";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
@@ -366,6 +367,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     for (const note of preparedRuntimeConfig.notes) {
       await onLog("stdout", `[paperclip] ${note}\n`);
     }
+    await validateCodexReasoningEffort({
+      config,
+      codexHome: effectiveCodexHome,
+    });
     // Inject skills into the same CODEX_HOME that Codex will actually run with
     // (managed home in the default case, or an explicit override from adapter config).
     const codexSkillsDir = resolveCodexSkillsDir(effectiveCodexHome);

@@ -741,8 +741,11 @@ export function buildHostServices(
     requestedByAgentId: row.requestedByAgentId ?? null,
     requestedByUserId: row.requestedByUserId ?? null,
     decidedByUserId: row.decidedByUserId ?? null,
+    decidedByActorSource: row.decidedByActorSource ?? null,
     decisionNote: row.decisionNote ?? null,
     decidedAt: row.decidedAt ? new Date(row.decidedAt).toISOString() : null,
+    withdrawnByAgentId: row.withdrawnByAgentId ?? null,
+    withdrawnAt: row.withdrawnAt ? new Date(row.withdrawnAt).toISOString() : null,
     createdAt: new Date(row.createdAt).toISOString(),
     updatedAt: new Date(row.updatedAt).toISOString(),
   });
@@ -2246,8 +2249,8 @@ export function buildHostServices(
         let applied;
         try {
           const decided = params.action === "approve"
-            ? await approvalsSvc.approve(params.approvalId, actorUserId, params.decisionNote ?? null)
-            : await approvalsSvc.reject(params.approvalId, actorUserId, params.decisionNote ?? null);
+            ? await approvalsSvc.approve(params.approvalId, actorUserId, params.decisionNote ?? null, "plugin_gateway")
+            : await approvalsSvc.reject(params.approvalId, actorUserId, params.decisionNote ?? null, "plugin_gateway");
           approval = decided.approval;
           applied = decided.applied;
         } catch (err) {

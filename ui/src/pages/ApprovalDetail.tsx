@@ -16,6 +16,14 @@ import { CheckCircle2, ChevronRight, Sparkles } from "lucide-react";
 import type { ApprovalComment } from "@paperclipai/shared";
 import { MarkdownBody } from "../components/MarkdownBody";
 
+const decisionSourceLabel: Record<string, string> = {
+  session: "authenticated session",
+  board_key: "board API key",
+  cloud_tenant: "cloud tenant identity",
+  local_implicit_browser: "local board UI (unauthenticated instance)",
+  plugin_gateway: "chat gateway (verified member)",
+};
+
 export function ApprovalDetail() {
   const { approvalId } = useParams<{ approvalId: string }>();
   const { selectedCompanyId, setSelectedCompanyId } = useCompany();
@@ -235,6 +243,24 @@ export function ApprovalDetail() {
           )}
           {approval.decisionNote && (
             <p className="text-xs text-muted-foreground">Decision note: {approval.decisionNote}</p>
+          )}
+          {approval.decidedAt && (
+            <p className="text-xs text-muted-foreground">
+              Decided by {approval.decidedByUserId ?? "unknown"} ·{" "}
+              {approval.decidedByActorSource
+                ? `via ${decisionSourceLabel[approval.decidedByActorSource] ?? approval.decidedByActorSource}`
+                : "provenance unverified — recorded before decision authentication"}
+            </p>
+          )}
+          {approval.status === "withdrawn" && (
+            <p className="text-xs text-muted-foreground">
+              Withdrawn by requester
+              {approval.withdrawnByAgentId
+                ? ` (${agentNameById.get(approval.withdrawnByAgentId) ?? approval.withdrawnByAgentId.slice(0, 8)})`
+                : ""}
+              {approval.withdrawnAt ? ` · ${new Date(approval.withdrawnAt).toLocaleString()}` : ""} — not a
+              board decision
+            </p>
           )}
         </div>
         {error && <p className="text-sm text-destructive">{error}</p>}

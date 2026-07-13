@@ -34,3 +34,9 @@ export const addApprovalCommentSchema = z.object({
 });
 
 export type AddApprovalComment = z.infer<typeof addApprovalCommentSchema>;
+
+export const withdrawApprovalSchema = z.object({
+  reason: multilineTextSchema.optional().nullable(),
+});
+
+export type WithdrawApproval = z.infer<typeof withdrawApprovalSchema>;

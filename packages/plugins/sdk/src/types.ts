@@ -1509,8 +1509,18 @@ export interface PluginApprovalRecord {
   requestedByAgentId: string | null;
   requestedByUserId: string | null;
   decidedByUserId: string | null;
+  /**
+   * Authentication source of the decision (`session`, `board_key`,
+   * `cloud_tenant`, `local_implicit_browser`, `plugin_gateway`). NULL on rows
+   * decided before decision provenance existed — treat those as unverified,
+   * not as confirmed board decisions.
+   */
+  decidedByActorSource: string | null;
   decisionNote: string | null;
   decidedAt: string | null;
+  /** Set when the requesting agent retracted its own card (status `withdrawn`). */
+  withdrawnByAgentId: string | null;
+  withdrawnAt: string | null;
   createdAt: string;
   updatedAt: string;
 }

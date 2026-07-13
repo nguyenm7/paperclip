@@ -33,7 +33,10 @@ function trustedOriginsForRequest(req: Request) {
   return origins;
 }
 
-function isTrustedBoardMutationRequest(req: Request) {
+// Also consumed by the approval decision routes: in local_trusted mode the
+// implicit board actor carries no identity, so a trusted browser origin is
+// the only signal separating a human clicking the UI from a bare API call.
+export function isTrustedBoardMutationRequest(req: Request) {
   const allowedOrigins = trustedOriginsForRequest(req);
   const origin = parseOrigin(req.header("origin"));
   if (origin && allowedOrigins.has(origin)) return true;

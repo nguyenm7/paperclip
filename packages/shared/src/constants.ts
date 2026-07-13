@@ -489,8 +489,29 @@ export const APPROVAL_STATUSES = [
   "approved",
   "rejected",
   "cancelled",
+  // Requester-authored retraction. Not a board decision: withdrawn approvals
+  // never carry decidedByUserId/decidedAt and must never be counted as
+  // decided-by-board.
+  "withdrawn",
 ] as const;
 export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
+
+// How an approval decision was authenticated. Persisted alongside
+// decidedByUserId so the ledger can distinguish an authenticated human from
+// the ambient local-trusted admin. NULL on rows decided before this field
+// existed — those decisions have unverifiable provenance.
+export const APPROVAL_DECISION_SOURCES = [
+  "session",
+  "board_key",
+  "cloud_tenant",
+  // local_trusted mode: no authenticated identity exists; the request was at
+  // least browser-shaped (trusted Origin/Referer), not a bare API call.
+  "local_implicit_browser",
+  // Decision relayed by a chat gateway plugin on behalf of a verified active
+  // human company member (PluginApprovalsClient.decide).
+  "plugin_gateway",
+] as const;
+export type ApprovalDecisionSource = (typeof APPROVAL_DECISION_SOURCES)[number];
 
 export const SECRET_PROVIDERS = [
   "local_encrypted",

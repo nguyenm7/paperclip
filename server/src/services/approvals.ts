@@ -1,7 +1,8 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { approvalComments, approvals } from "@paperclipai/db";
-import { notFound, unprocessable } from "../errors.js";
+import type { ApprovalDecisionSource } from "@paperclipai/shared";
+import { forbidden, notFound, unprocessable } from "../errors.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { agentService } from "./agents.js";
 import { budgetService } from "./budgets.js";
@@ -39,6 +40,7 @@ export function approvalService(db: Db) {
     targetStatus: "approved" | "rejected",
     decidedByUserId: string,
     decisionNote: string | null | undefined,
+    decidedByActorSource: ApprovalDecisionSource,
   ): Promise<ResolutionResult> {
     const existing = await getExistingApproval(id);
     if (!canResolveStatuses.has(existing.status)) {
@@ -56,6 +58,7 @@ export function approvalService(db: Db) {
       .set({
         status: targetStatus,
         decidedByUserId,
+        decidedByActorSource,
         decisionNote: decisionNote ?? null,
         decidedAt: now,
         updatedAt: now,
@@ -99,12 +102,18 @@ export function approvalService(db: Db) {
         .returning()
         .then((rows) => rows[0]),
 
-    approve: async (id: string, decidedByUserId: string, decisionNote?: string | null) => {
+    approve: async (
+      id: string,
+      decidedByUserId: string,
+      decisionNote: string | null | undefined,
+      decidedByActorSource: ApprovalDecisionSource,
+    ) => {
       const { approval: updated, applied } = await resolveApproval(
         id,
         "approved",
         decidedByUserId,
         decisionNote,
+        decidedByActorSource,
       );
 
       let hireApprovedAgentId: string | null = null;
@@ -168,12 +177,18 @@ export function approvalService(db: Db) {
       return { approval: updated, applied };
     },
 
-    reject: async (id: string, decidedByUserId: string, decisionNote?: string | null) => {
+    reject: async (
+      id: string,
+      decidedByUserId: string,
+      decisionNote: string | null | undefined,
+      decidedByActorSource: ApprovalDecisionSource,
+    ) => {
       const { approval: updated, applied } = await resolveApproval(
         id,
         "rejected",
         decidedByUserId,
         decisionNote,
+        decidedByActorSource,
       );
 
       if (applied && updated.type === "hire_agent") {
@@ -187,7 +202,61 @@ export function approvalService(db: Db) {
       return { approval: updated, applied };
     },
 
-    requestRevision: async (id: string, decidedByUserId: string, decisionNote?: string | null) => {
+    // Requester-authored retraction of an agent's own card. Deliberately NOT a
+    // decision: decided_by_* stays NULL so a withdrawn card can never be
+    // counted or displayed as decided-by-board (LOOA-231).
+    withdraw: async (id: string, withdrawnByAgentId: string): Promise<ResolutionResult> => {
+      const existing = await getExistingApproval(id);
+      if (existing.requestedByAgentId !== withdrawnByAgentId) {
+        throw forbidden("Agents may only withdraw approvals they created");
+      }
+      if (!canResolveStatuses.has(existing.status)) {
+        if (existing.status === "withdrawn") {
+          return { approval: existing, applied: false };
+        }
+        throw unprocessable("Only pending or revision requested approvals can be withdrawn");
+      }
+
+      const now = new Date();
+      const updated = await db
+        .update(approvals)
+        .set({
+          status: "withdrawn",
+          withdrawnByAgentId,
+          withdrawnAt: now,
+          updatedAt: now,
+        })
+        .where(and(eq(approvals.id, id), inArray(approvals.status, resolvableStatuses)))
+        .returning()
+        .then((rows) => rows[0] ?? null);
+
+      if (!updated) {
+        const latest = await getExistingApproval(id);
+        if (latest.status === "withdrawn") {
+          return { approval: latest, applied: false };
+        }
+        throw unprocessable("Only pending or revision requested approvals can be withdrawn");
+      }
+
+      // A withdrawn hire card must release its pending agent the same way a
+      // rejection does, or the placeholder agent would linger forever.
+      if (updated.type === "hire_agent") {
+        const payload = updated.payload as Record<string, unknown>;
+        const payloadAgentId = typeof payload.agentId === "string" ? payload.agentId : null;
+        if (payloadAgentId) {
+          await agentsSvc.terminate(payloadAgentId);
+        }
+      }
+
+      return { approval: updated, applied: true };
+    },
+
+    requestRevision: async (
+      id: string,
+      decidedByUserId: string,
+      decisionNote: string | null | undefined,
+      decidedByActorSource: ApprovalDecisionSource,
+    ) => {
       const existing = await getExistingApproval(id);
       if (existing.status !== "pending") {
         throw unprocessable("Only pending approvals can request revision");
@@ -199,6 +268,7 @@ export function approvalService(db: Db) {
         .set({
           status: "revision_requested",
           decidedByUserId,
+          decidedByActorSource,
           decisionNote: decisionNote ?? null,
           decidedAt: now,
           updatedAt: now,
@@ -222,6 +292,7 @@ export function approvalService(db: Db) {
           payload: payload ?? existing.payload,
           decisionNote: null,
           decidedByUserId: null,
+          decidedByActorSource: null,
           decidedAt: null,
           updatedAt: now,
         })

@@ -71,7 +71,7 @@ describe("approvalService resolution idempotency", () => {
     );
 
     const svc = approvalService(dbStub.db as any);
-    const result = await svc.approve("approval-1", "board", "ship it");
+    const result = await svc.approve("approval-1", "board", "ship it", "session");
 
     expect(result.applied).toBe(false);
     expect(result.approval.status).toBe("approved");
@@ -86,7 +86,7 @@ describe("approvalService resolution idempotency", () => {
     );
 
     const svc = approvalService(dbStub.db as any);
-    const result = await svc.reject("approval-1", "board", "not now");
+    const result = await svc.reject("approval-1", "board", "not now", "session");
 
     expect(result.applied).toBe(false);
     expect(result.approval.status).toBe("rejected");
@@ -98,10 +98,62 @@ describe("approvalService resolution idempotency", () => {
     const dbStub = createDbStub([[createApproval("pending")]], [approved]);
 
     const svc = approvalService(dbStub.db as any);
-    const result = await svc.approve("approval-1", "board", "ship it");
+    const result = await svc.approve("approval-1", "board", "ship it", "session");
 
     expect(result.applied).toBe(true);
     expect(mockAgentService.activatePendingApproval).toHaveBeenCalledWith("agent-1");
     expect(mockNotifyHireApproved).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("approvalService withdraw (LOOA-231)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAgentService.terminate.mockResolvedValue(undefined);
+  });
+
+  it("refuses to withdraw a card the agent did not create", async () => {
+    const dbStub = createDbStub([[createApproval("pending")]], []);
+
+    const svc = approvalService(dbStub.db as any);
+    await expect(svc.withdraw("approval-1", "someone-else")).rejects.toThrow(
+      "Agents may only withdraw approvals they created",
+    );
+  });
+
+  it("withdraws the requester's own pending card without writing decision fields", async () => {
+    const withdrawn = {
+      ...createApproval("withdrawn"),
+      withdrawnByAgentId: "requester-1",
+    };
+    const dbStub = createDbStub([[createApproval("pending")]], [withdrawn]);
+
+    const svc = approvalService(dbStub.db as any);
+    const result = await svc.withdraw("approval-1", "requester-1");
+
+    expect(result.applied).toBe(true);
+    expect(result.approval.status).toBe("withdrawn");
+    // hire_agent card: the pending placeholder agent is released like a reject
+    expect(mockAgentService.terminate).toHaveBeenCalledWith("agent-1");
+  });
+
+  it("converges as a no-op when the card is already withdrawn", async () => {
+    const dbStub = createDbStub([[createApproval("withdrawn")]], []);
+
+    const svc = approvalService(dbStub.db as any);
+    const result = await svc.withdraw("approval-1", "requester-1");
+
+    expect(result.applied).toBe(false);
+    expect(result.approval.status).toBe("withdrawn");
+    expect(mockAgentService.terminate).not.toHaveBeenCalled();
+  });
+
+  it("refuses to withdraw a decided card", async () => {
+    const dbStub = createDbStub([[createApproval("approved")]], []);
+
+    const svc = approvalService(dbStub.db as any);
+    await expect(svc.withdraw("approval-1", "requester-1")).rejects.toThrow(
+      "Only pending or revision requested approvals can be withdrawn",
+    );
   });
 });

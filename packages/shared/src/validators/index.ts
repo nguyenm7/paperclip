@@ -406,11 +406,13 @@ export {
   requestApprovalRevisionSchema,
   resubmitApprovalSchema,
   addApprovalCommentSchema,
+  withdrawApprovalSchema,
   type CreateApproval,
   type ResolveApproval,
   type RequestApprovalRevision,
   type ResubmitApproval,
   type AddApprovalComment,
+  type WithdrawApproval,
 } from "./approval.js";
 
 export {

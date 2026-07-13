@@ -1,4 +1,4 @@
-import type { ApprovalStatus, ApprovalType } from "../constants.js";
+import type { ApprovalDecisionSource, ApprovalStatus, ApprovalType } from "../constants.js";
 
 export interface Approval {
   id: string;
@@ -10,7 +10,15 @@ export interface Approval {
   payload: Record<string, unknown>;
   decisionNote: string | null;
   decidedByUserId: string | null;
+  /**
+   * NULL on rows decided before decision authentication existed — their
+   * provenance is unverifiable and they must not be presented as confirmed
+   * board decisions.
+   */
+  decidedByActorSource: ApprovalDecisionSource | null;
   decidedAt: Date | null;
+  withdrawnByAgentId: string | null;
+  withdrawnAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

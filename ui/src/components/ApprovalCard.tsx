@@ -1,4 +1,4 @@
-import { CheckCircle2, XCircle, Clock } from "lucide-react";
+import { CheckCircle2, XCircle, Clock, Undo2 } from "lucide-react";
 import { Link } from "@/lib/router";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -19,6 +19,7 @@ function statusIcon(status: string) {
   if (status === "rejected") return <XCircle className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />;
   if (status === "revision_requested") return <Clock className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />;
   if (status === "pending") return <Clock className="h-3.5 w-3.5 text-yellow-600 dark:text-yellow-400" />;
+  if (status === "withdrawn") return <Undo2 className="h-3.5 w-3.5 text-muted-foreground" />;
   return null;
 }
 

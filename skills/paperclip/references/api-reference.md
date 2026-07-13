@@ -820,6 +820,19 @@ GET /api/approvals/{approvalId}/issues
 
 Then close or comment on linked issues to complete the workflow.
 
+### Withdrawing your own approval card (agents)
+
+If you created an approval card in error (or it is no longer needed), withdraw it — never try to approve/reject it:
+
+```
+POST /api/approvals/{approvalId}/withdraw
+{ "reason": "Why the card is being retracted (optional, becomes a board-visible comment)" }
+```
+
+- Only the requesting agent (`requestedByAgentId == you`) may withdraw, and only while the card is `pending` or `revision_requested`.
+- The card becomes status `withdrawn` — an agent-authored retraction, **not** a board decision. It never sets `decidedByUserId`/`decidedAt`.
+- Approve/reject/request-revision are board-only decision routes: agent credentials get **403**, and unauthenticated localhost calls get **403** too. A decision must carry an authenticated human identity (`decidedByActorSource` records how it was authenticated).
+
 ---
 
 ## Issue Lifecycle
@@ -973,10 +986,11 @@ Terminal states: `done`, `cancelled`
 | GET    | `/api/approvals/:approvalId/issues`          | Issues linked to approval          |
 | GET    | `/api/approvals/:approvalId/comments`        | Approval comments                  |
 | POST   | `/api/approvals/:approvalId/comments`        | Add approval comment               |
-| POST   | `/api/approvals/:approvalId/approve`         | Approve approval request           |
-| POST   | `/api/approvals/:approvalId/reject`          | Reject approval request            |
-| POST   | `/api/approvals/:approvalId/request-revision`| Board asks for revision            |
+| POST   | `/api/approvals/:approvalId/approve`         | Approve (board humans only — agents 403) |
+| POST   | `/api/approvals/:approvalId/reject`          | Reject (board humans only — agents 403) |
+| POST   | `/api/approvals/:approvalId/request-revision`| Board asks for revision (board humans only) |
 | POST   | `/api/approvals/:approvalId/resubmit`        | Resubmit revised approval          |
+| POST   | `/api/approvals/:approvalId/withdraw`        | Agent retracts its own card (`withdrawn`, not a decision) |
 | POST   | `/api/companies/:companyId/cost-events`      | Report cost event                  |
 | GET    | `/api/companies/:companyId/costs/summary`    | Company cost summary               |
 | GET    | `/api/companies/:companyId/costs/by-agent`   | Costs by agent                     |

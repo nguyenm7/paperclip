@@ -1,5 +1,7 @@
 import type { Request } from "express";
+import type { ApprovalDecisionSource } from "@paperclipai/shared";
 import { forbidden, unauthorized } from "../errors.js";
+import { isTrustedBoardMutationRequest } from "../middleware/board-mutation-guard.js";
 
 export function assertAuthenticated(req: Request) {
   if (req.actor.type === "none") {
@@ -10,6 +12,48 @@ export function assertAuthenticated(req: Request) {
 export function assertBoard(req: Request) {
   if (req.actor.type !== "board") {
     throw forbidden("Board access required");
+  }
+}
+
+/**
+ * Gate for board decision writes (approval approve/reject/request-revision).
+ *
+ * A decision row asserts "a human decided this", so it demands more than
+ * assertBoard: agents are rejected outright (withdraw is their primitive for
+ * retracting their own cards), and the local_trusted implicit admin — which
+ * any process with localhost access can invoke via bare curl, making a human
+ * and an agent byte-identical in the ledger (LOOA-231) — is only accepted
+ * when the request is browser-shaped (trusted Origin/Referer, which the
+ * board UI always sends and a bare API call does not).
+ *
+ * Returns the provenance label persisted with the decision. local_trusted
+ * mode has no authenticated identity, so `local_implicit_browser` is a
+ * weaker claim than `session`/`board_key` — readers must treat it as
+ * "browser-shaped", not "cryptographically human".
+ */
+export function assertApprovalDecisionActor(req: Request): ApprovalDecisionSource {
+  if (req.actor.type === "agent") {
+    throw forbidden(
+      "Agents cannot decide board approvals. To retract a card you created, use POST /api/approvals/{id}/withdraw; otherwise ask a board member to decide.",
+    );
+  }
+  assertBoard(req);
+  switch (req.actor.source) {
+    case "session":
+      return "session";
+    case "board_key":
+      return "board_key";
+    case "cloud_tenant":
+      return "cloud_tenant";
+    case "local_implicit":
+      if (isTrustedBoardMutationRequest(req)) {
+        return "local_implicit_browser";
+      }
+      throw forbidden(
+        "Board decisions require an authenticated identity; the unauthenticated localhost route cannot decide approvals. Decide from the board UI or with a board API key. Agents can withdraw their own cards via POST /api/approvals/{id}/withdraw.",
+      );
+    default:
+      throw forbidden("Board decisions require an authenticated board identity");
   }
 }
 

@@ -34,6 +34,12 @@ function redactApprovalPayload<T extends { payload: Record<string, unknown> }>(a
   };
 }
 
+// Duck-typed on status so it also matches HttpError instances from a
+// different module registry copy (as under vitest module resets).
+function isForbiddenError(err: unknown): boolean {
+  return err instanceof Error && (err as { status?: unknown }).status === 403;
+}
+
 export function approvalRoutes(
   db: Db,
   options: { pluginWorkerManager?: PluginWorkerManager } = {},
@@ -55,6 +61,70 @@ export function approvalRoutes(
     }
     assertCompanyAccess(req, approval.companyId);
     return approval;
+  }
+
+  // LOOA-259: a denied decide/withdraw attempt is the observable precursor of
+  // exactly the forgery the LOOA-231 boundary exists to prevent, so the denial
+  // must reach the activity ledger instead of vanishing with the 403.
+  // Failure-closed both ways: the 403 never depends on the log write
+  // succeeding, and the log write never swallows the 403.
+  async function logDeniedApprovalAttempt(
+    req: Request,
+    approvalId: string,
+    action: "approval.decision_denied" | "approval.withdraw_denied",
+    route: "approve" | "reject" | "request-revision" | "withdraw",
+  ) {
+    try {
+      const approval = await svc.getById(approvalId);
+      // The ledger is company-scoped; when the target approval does not
+      // exist, an agent actor's own company still gives the row a home.
+      const companyId =
+        approval?.companyId ?? (req.actor.type === "agent" ? req.actor.companyId ?? null : null);
+      if (!companyId) {
+        logger.warn(
+          { approvalId, route, actorType: req.actor.type, actorSource: req.actor.source },
+          "denied approval attempt had no company to log against",
+        );
+        return;
+      }
+      const agentId = req.actor.type === "agent" ? req.actor.agentId ?? null : null;
+      const actorId = agentId ?? req.actor.userId ?? "unauthenticated";
+      await logActivity(db, {
+        companyId,
+        actorType: req.actor.type === "agent" ? "agent" : "user",
+        actorId,
+        agentId,
+        runId: req.actor.runId ?? null,
+        action,
+        entityType: "approval",
+        entityId: approvalId,
+        details: {
+          route,
+          actorType: req.actor.type,
+          actorId,
+          actorSource: req.actor.source ?? null,
+          hadOrigin: Boolean(req.header("origin")),
+          hadReferer: Boolean(req.header("referer")),
+        },
+      });
+    } catch (err) {
+      logger.warn({ err, approvalId, route }, "failed to audit-log denied approval attempt");
+    }
+  }
+
+  async function assertDecisionActorLogged(
+    req: Request,
+    approvalId: string,
+    route: "approve" | "reject" | "request-revision",
+  ) {
+    try {
+      return assertApprovalDecisionActor(req);
+    } catch (err) {
+      if (isForbiddenError(err)) {
+        await logDeniedApprovalAttempt(req, approvalId, "approval.decision_denied", route);
+      }
+      throw err;
+    }
   }
 
   async function assertApprovalAccessAllowed(req: Request, res: any, companyId: string) {
@@ -157,8 +227,8 @@ export function approvalRoutes(
   });
 
   router.post("/approvals/:id/approve", validate(resolveApprovalSchema), async (req, res) => {
-    const decisionSource = assertApprovalDecisionActor(req);
     const id = req.params.id as string;
+    const decisionSource = await assertDecisionActorLogged(req, id, "approve");
     if (!(await requireApprovalAccess(req, id))) {
       res.status(404).json({ error: "Approval not found" });
       return;
@@ -258,8 +328,8 @@ export function approvalRoutes(
   });
 
   router.post("/approvals/:id/reject", validate(resolveApprovalSchema), async (req, res) => {
-    const decisionSource = assertApprovalDecisionActor(req);
     const id = req.params.id as string;
+    const decisionSource = await assertDecisionActorLogged(req, id, "reject");
     if (!(await requireApprovalAccess(req, id))) {
       res.status(404).json({ error: "Approval not found" });
       return;
@@ -304,7 +374,18 @@ export function approvalRoutes(
       return;
     }
     const agentId = req.actor.agentId;
-    const { approval, applied } = await svc.withdraw(id, agentId);
+    let result: Awaited<ReturnType<typeof svc.withdraw>>;
+    try {
+      result = await svc.withdraw(id, agentId);
+    } catch (err) {
+      // Ownership 403 only — status-gate 422s are workflow noise, not a
+      // takeover attempt on someone else's card.
+      if (isForbiddenError(err)) {
+        await logDeniedApprovalAttempt(req, id, "approval.withdraw_denied", "withdraw");
+      }
+      throw err;
+    }
+    const { approval, applied } = result;
 
     if (applied) {
       const reason = typeof req.body.reason === "string" ? req.body.reason.trim() : "";
@@ -331,8 +412,8 @@ export function approvalRoutes(
     "/approvals/:id/request-revision",
     validate(requestApprovalRevisionSchema),
     async (req, res) => {
-      const decisionSource = assertApprovalDecisionActor(req);
       const id = req.params.id as string;
+      const decisionSource = await assertDecisionActorLogged(req, id, "request-revision");
       if (!(await requireApprovalAccess(req, id))) {
         res.status(404).json({ error: "Approval not found" });
         return;

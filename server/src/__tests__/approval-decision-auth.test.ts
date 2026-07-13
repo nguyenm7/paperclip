@@ -284,3 +284,192 @@ describe("approval decision authentication (LOOA-231)", () => {
     expect(mockApprovalService.withdraw).not.toHaveBeenCalled();
   });
 });
+
+// LOOA-259: a rejected decide attempt is the observable precursor of the
+// forgery LOOA-231 prevents, so every 403 on the decision boundary must leave
+// an activity-ledger row — and the 403 must never depend on that write.
+
+function denialRows(action: string) {
+  return mockLogActivity.mock.calls.filter(([, input]) => input.action === action);
+}
+
+describe("denied decision attempts are audit-logged (LOOA-259)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.doUnmock("../services/index.js");
+    vi.doUnmock("../routes/approvals.js");
+    vi.doUnmock("../routes/authz.js");
+    vi.doUnmock("../middleware/index.js");
+    registerModuleMocks();
+    vi.clearAllMocks();
+    for (const fn of Object.values(mockApprovalService)) fn.mockReset();
+    mockLogActivity.mockReset();
+    mockLogActivity.mockResolvedValue(undefined);
+    mockApprovalService.getById.mockResolvedValue(pendingApproval);
+  });
+
+  it("logs approval.decision_denied when an agent JWT hits approve", async () => {
+    const res = await request(await createApp(agentActor))
+      .post("/api/approvals/approval-1/approve")
+      .send({});
+
+    expect(res.status).toBe(403);
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        companyId: "company-1",
+        actorType: "agent",
+        actorId: "agent-1",
+        agentId: "agent-1",
+        action: "approval.decision_denied",
+        entityType: "approval",
+        entityId: "approval-1",
+        details: expect.objectContaining({
+          route: "approve",
+          actorType: "agent",
+          actorId: "agent-1",
+          actorSource: "agent_jwt",
+          hadOrigin: false,
+          hadReferer: false,
+        }),
+      }),
+    );
+  });
+
+  it("labels the route on denied reject and request-revision attempts", async () => {
+    await request(await createApp(agentActor))
+      .post("/api/approvals/approval-1/reject")
+      .send({});
+    await request(await createApp(agentActor))
+      .post("/api/approvals/approval-1/request-revision")
+      .send({ decisionNote: "changes" });
+
+    const routes = denialRows("approval.decision_denied").map(([, input]) => input.details.route);
+    expect(routes).toEqual(["reject", "request-revision"]);
+  });
+
+  it("logs approval.decision_denied for bare unauthenticated localhost decide attempts", async () => {
+    const res = await request(await createApp(localImplicitActor))
+      .post("/api/approvals/approval-1/approve")
+      .send({});
+
+    expect(res.status).toBe(403);
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        companyId: "company-1",
+        actorType: "user",
+        actorId: "local-board",
+        agentId: null,
+        action: "approval.decision_denied",
+        details: expect.objectContaining({
+          route: "approve",
+          actorType: "board",
+          actorSource: "local_implicit",
+          hadOrigin: false,
+          hadReferer: false,
+        }),
+      }),
+    );
+  });
+
+  it("records that an untrusted Origin header was present on the denied attempt", async () => {
+    const res = await request(await createApp(localImplicitActor))
+      .post("/api/approvals/approval-1/reject")
+      .set("Origin", "http://evil.example")
+      .send({});
+
+    expect(res.status).toBe(403);
+    const [[, row]] = denialRows("approval.decision_denied");
+    expect(row.details.hadOrigin).toBe(true);
+    expect(row.details.hadReferer).toBe(false);
+  });
+
+  it("attributes a denial against a nonexistent approval to the agent's own company", async () => {
+    mockApprovalService.getById.mockResolvedValue(null);
+
+    const res = await request(await createApp(agentActor))
+      .post("/api/approvals/approval-missing/approve")
+      .send({});
+
+    expect(res.status).toBe(403);
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        companyId: "company-1",
+        action: "approval.decision_denied",
+        entityId: "approval-missing",
+      }),
+    );
+  });
+
+  it("writes no denial row for a successful decide", async () => {
+    mockApprovalService.approve.mockResolvedValue({
+      approval: { ...pendingApproval, status: "approved" },
+      applied: true,
+    });
+    mockIssueApprovalService.listIssuesForApproval.mockResolvedValue([]);
+    mockHeartbeatService.wakeup.mockResolvedValue({ id: "wake-1" });
+
+    const res = await request(await createApp(sessionActor))
+      .post("/api/approvals/approval-1/approve")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(denialRows("approval.decision_denied")).toHaveLength(0);
+    expect(denialRows("approval.withdraw_denied")).toHaveLength(0);
+  });
+
+  it("still returns 403 when the denial log write itself fails (failure-closed)", async () => {
+    mockLogActivity.mockRejectedValue(new Error("activity log unavailable"));
+
+    const res = await request(await createApp(agentActor))
+      .post("/api/approvals/approval-1/approve")
+      .send({});
+
+    expect(res.status).toBe(403);
+    expect(mockApprovalService.approve).not.toHaveBeenCalled();
+  });
+
+  it("logs approval.withdraw_denied when an agent tries to withdraw someone else's card", async () => {
+    mockApprovalService.getById.mockResolvedValue({
+      ...pendingApproval,
+      requestedByAgentId: "agent-2",
+    });
+    const { forbidden } = await import("../errors.js");
+    mockApprovalService.withdraw.mockRejectedValue(
+      forbidden("Agents may only withdraw approvals they created"),
+    );
+
+    const res = await request(await createApp(agentActor))
+      .post("/api/approvals/approval-1/withdraw")
+      .send({});
+
+    expect(res.status).toBe(403);
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        companyId: "company-1",
+        actorType: "agent",
+        actorId: "agent-1",
+        action: "approval.withdraw_denied",
+        entityId: "approval-1",
+        details: expect.objectContaining({ route: "withdraw" }),
+      }),
+    );
+  });
+
+  it("writes no withdraw_denied row for the status-gate 422", async () => {
+    const { unprocessable } = await import("../errors.js");
+    mockApprovalService.withdraw.mockRejectedValue(
+      unprocessable("Only pending or revision requested approvals can be withdrawn"),
+    );
+
+    const res = await request(await createApp(agentActor))
+      .post("/api/approvals/approval-1/withdraw")
+      .send({});
+
+    expect(res.status).toBe(422);
+    expect(denialRows("approval.withdraw_denied")).toHaveLength(0);
+  });
+});

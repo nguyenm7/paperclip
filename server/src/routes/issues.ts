@@ -6445,10 +6445,13 @@ export function issueRoutes(
     },
   );
 
-  // Creator-agent retraction of the agent's own issue-thread card — parity
-  // with POST /approvals/:id/withdraw (LOOA-294). Board members keep
+  // Agent retraction of an issue-thread card — parity with
+  // POST /approvals/:id/withdraw (LOOA-294). Board members keep
   // accept/reject/cancel; agents get exactly one remedy for a card the world
-  // invalidated, and only for cards they created themselves.
+  // invalidated: the creator by default, or an agent in the creator's
+  // reportsTo manager chain when the creator cannot run (LOOA-320 — a
+  // pending gate must always have at least one live principal that can
+  // retract it).
   router.post(
     "/issues/:id/interactions/:interactionId/withdraw",
     validate(withdrawIssueThreadInteractionSchema),
@@ -6489,16 +6492,25 @@ export function issueRoutes(
             interactionId: interaction.id,
             interactionKind: interaction.kind,
             interactionStatus: interaction.status,
+            // LOOA-320 audit trail: a manager-chain escalation must be
+            // distinguishable from the creator's own retraction, with the
+            // escalating actor on record (actorId above) alongside the
+            // creator whose card was retracted.
+            withdrawnVia: interaction.createdByAgentId === req.actor.agentId
+              ? "creator"
+              : "manager_chain",
+            creatorAgentId: interaction.createdByAgentId ?? null,
             withdrawnReason: typeof req.body.reason === "string" && req.body.reason.trim()
               ? req.body.reason.trim()
               : null,
           },
         });
 
-        // The creator initiated the retraction, so waking them about it would
-        // fabricate a board-decision wake (they are already in a live run).
-        // Only a *different* assignee still parked on this gate needs the
-        // standard continuation wake to avoid stranding in in_review.
+        // The withdrawing agent initiated the retraction, so waking them
+        // about it would fabricate a board-decision wake (they are already in
+        // a live run). Only a *different* assignee still parked on this gate
+        // needs the standard continuation wake to avoid stranding in
+        // in_review — including the creator, when a manager escalated.
         if (issue.assigneeAgentId && issue.assigneeAgentId !== req.actor.agentId) {
           queueResolvedInteractionContinuationWakeup({
             heartbeat,

@@ -17,6 +17,7 @@ import {
   buildSuggestedTaskTree,
   collectSuggestedTaskClientKeys,
   countSuggestedTaskNodes,
+  describeWithdrawnInteractionActor,
   getCheckboxConfirmationSelectedLabels,
   getRequestConfirmationTargetHref,
   getQuestionAnswerLabels,
@@ -954,7 +955,7 @@ function AskUserQuestionsCard({
         </div>
       ) : interaction.status === "withdrawn" ? (
         <div className="rounded-2xl border border-slate-300/60 bg-slate-50/85 p-4 text-sm leading-6 text-slate-950 dark:border-slate-500/40 dark:bg-slate-500/10 dark:text-slate-100">
-          <div className="font-semibold">Withdrawn by the requesting agent</div>
+          <div className="font-semibold">{describeWithdrawnInteractionActor(interaction)}</div>
           {interaction.result?.withdrawnReason ? (
             <p className="mt-1">{interaction.result.withdrawnReason}</p>
           ) : (

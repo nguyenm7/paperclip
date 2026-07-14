@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { and, asc, eq, inArray, isNotNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
+  agents,
   documents,
   heartbeatRuns,
   issueComments,
@@ -32,6 +33,7 @@ import {
   askUserQuestionsResultSchema,
   cancelIssueThreadInteractionSchema,
   createIssueThreadInteractionSchema,
+  getAgentOrgChainHealth,
   rejectIssueThreadInteractionSchema,
   requestCheckboxConfirmationPayloadSchema,
   requestCheckboxConfirmationResultSchema,
@@ -1482,8 +1484,11 @@ export function issueThreadInteractionService(db: Db) {
       return hydrateInteraction(updated);
     },
 
-    // Creator-agent retraction of the agent's own card — the interaction
-    // analogue of POST /approvals/:id/withdraw (LOOA-294, LOOA-231 semantics).
+    // Agent retraction of a card — the interaction analogue of
+    // POST /approvals/:id/withdraw (LOOA-294, LOOA-231 semantics). The creator
+    // is the default principal; an agent in the creator's reportsTo manager
+    // chain may withdraw on the creator's behalf (LOOA-320 — a pending gate
+    // must never become unretractable because its creator cannot run).
     // Records a terminal "withdrawn" status with resolved_by_agent_id only;
     // resolved_by_user_id stays NULL so a withdrawal can never be counted or
     // displayed as a board decision.
@@ -1508,8 +1513,17 @@ export function issueThreadInteractionService(db: Db) {
       if (current.companyId !== issue.companyId || current.issueId !== issue.id) {
         throw notFound("Interaction not found");
       }
-      if (!current.createdByAgentId || current.createdByAgentId !== actor.agentId) {
-        throw forbidden("Agents may only withdraw interactions they created");
+      if (!current.createdByAgentId) {
+        throw forbidden("Agents may only withdraw agent-created interactions");
+      }
+      const escalated = current.createdByAgentId !== actor.agentId;
+      if (
+        escalated
+        && !(await isManagerChainWithdrawActor(db, issue.companyId, current.createdByAgentId, actor.agentId))
+      ) {
+        throw forbidden(
+          "Agents may only withdraw interactions they created, or interactions created by an agent below them in the reporting chain",
+        );
       }
       if (current.status !== "pending") {
         // Idempotent convergence: re-withdrawing an already-withdrawn card is
@@ -1525,7 +1539,11 @@ export function issueThreadInteractionService(db: Db) {
         switch (current.kind) {
           case "request_confirmation":
           case "request_checkbox_confirmation":
-            return { version: 1, outcome: "withdrawn_by_creator", reason };
+            return {
+              version: 1,
+              outcome: escalated ? "withdrawn_by_manager" : "withdrawn_by_creator",
+              reason,
+            };
           case "ask_user_questions":
             return { version: 1, answers: [], withdrawnReason: reason };
           default:
@@ -1557,6 +1575,52 @@ export function issueThreadInteractionService(db: Db) {
       return { interaction: hydrateInteraction(updated), applied: true };
     },
   };
+}
+
+// "missing"/"cycle" are synthesized markers for broken chains, never real
+// principals. "terminated"/"pending_approval" agents are already refused
+// credentials at the auth middleware, but this authz check must not inherit
+// that guarantee from the credential layer (LOOA-330 F1, complete mediation).
+// A paused ancestor stays authorized — a paused manager is still the manager.
+const NON_AUTHORIZING_ANCESTOR_STATUSES = new Set<string>([
+  "missing",
+  "cycle",
+  "terminated",
+  "pending_approval",
+]);
+
+// LOOA-320: retracting a gate must not be a single point of failure bound to
+// one agent's health — when the creator cannot run, its reportsTo ancestors
+// are the fallback principals. This reuses the same cycle-safe,
+// company-bounded chain walk as work assignability; the synthesized
+// missing/cycle markers the walk emits for broken chains never authorize
+// anyone. A broken chain therefore limits escalation to the ancestors below
+// the break, and a creator whose agent row no longer exists has no chain at
+// all — both fail closed to 403.
+async function isManagerChainWithdrawActor(
+  db: Db,
+  companyId: string,
+  creatorAgentId: string,
+  actorAgentId: string,
+): Promise<boolean> {
+  const companyAgents = await db
+    .select({
+      id: agents.id,
+      companyId: agents.companyId,
+      name: agents.name,
+      status: agents.status,
+      reportsTo: agents.reportsTo,
+    })
+    .from(agents)
+    .where(eq(agents.companyId, companyId));
+  const creator = companyAgents.find((agent) => agent.id === creatorAgentId);
+  if (!creator) return false;
+  return getAgentOrgChainHealth({ agent: creator, agents: companyAgents }).fullChain.some(
+    (entry) =>
+      entry.relation === "ancestor"
+      && entry.id === actorAgentId
+      && !NON_AUTHORIZING_ANCESTOR_STATUSES.has(entry.status),
+  );
 }
 
 // ---------------------------------------------------------------------------

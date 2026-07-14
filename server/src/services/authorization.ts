@@ -1,4 +1,4 @@
-import { and, eq, isNull, like, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, like, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -6,6 +6,7 @@ import {
   heartbeatRuns,
   instanceUserRoles,
   issueComments,
+  issueRecoveryActions,
   issues,
   principalPermissionGrants,
   projects,
@@ -85,6 +86,7 @@ export type AuthorizationDecision = {
     | "allow_manager_chain"
     | "allow_mention_grant"
     | "allow_creator_grant"
+    | "allow_recovery_participant"
     | "deny_unauthenticated"
     | "deny_company_boundary"
     | "deny_missing_membership"
@@ -557,6 +559,33 @@ export function authorizationService(db: Db) {
         ),
       );
     return rows.some((row) => extractAgentMentionIds(row.body).includes(agentId));
+  }
+
+  // The participant set on a recovery action (recovery owner plus the
+  // previous/return owner it displaced) is written only by the recovery
+  // reconciler, so an agent cannot name itself into it. Rights granted from
+  // it expire with the action: only active/escalated rows count.
+  async function agentIsActiveRecoveryParticipant(companyId: string, issueId: string, agentId: string) {
+    const rows = await db
+      .select({
+        ownerAgentId: issueRecoveryActions.ownerAgentId,
+        previousOwnerAgentId: issueRecoveryActions.previousOwnerAgentId,
+        returnOwnerAgentId: issueRecoveryActions.returnOwnerAgentId,
+      })
+      .from(issueRecoveryActions)
+      .where(
+        and(
+          eq(issueRecoveryActions.companyId, companyId),
+          eq(issueRecoveryActions.sourceIssueId, issueId),
+          inArray(issueRecoveryActions.status, ["active", "escalated"]),
+        ),
+      );
+    return rows.some(
+      (row) =>
+        row.ownerAgentId === agentId ||
+        row.previousOwnerAgentId === agentId ||
+        row.returnOwnerAgentId === agentId,
+    );
   }
 
   // created_by_agent_id is written once at creation from the authenticated
@@ -1211,6 +1240,24 @@ export function authorizationService(db: Db) {
           action: input.action,
           reason: "allow_company_agent",
           explanation: "Allowed because the issue has no agent assignee.",
+        });
+      }
+      // Recovery-participant grant: a recovery handoff reassigns the issue,
+      // which would otherwise strand every other participant outside the
+      // mutate boundary — the agent that set a bad status could not correct
+      // it after the handoff, and the recovery owner lost access the moment
+      // ownership moved back. While a recovery action is active on this
+      // issue, all of its named participants keep mutate and comment rights,
+      // so a handoff is additive instead of revoking.
+      if (
+        resource?.issueId &&
+        (await agentIsActiveRecoveryParticipant(resource.companyId, resource.issueId, actorAgentId))
+      ) {
+        return allow({
+          action: input.action,
+          reason: "allow_recovery_participant",
+          explanation:
+            "Allowed because the actor is a named participant on this issue's active recovery action.",
         });
       }
       // Two comment-only grants; issue:mutate (status, assignee, description)

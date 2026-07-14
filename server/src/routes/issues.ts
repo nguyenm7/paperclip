@@ -1841,6 +1841,36 @@ export function issueRoutes(
     return decision.allowed;
   }
 
+  // A recovery handoff reassigns the source issue, so the participant set of
+  // the active recovery action — the recovery owner plus the previous/return
+  // owner it displaced — is the only durable record of who is allowed to
+  // repair the issue. The set is written by the recovery reconciler, never by
+  // the acting agent, and the grant it backs expires when the action resolves.
+  async function actorIsActiveRecoveryParticipant(
+    issue: { id: string; companyId: string },
+    actorAgentId: string,
+  ) {
+    // A failed recovery-store read must not fail the request (mutations stay
+    // durable even when revalidation reads break); it only means the extra
+    // participant grant is unavailable and normal ownership rules decide.
+    let action: Awaited<ReturnType<typeof recoveryActionsSvc.getActiveForIssue>>;
+    try {
+      action = await recoveryActionsSvc.getActiveForIssue(issue.companyId, issue.id);
+    } catch (err) {
+      logger.warn(
+        { err, issueId: issue.id },
+        "failed to read active recovery action during mutation authorization",
+      );
+      return false;
+    }
+    if (!action) return false;
+    return (
+      action.ownerAgentId === actorAgentId ||
+      action.previousOwnerAgentId === actorAgentId ||
+      action.returnOwnerAgentId === actorAgentId
+    );
+  }
+
   async function assertAgentIssueMutationAllowed(
     req: Request,
     res: Response,
@@ -1872,6 +1902,13 @@ export function issueRoutes(
       if (await hasActiveCheckoutManagementOverride(actorAgentId, issue.companyId, issue.assigneeAgentId)) {
         return true;
       }
+      // Recovery handoffs are additive: displaced participants keep mutate
+      // rights while the recovery action stays active, so a bad status can be
+      // corrected by whichever participant wakes first instead of stranding
+      // each of them outside the assignee boundary in turn.
+      if (await actorIsActiveRecoveryParticipant(issue, actorAgentId)) {
+        return true;
+      }
       if (issue.status === "in_progress") {
         res.status(409).json({
           error: "Issue is checked out by another agent",
@@ -1896,6 +1933,14 @@ export function issueRoutes(
       return false;
     }
     if (issue.status !== "in_progress") {
+      return true;
+    }
+    // An active recovery action certifies the reconciler found no live
+    // execution path behind this in_progress status, so the checkout lock it
+    // would assert below is already known dead. Named participants may
+    // correct the status without holding that lock — this is the self-recovery
+    // path for a bad transition the assignee set on itself outside a run.
+    if (await actorIsActiveRecoveryParticipant(issue, actorAgentId)) {
       return true;
     }
     const runId = requireAgentRunId(req, res);
@@ -2243,6 +2288,11 @@ export function issueRoutes(
       return true;
     }
     if (activeRecoveryAction.ownerAgentId === actorAgentId) return true;
+    // The previous/return owner is the assignee the handoff displaced; they
+    // must keep resolution authority so a status they set themselves stays
+    // self-recoverable after ownership moves (additive handoff, LOOA-346).
+    if (activeRecoveryAction.previousOwnerAgentId === actorAgentId) return true;
+    if (activeRecoveryAction.returnOwnerAgentId === actorAgentId) return true;
     if (
       activeRecoveryAction.ownerAgentId &&
       await hasActiveCheckoutManagementOverride(actorAgentId, issue.companyId, activeRecoveryAction.ownerAgentId)

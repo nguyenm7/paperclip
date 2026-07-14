@@ -606,6 +606,51 @@ describe("issueThreadInteractionService", () => {
         expect(applied).toBe(true);
         expect(interaction.result).toMatchObject({ outcome: "withdrawn_by_manager" });
       });
+
+      it("never authorizes an actor whose id only appears as a synthesized missing-manager marker", async () => {
+        const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+        // The creator's reportsTo dangles at an id with no row in the company
+        // (deleted agent). The chain walk emits an ancestor entry carrying
+        // that real id with status "missing" — the status filter is the only
+        // thing between that marker and authorization, so it must hold even
+        // if an actor authenticates with exactly that id.
+        const danglingChainAgents = [
+          { id: "agent-1", companyId: "company-1", name: "Creator", status: "active", reportsTo: "agent-ghost" },
+        ];
+        const state = createFakeDb({ interactionRow: confirmationRow(), parentRows: danglingChainAgents });
+        const svc = issueThreadInteractionService(state.db as never);
+
+        await expect(svc.withdrawInteraction(
+          ISSUE_REF,
+          "interaction-3",
+          {},
+          { agentId: "agent-ghost" },
+        )).rejects.toMatchObject({ status: 403 });
+        expect(state.interactionUpdates).toHaveLength(0);
+      });
+
+      it("never authorizes a cross-company parent the creator's reportsTo points at", async () => {
+        const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+        // Same marker class, resolvable id: the parent row exists but belongs
+        // to another company, so the walk must degrade it to a missing marker
+        // instead of treating it as a real ancestor. Route-level
+        // assertCompanyAccess also blocks this actor; this encodes the
+        // service-layer half of that defense in depth.
+        const crossCompanyChainAgents = [
+          { id: "agent-1", companyId: "company-1", name: "Creator", status: "active", reportsTo: "agent-foreign" },
+          { id: "agent-foreign", companyId: "company-2", name: "Foreign", status: "active", reportsTo: null },
+        ];
+        const state = createFakeDb({ interactionRow: confirmationRow(), parentRows: crossCompanyChainAgents });
+        const svc = issueThreadInteractionService(state.db as never);
+
+        await expect(svc.withdrawInteraction(
+          ISSUE_REF,
+          "interaction-3",
+          {},
+          { agentId: "agent-foreign" },
+        )).rejects.toMatchObject({ status: 403 });
+        expect(state.interactionUpdates).toHaveLength(0);
+      });
     });
   });
 });

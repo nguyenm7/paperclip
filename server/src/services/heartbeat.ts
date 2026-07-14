@@ -1541,8 +1541,35 @@ export type EnqueuedWakeRun = typeof heartbeatRuns.$inferSelect & {
   delivered: WakeDelivery;
 };
 
-function wakeDeliveryForCoalesceTarget(targetStatusBeforeMerge: string): WakeDelivery {
-  return targetStatusBeforeMerge === "running" ? "merged_running" : "merged_queued";
+/**
+ * Statuses whose runs have NOT yet read their context row. `claimQueuedRun`
+ * (queued -> running) and the `scheduled_retry` promotion both re-fetch the row
+ * at start, so a context merged into a run in one of these states still renders.
+ */
+const COALESCE_RENDERING_RUN_STATUSES: readonly string[] = ["queued", "scheduled_retry"];
+
+/**
+ * Derive the delivery report from the row the merge UPDATE actually wrote.
+ *
+ * MUST be called with the `RETURNING` row of the merge, never with a status read
+ * before it (LOOA-344 F2). The merge UPDATE matches on id only, so
+ * `claimQueuedRun` — which pins its own UPDATE on `status = "queued"` — can flip
+ * the target queued -> running in the window between a pre-read and the merge.
+ * Reporting the pre-read status would then claim `merged_queued` for a prompt
+ * that was written into a process which had already read its context: a
+ * swallowed wake, audited as delivered. That is precisely the fail-open this
+ * branch exists to close.
+ *
+ * A `running` target will not re-read; a terminal target will never read
+ * anything again. Both mean the prompt lands in a column nobody looks at, so
+ * both report `merged_running` (= "not delivered, retry"). The residual
+ * mis-report flips to the safe direction: a target that finishes between the
+ * merge and the report is called undelivered, costing at most a duplicate retry.
+ */
+export function wakeDeliveryForMergedRun(mergedStatusAfterMerge: string): WakeDelivery {
+  return COALESCE_RENDERING_RUN_STATUSES.includes(mergedStatusAfterMerge)
+    ? "merged_queued"
+    : "merged_running";
 }
 
 type UsageTotals = {
@@ -2484,6 +2511,55 @@ export function extractWakeCommentIds(
   return out;
 }
 
+/**
+ * Cap on the accumulated `wakeMessage` carried by a coalesced context snapshot.
+ * Accumulating without a cap would turn repeated `agents.invoke` calls against a
+ * parked run into an unbounded contextSnapshot growth vector — the overwrite
+ * semantics this replaces prevented that for free, so the cap pays for it back
+ * (LOOA-344 F1).
+ */
+const COALESCED_WAKE_MESSAGE_MAX_CHARS = 16_384;
+const COALESCED_WAKE_MESSAGE_SEPARATOR = "\n\n--- next coalesced message ---\n\n";
+const COALESCED_WAKE_MESSAGE_TRUNCATION_MARKER =
+  "[earlier coalesced wake messages truncated]\n\n";
+
+/**
+ * Accumulate `wakeMessage` across coalesced wakes instead of overwriting it.
+ *
+ * A spread-merge let a second same-scope wake REPLACE the prompt of the first
+ * while both were reported delivered: the earlier caller's message was silently
+ * suppressed and its `delivered` report retroactively falsified. Any
+ * same-company plugin holding `agents.invoke` could use that to bury another
+ * caller's parked prompt (LOOA-344 F1). Union semantics here mirror
+ * `mergeWakeCommentIds`.
+ *
+ * When the cap is hit the NEWEST message is kept intact and the oldest prefix is
+ * dropped, so a flood of messages can never push out the one the agent is about
+ * to act on.
+ */
+function mergeWakeMessages(existingRaw: unknown, incomingRaw: unknown): string | null {
+  const existing = readNonEmptyString(existingRaw);
+  const incoming = readNonEmptyString(incomingRaw);
+  if (!existing) return incoming;
+  if (!incoming) return existing;
+  // Idempotent re-wake (same message re-delivered): do not duplicate it.
+  if (existing === incoming || existing.endsWith(incoming)) return existing;
+
+  const combined = `${existing}${COALESCED_WAKE_MESSAGE_SEPARATOR}${incoming}`;
+  if (combined.length <= COALESCED_WAKE_MESSAGE_MAX_CHARS) return combined;
+
+  const budget = COALESCED_WAKE_MESSAGE_MAX_CHARS - COALESCED_WAKE_MESSAGE_TRUNCATION_MARKER.length;
+  // A single oversized incoming message: keep its tail, drop everything older.
+  if (incoming.length >= budget) {
+    return `${COALESCED_WAKE_MESSAGE_TRUNCATION_MARKER}${incoming.slice(incoming.length - budget)}`;
+  }
+  const headroom = budget - incoming.length - COALESCED_WAKE_MESSAGE_SEPARATOR.length;
+  const keptExisting = headroom > 0 ? existing.slice(Math.max(0, existing.length - headroom)) : "";
+  return keptExisting
+    ? `${COALESCED_WAKE_MESSAGE_TRUNCATION_MARKER}${keptExisting}${COALESCED_WAKE_MESSAGE_SEPARATOR}${incoming}`
+    : `${COALESCED_WAKE_MESSAGE_TRUNCATION_MARKER}${incoming}`;
+}
+
 function mergeWakeCommentIds(...values: Array<unknown>): string[] {
   const merged: string[] = [];
   const append = (value: unknown) => {
@@ -2673,6 +2749,14 @@ export function mergeCoalescedContextSnapshot(
   };
   if (existing.forceFreshSession === true || incoming.forceFreshSession === true) {
     merged.forceFreshSession = true;
+  }
+  // The spread above would let the incoming wake's prompt overwrite a prompt that
+  // is still parked on this run and has never been shown to anyone. Accumulate
+  // instead, so every coalesced wake that was reported delivered actually renders
+  // (LOOA-344 F1).
+  const mergedWakeMessage = mergeWakeMessages(existing.wakeMessage, incoming.wakeMessage);
+  if (mergedWakeMessage) {
+    merged.wakeMessage = mergedWakeMessage;
   }
   const mergedCommentIds = mergeWakeCommentIds(existing, incoming);
   if (mergedCommentIds.length > 0) {
@@ -10988,12 +11072,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             && !shouldQueueFollowupForRunningWake
             && availableActiveExecutionRun
           ) {
-            const delivered = wakeDeliveryForCoalesceTarget(availableActiveExecutionRun.status);
             const mergedContextSnapshot = mergeCoalescedContextSnapshot(
               availableActiveExecutionRun.contextSnapshot,
               enrichedContextSnapshot,
             );
-            const mergedRun = await tx
+            const mergedRunRow = await tx
               .update(heartbeatRuns)
               .set({
                 contextSnapshot: mergedContextSnapshot,
@@ -11001,7 +11084,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               })
               .where(eq(heartbeatRuns.id, availableActiveExecutionRun.id))
               .returning()
-              .then((rows) => rows[0] ?? availableActiveExecutionRun);
+              .then((rows) => rows[0] ?? null);
+            const mergedRun = mergedRunRow ?? availableActiveExecutionRun;
+            // Report from the merge's own RETURNING row, not from the status read
+            // above (LOOA-344 F2). If the row vanished, nothing will render it.
+            const delivered: WakeDelivery = mergedRunRow
+              ? wakeDeliveryForMergedRun(mergedRunRow.status)
+              : "merged_running";
 
             await tx.insert(agentWakeupRequests).values({
               companyId: agent.companyId,
@@ -11189,12 +11278,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     );
 
     if (coalescedTargetRun) {
-      const delivered = wakeDeliveryForCoalesceTarget(coalescedTargetRun.status);
       const mergedContextSnapshot = mergeCoalescedContextSnapshot(
         coalescedTargetRun.contextSnapshot,
         enrichedContextSnapshot,
       );
-      const mergedRun = await db
+      const mergedRunRow = await db
         .update(heartbeatRuns)
         .set({
           contextSnapshot: mergedContextSnapshot,
@@ -11202,7 +11290,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         })
         .where(eq(heartbeatRuns.id, coalescedTargetRun.id))
         .returning()
-        .then((rows) => rows[0] ?? coalescedTargetRun);
+        .then((rows) => rows[0] ?? null);
+      const mergedRun = mergedRunRow ?? coalescedTargetRun;
+      // Report from the merge's own RETURNING row, not from the status read
+      // above (LOOA-344 F2). If the row vanished, nothing will render it.
+      const delivered: WakeDelivery = mergedRunRow
+        ? wakeDeliveryForMergedRun(mergedRunRow.status)
+        : "merged_running";
 
       await db.insert(agentWakeupRequests).values({
         companyId: agent.companyId,

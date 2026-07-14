@@ -7,7 +7,7 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { runningProcesses } from "../adapters/index.ts";
-import { heartbeatService } from "../services/heartbeat.ts";
+import { heartbeatService, wakeDeliveryForMergedRun } from "../services/heartbeat.ts";
 
 // LOOA-342 (class fix behind LOOA-334 and LOOA-335): heartbeat.wakeup used to
 // return a bare truthy run for a wake that was COALESCED into an
@@ -264,5 +264,136 @@ describeEmbeddedPostgres("wakeup reports coalescing truthfully (LOOA-342)", () =
 
     const carriers = await runsCarryingThePrompt(agentId, liveRunId, "Approval resolved");
     expect(carriers.length).toBeGreaterThan(0);
+  }, 30_000);
+
+  // ---------------------------------------------------------------------------
+  // LOOA-344 F1 — the wakeMessage clobber on double-coalesce.
+  //
+  // `mergeCoalescedContextSnapshot` spread incoming over existing, so a SECOND
+  // same-scope wake replaced the first wake's prompt on a run that had not
+  // started yet. Both wakes were reported delivered (`merged_queued`, truthfully
+  // at enqueue time) but only the last one ever rendered: the earlier report was
+  // retroactively falsified. Any same-company plugin holding `agents.invoke`
+  // could bury another caller's parked prompt this way.
+  //
+  // A `delivered` report the caller cannot trust is the same fail-open this
+  // branch exists to close — it just moves from the return value to the column.
+  // ---------------------------------------------------------------------------
+
+  it("two wakes coalesced into the same QUEUED run both render — the second must not clobber the first's prompt (LOOA-344 F1)", async () => {
+    const { companyId, agentId } = await seedCompanyWithAgent("cto");
+    const queuedRunId = await seedQueuedRun(companyId, agentId);
+
+    const first = await invokeAsPluginBridge(agentId, "some_future_sweep_alarm", "Gate ALPHA needs attention.");
+    const second = await invokeAsPluginBridge(agentId, "another_sweep_alarm", "Gate BRAVO needs attention.");
+
+    // Both coalesce into the same parked carrier and both are reported delivered.
+    expect(first!.id).toBe(queuedRunId);
+    expect(second!.id).toBe(queuedRunId);
+    expect(first!.delivered).toBe("merged_queued");
+    expect(second!.delivered).toBe("merged_queued");
+
+    const [carrier] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, queuedRunId));
+    const wakeMessage = String((carrier!.contextSnapshot as Record<string, unknown> | null)?.wakeMessage ?? "");
+
+    // The invariant: every wake reported delivered actually renders. If ALPHA is
+    // gone, its `merged_queued` report was a lie.
+    expect(
+      wakeMessage,
+      "the first wake was reported delivered (merged_queued) — its prompt must still be on the carrier that renders it",
+    ).toContain("Gate ALPHA");
+    expect(wakeMessage, "the second wake's prompt must render too").toContain("Gate BRAVO");
+  }, 30_000);
+
+  it("an idempotent re-wake with the same message does not duplicate it on the carrier (LOOA-344 F1)", async () => {
+    const { companyId, agentId } = await seedCompanyWithAgent("cto");
+    const queuedRunId = await seedQueuedRun(companyId, agentId);
+
+    await invokeAsPluginBridge(agentId, "some_future_sweep_alarm", "Gate ALPHA needs attention.");
+    await invokeAsPluginBridge(agentId, "some_future_sweep_alarm", "Gate ALPHA needs attention.");
+
+    const [carrier] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, queuedRunId));
+    const wakeMessage = String((carrier!.contextSnapshot as Record<string, unknown> | null)?.wakeMessage ?? "");
+
+    expect(wakeMessage.match(/Gate ALPHA/g)?.length ?? 0).toBe(1);
+  }, 30_000);
+
+  it("accumulated wakeMessages are capped, keeping the NEWEST intact — repeated invokes cannot grow the context snapshot without bound (LOOA-344 F1)", async () => {
+    const { companyId, agentId } = await seedCompanyWithAgent("cto");
+    const queuedRunId = await seedQueuedRun(companyId, agentId);
+
+    // Flood the parked carrier the way a hostile/looping plugin would.
+    for (let i = 0; i < 12; i += 1) {
+      await invokeAsPluginBridge(agentId, "some_future_sweep_alarm", `FILLER-${i} ${"x".repeat(2_000)}`);
+    }
+    await invokeAsPluginBridge(agentId, "some_future_sweep_alarm", "NEWEST: the message the agent must act on.");
+
+    const [carrier] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, queuedRunId));
+    const wakeMessage = String((carrier!.contextSnapshot as Record<string, unknown> | null)?.wakeMessage ?? "");
+
+    expect(
+      wakeMessage.length,
+      "unbounded accumulation would turn repeated agents.invoke calls into a contextSnapshot growth vector",
+    ).toBeLessThanOrEqual(16_384);
+    expect(
+      wakeMessage,
+      "truncation must drop the OLDEST prefix — a flood must never push out the newest message",
+    ).toContain("NEWEST: the message the agent must act on.");
+    expect(wakeMessage).toContain("truncated");
+  }, 60_000);
+
+  // ---------------------------------------------------------------------------
+  // LOOA-344 F2 — `delivered` was computed from a status read BEFORE the merge.
+  //
+  // The merge UPDATE matches on id only, while `claimQueuedRun` pins its own
+  // UPDATE on `status = "queued"`. So a target could be claimed (queued ->
+  // running) in the window between the pre-read and the merge: the spawned
+  // process reads pre-merge context, the caller is told `merged_queued`, and the
+  // gateway stamps a raise-once marker for a wake nobody will ever see.
+  //
+  // `delivered` now derives from the merge's own RETURNING row. The millisecond
+  // interleaving itself has no injectable seam inside `wakeup` (a concurrent
+  // test would be timing-dependent, and a flaky tripwire is worse than none), so
+  // it is pinned two ways: the derivation function is tested directly against
+  // every status, and an invariant test asserts the report always agrees with
+  // the carrier's real state.
+  // ---------------------------------------------------------------------------
+
+  it("wakeDeliveryForMergedRun: only a run that has NOT started yet counts as delivered — terminal targets are NOT (LOOA-344 F2)", () => {
+    // These re-fetch their context row when they start, so a merged prompt renders.
+    expect(wakeDeliveryForMergedRun("queued")).toBe("merged_queued");
+    expect(wakeDeliveryForMergedRun("scheduled_retry")).toBe("merged_queued");
+
+    // Already read its context; will not re-read.
+    expect(wakeDeliveryForMergedRun("running")).toBe("merged_running");
+
+    // Will never read anything again. The OLD pre-read helper mapped every
+    // non-"running" status to merged_queued, so a target that finished mid-merge
+    // was reported DELIVERED and the caller stamped its raise-once marker.
+    expect(wakeDeliveryForMergedRun("succeeded")).toBe("merged_running");
+    expect(wakeDeliveryForMergedRun("failed")).toBe("merged_running");
+    expect(wakeDeliveryForMergedRun("cancelled")).toBe("merged_running");
+
+    // Fail closed on anything we do not recognise.
+    expect(wakeDeliveryForMergedRun("some_future_status")).toBe("merged_running");
+  });
+
+  it("a merged_queued report always agrees with the carrier's real status — the report is never a stale pre-read (LOOA-344 F2)", async () => {
+    const { companyId, agentId } = await seedCompanyWithAgent("cto");
+    const queuedRunId = await seedQueuedRun(companyId, agentId);
+
+    const run = await invokeAsPluginBridge(agentId, "some_future_sweep_alarm", "Gate CHARLIE needs attention.");
+    expect(run!.id).toBe(queuedRunId);
+
+    const [carrier] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, queuedRunId));
+
+    // The invariant, stated so it re-fires if anyone reintroduces a pre-read:
+    // delivered=merged_queued means "this carrier has not started and will render
+    // the merged prompt". That must be true of the row as it actually stands.
+    expect(run!.delivered).toBe("merged_queued");
+    expect(
+      wakeDeliveryForMergedRun(carrier!.status),
+      "the report handed to the caller must match what the carrier's real status implies",
+    ).toBe(run!.delivered);
   }, 30_000);
 });

@@ -651,6 +651,53 @@ describe("issueThreadInteractionService", () => {
         )).rejects.toMatchObject({ status: 403 });
         expect(state.interactionUpdates).toHaveLength(0);
       });
+
+      it("never authorizes a terminated or pending_approval ancestor", async () => {
+        const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+        // middleware/auth.ts refuses credentials for both statuses today, so
+        // these actors cannot reach the service — but this authz check must
+        // hold on its own if that ever changes (LOOA-330 F1, complete
+        // mediation). The chain walk continues past a terminated ancestor,
+        // so both appear as real "ancestor" entries carrying their row
+        // status; the status filter is what keeps them out.
+        const staleAncestorAgents = [
+          { id: "agent-1", companyId: "company-1", name: "Creator", status: "active", reportsTo: "agent-terminated" },
+          { id: "agent-terminated", companyId: "company-1", name: "Terminated", status: "terminated", reportsTo: "agent-provisional" },
+          { id: "agent-provisional", companyId: "company-1", name: "Provisional", status: "pending_approval", reportsTo: null },
+        ];
+        for (const actorAgentId of ["agent-terminated", "agent-provisional"]) {
+          const state = createFakeDb({ interactionRow: confirmationRow(), parentRows: staleAncestorAgents });
+          const svc = issueThreadInteractionService(state.db as never);
+
+          await expect(svc.withdrawInteraction(
+            ISSUE_REF,
+            "interaction-3",
+            {},
+            { agentId: actorAgentId },
+          )).rejects.toMatchObject({ status: 403 });
+          expect(state.interactionUpdates).toHaveLength(0);
+        }
+      });
+
+      it("still authorizes a paused ancestor — a paused manager is still the manager", async () => {
+        const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+        const pausedManagerAgents = [
+          { id: "agent-1", companyId: "company-1", name: "Creator", status: "active", reportsTo: "agent-paused" },
+          { id: "agent-paused", companyId: "company-1", name: "Paused", status: "paused", reportsTo: null },
+        ];
+        const state = createFakeDb({ interactionRow: confirmationRow(), parentRows: pausedManagerAgents });
+        const svc = issueThreadInteractionService(state.db as never);
+
+        const { interaction, applied } = await svc.withdrawInteraction(
+          ISSUE_REF,
+          "interaction-3",
+          {},
+          { agentId: "agent-paused" },
+        );
+
+        expect(applied).toBe(true);
+        expect(interaction.result).toMatchObject({ outcome: "withdrawn_by_manager" });
+      });
     });
   });
 });

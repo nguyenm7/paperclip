@@ -1577,6 +1577,18 @@ export function issueThreadInteractionService(db: Db) {
   };
 }
 
+// "missing"/"cycle" are synthesized markers for broken chains, never real
+// principals. "terminated"/"pending_approval" agents are already refused
+// credentials at the auth middleware, but this authz check must not inherit
+// that guarantee from the credential layer (LOOA-330 F1, complete mediation).
+// A paused ancestor stays authorized — a paused manager is still the manager.
+const NON_AUTHORIZING_ANCESTOR_STATUSES = new Set<string>([
+  "missing",
+  "cycle",
+  "terminated",
+  "pending_approval",
+]);
+
 // LOOA-320: retracting a gate must not be a single point of failure bound to
 // one agent's health — when the creator cannot run, its reportsTo ancestors
 // are the fallback principals. This reuses the same cycle-safe,
@@ -1607,8 +1619,7 @@ async function isManagerChainWithdrawActor(
     (entry) =>
       entry.relation === "ancestor"
       && entry.id === actorAgentId
-      && entry.status !== "missing"
-      && entry.status !== "cycle",
+      && !NON_AUTHORIZING_ANCESTOR_STATUSES.has(entry.status),
   );
 }
 

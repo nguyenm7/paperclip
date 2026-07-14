@@ -5139,13 +5139,19 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     // lock, so the continuation wake always gets a run that will render it
     // (new_run, or merged_queued which renders at run start). A truthy ref
     // alone is NOT that guarantee — merged_running means the prompt was
-    // merged into a process that will never re-read it (LOOA-342). Guard the
-    // attempt stamp on delivery so a future re-ordering fails loudly here
-    // instead of silently burning bounded continuation attempts (LOOA-349).
+    // merged into a process that will never re-read it (LOOA-342).
+    //
+    // This gate does not rescue the continuation: enqueueWakeup has already
+    // written the agent_wakeup_requests row under the attempt-scoped
+    // idempotency key, so the next pass sees idempotentWakeExists and decides
+    // `skip` (run-liveness-continuations.ts). The continuation is dropped
+    // either way — the gate's whole job is to make a violated ordering
+    // invariant fail LOUDLY here rather than leave a stamped attempt implying
+    // a continuation that no agent will ever see (LOOA-349).
     if (continuationRun && continuationRun.delivered === "merged_running") {
       logger.error(
         { runId: run.id, issueId, coalescedIntoRunId: continuationRun.id },
-        "liveness continuation wake coalesced into an already-running run and will never render; not counting the attempt — finalize ordering invariant violated",
+        "liveness continuation wake coalesced into an already-running run and will never render; the continuation is dropped — finalize ordering invariant violated",
       );
       return;
     }

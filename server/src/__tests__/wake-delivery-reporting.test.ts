@@ -81,21 +81,68 @@ describeEmbeddedPostgres("wakeup reports coalescing truthfully (LOOA-342)", () =
     heartbeat = heartbeatService(db);
   }, 60_000);
 
-  afterEach(async () => {
+  /**
+   * Isolation here is by IDENTITY, not by wiping shared state, and that is
+   * load-bearing (LOOA-349 review). A wake to an agent with a free slot does
+   * not just enqueue: `wakeup` awaits `startNextQueuedRunForAgent`, which
+   * claims the queued run and fires `void executeRun(...)`. Those writes
+   * (agent_runtime_state, heartbeat_runs, the post-run finalize path) outlive
+   * the test body. A `truncate ... cascade` in afterEach takes an
+   * AccessExclusiveLock against exactly those in-flight writes: under CPU
+   * contention the two deadlock (Postgres 40P01), the truncate loses, the
+   * company row survives, and the NEXT test dies on the
+   * `companies_issue_prefix_idx` unique index — because every seeded company
+   * defaulted to issue prefix "PAP". That is a flaky tripwire, which is worse
+   * than no tripwire: it gets re-run until green and then stops being read.
+   *
+   * So: every company gets a unique issue prefix, no test truncates, and each
+   * test's assertions are scoped to its own agent/issue ids. Background
+   * executions from a previous test cannot collide with or mask the next one.
+   */
+  afterEach(() => {
     runningProcesses.clear();
-    // heartbeat_runs <-> agent_wakeup_requests reference each other, so drop the
-    // whole graph in one cascade rather than ordering deletes.
-    await db.execute(sql`truncate table companies cascade`);
   });
 
   afterAll(async () => {
     runningProcesses.clear();
+    // Let any fire-and-forget executeRun finish its writes before the database
+    // is torn down, so teardown does not race them into noisy FK errors.
+    await waitForDatabaseQuiescence();
     await tempDb?.cleanup();
   });
 
+  /** Poll until no other backend is running a query against this database. */
+  async function waitForDatabaseQuiescence(timeoutMs = 10_000) {
+    const started = performance.now();
+    let idleSamples = 0;
+    while (performance.now() - started < timeoutMs) {
+      const rows = (await db.execute(sql`
+        select count(*)::int as active
+        from pg_stat_activity
+        where datname = current_database()
+          and pid <> pg_backend_pid()
+          and state <> 'idle'
+      `)) as unknown as Array<{ active: number }>;
+      if (Number(rows[0]?.active ?? 0) === 0) {
+        idleSamples += 1;
+        if (idleSamples >= 3) return;
+      } else {
+        idleSamples = 0;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
   async function seedCompanyWithAgent(role: string) {
     const companyId = randomUUID();
-    await db.insert(companies).values({ id: companyId, name: "Test Co", status: "active" });
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Test Co",
+      status: "active",
+      // Unique per company: the default prefix is shared, and a shared prefix
+      // is what turns any leftover row into a cross-test failure.
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+    });
     const agentId = randomUUID();
     await db.insert(agents).values({ id: agentId, companyId, name: "Creator", role });
     return { companyId, agentId };
@@ -243,8 +290,9 @@ describeEmbeddedPostgres("wakeup reports coalescing truthfully (LOOA-342)", () =
       expect(run!.id, `reason ${reason} should coalesce like any other automation wake`).toBe(liveRunId);
       expect(run!.delivered, `reason ${reason} must report the swallowed prompt truthfully`).toBe("merged_running");
 
+      // Each iteration seeds its own company + agent, so dropping the live run
+      // from the process registry is the only cleanup needed between them.
       runningProcesses.clear();
-      await db.execute(sql`truncate table companies cascade`);
     }
   }, 30_000);
 

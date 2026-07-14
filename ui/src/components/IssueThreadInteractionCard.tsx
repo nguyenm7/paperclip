@@ -7,6 +7,7 @@ import {
   buildSuggestedTaskTree,
   collectSuggestedTaskClientKeys,
   countSuggestedTaskNodes,
+  describeWithdrawnInteractionActor,
   getCheckboxConfirmationSelectedLabels,
   getQuestionAnswerLabels,
   type AskUserQuestionsAnswer,
@@ -583,7 +584,7 @@ function SuggestTasksCard({
       {interaction.status === "withdrawn" ? (
         <div className="rounded-sm border border-slate-500/60 bg-slate-500/10 px-4 py-3 text-sm text-slate-900 dark:text-slate-100">
           <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-600 dark:text-slate-300">
-            Withdrawn by the requesting agent
+            {describeWithdrawnInteractionActor(interaction)}
           </div>
           <p className={cn(
             "mt-1 leading-6",
@@ -1012,7 +1013,7 @@ function AskUserQuestionsCard({
         </div>
       ) : interaction.status === "withdrawn" ? (
         <div className="rounded-2xl border border-slate-300/60 bg-slate-50/85 p-4 text-sm leading-6 text-slate-950 dark:border-slate-500/40 dark:bg-slate-500/10 dark:text-slate-100">
-          <div className="font-semibold">Withdrawn by the requesting agent</div>
+          <div className="font-semibold">{describeWithdrawnInteractionActor(interaction)}</div>
           {interaction.result?.withdrawnReason ? (
             <p className="mt-1">{interaction.result.withdrawnReason}</p>
           ) : (
@@ -1199,7 +1200,7 @@ function RequestConfirmationResolution({
     return (
       <div className="space-y-2">
         <div className="flex flex-wrap items-center gap-2 text-sm leading-6 text-foreground">
-          <span className="font-medium">Withdrawn by the requesting agent — no board decision was made</span>
+          <span className="font-medium">{`${describeWithdrawnInteractionActor(interaction)} — no board decision was made`}</span>
           <RequestConfirmationTargetChip interaction={interaction} target={target} />
         </div>
         {interaction.result?.reason ? (

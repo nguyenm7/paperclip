@@ -814,7 +814,7 @@ export interface RequestCheckboxConfirmationPayload {
 
 export interface RequestConfirmationResult {
   version: 1;
-  outcome: "accepted" | "rejected" | "superseded_by_comment" | "stale_target" | "withdrawn_by_creator";
+  outcome: "accepted" | "rejected" | "superseded_by_comment" | "stale_target" | "withdrawn_by_creator" | "withdrawn_by_manager";
   reason?: string | null;
   commentId?: string | null;
   staleTarget?: RequestConfirmationTarget | null;

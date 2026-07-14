@@ -24,9 +24,14 @@ const ACTIVITY_ACTION_TO_PLUGIN_EVENT: Readonly<Record<string, PluginEventType>>
   issue_thread_interaction_answered: "issue.interaction.resolved",
   issue_thread_interaction_cancelled: "issue.interaction.resolved",
   issue_thread_interaction_expired: "issue.interaction.resolved",
+  // LOOA-323: a withdrawal is a terminal resolution too — without this
+  // mapping the LOOA-294 withdraw emitted NO plugin event, so surface
+  // plugins could not heal the retracted card until their next sweep.
+  issue_thread_interaction_withdrawn: "issue.interaction.resolved",
   approval_approved: "approval.decided",
   approval_rejected: "approval.decided",
   approval_revision_requested: "approval.decided",
+  approval_withdrawn: "approval.decided",
   budget_soft_threshold_crossed: "budget.incident.opened",
   budget_hard_threshold_crossed: "budget.incident.opened",
   budget_incident_resolved: "budget.incident.resolved",
@@ -42,7 +47,7 @@ export function setPluginEventBus(bus: PluginEventBus): void {
   _pluginEventBus = bus;
 }
 
-function eventTypeForActivityAction(action: string): PluginEventType | null {
+export function eventTypeForActivityAction(action: string): PluginEventType | null {
   if (PLUGIN_EVENT_SET.has(action)) return action as PluginEventType;
   return ACTIVITY_ACTION_TO_PLUGIN_EVENT[action.replaceAll(".", "_")] ?? null;
 }

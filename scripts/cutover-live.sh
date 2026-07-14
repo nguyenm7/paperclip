@@ -159,8 +159,24 @@ check "serving tree is clean" \
 check "serving tree is at the same commit as the integration tree's master" \
   "[ \"\$(git -C '${SERVING_TREE}' rev-parse HEAD)\" = \"\$(git -C '${OLD_TREE}' rev-parse master)\" ]"
 check "serving tree has node_modules installed" "[ -d '${SERVING_TREE}/node_modules' ]"
-check "lockfiles are identical (same dependency graph as what is serving today)" \
-  "cmp -s '${SERVING_TREE}/pnpm-lock.yaml' '${OLD_TREE}/pnpm-lock.yaml'"
+
+# Ask whether node_modules matches the code it is about to serve -- and ask it
+# in a way that can actually answer NO.
+#
+# The obvious check, `cmp SERVING_TREE/pnpm-lock.yaml OLD_TREE/pnpm-lock.yaml`,
+# looks like it tests that. It does not. We only ever cut over *after*
+# fast-forwarding the serving tree to master, so by that point both trees are on
+# the same commit and the two lockfiles are byte-identical BY CONSTRUCTION --
+# whatever node_modules happens to contain. It passes on a tree installed a year
+# ago just as happily as on a fresh one. A precondition that cannot fail at the
+# moment it matters is not a precondition.
+#
+# pnpm *leaves a trace* of what it installed: node_modules/.pnpm/lock.yaml is a
+# copy of the lockfile the current install was resolved from. Comparing the
+# checked-out lockfile against that trace is a question with a real answer --
+# it is the difference between a field the tree reports and a mark it left.
+check "serving tree's node_modules was installed from the lockfile it will serve" \
+  "cmp -s '${SERVING_TREE}/pnpm-lock.yaml' '${SERVING_TREE}/node_modules/.pnpm/lock.yaml'"
 
 # The postmaster binary comes from the SERVING tree's node_modules and must be
 # able to open a data directory initialised by the old one. A major-version skew

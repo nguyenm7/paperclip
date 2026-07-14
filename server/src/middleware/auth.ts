@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { Request, RequestHandler } from "express";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agentApiKeys, agents, authUsers, companies, companyMemberships, instanceUserRoles } from "@paperclipai/db";
+import { agentApiKeys, agents, authUsers, companies, companyMemberships, heartbeatRuns, instanceUserRoles } from "@paperclipai/db";
 import { verifyLocalAgentJwt } from "../agent-auth-jwt.js";
 import type { DeploymentMode } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
@@ -124,6 +124,51 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       return;
     }
 
+    // X-Paperclip-Run-Id is a claim that "this request is issued by the run's
+    // agent". For agent credentials that claim must be verified, not trusted:
+    // an agent process whose shell environment picked up a stale or foreign
+    // PAPERCLIP_API_KEY (LOOA-303: a profile-exported static key for another
+    // company's agent overrode the injected run JWT) would otherwise act as
+    // that other agent while attributing the writes to the current run. Fail
+    // closed on any mismatch — including a run id that does not resolve at
+    // all — so a cross-identity credential dies on first use instead of
+    // silently impersonating.
+    const rejectRunIdentityMismatch = (agentId: string, companyId: string) => {
+      req.actor = { type: "none", source: "none" };
+      logger.warn(
+        {
+          reason: "run_credential_identity_mismatch",
+          credentialAgentId: agentId,
+          credentialCompanyId: companyId,
+          runId: runIdHeader,
+          method: req.method,
+          url: req.originalUrl,
+        },
+        "Rejected agent credential whose identity does not match the X-Paperclip-Run-Id run",
+      );
+      res.status(403).json({ error: "Credential identity does not match the run in X-Paperclip-Run-Id" });
+    };
+
+    const agentRunBindingOk = async (agentId: string, companyId: string): Promise<boolean> => {
+      if (!runIdHeader) return true;
+      let run: { agentId: string; companyId: string } | null = null;
+      try {
+        run = await db
+          .select({
+            agentId: heartbeatRuns.agentId,
+            companyId: heartbeatRuns.companyId,
+          })
+          .from(heartbeatRuns)
+          .where(eq(heartbeatRuns.id, runIdHeader))
+          .then((rows) => rows[0] ?? null);
+      } catch {
+        // A malformed run id (e.g. non-UUID) throws at the database layer;
+        // treat it exactly like an unknown run rather than an internal error.
+        run = null;
+      }
+      return run !== null && run.agentId === agentId && run.companyId === companyId;
+    };
+
     const boardKey = await boardAuth.findBoardApiKeyByToken(token);
     if (boardKey) {
       const access = await boardAuth.resolveBoardAccess(boardKey.userId);
@@ -179,6 +224,11 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         return;
       }
 
+      if (!(await agentRunBindingOk(claims.sub, claims.company_id))) {
+        rejectRunIdentityMismatch(claims.sub, claims.company_id);
+        return;
+      }
+
       req.actor = {
         type: "agent",
         agentId: claims.sub,
@@ -204,6 +254,11 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
 
     if (!agentRecord || agentRecord.status === "terminated" || agentRecord.status === "pending_approval") {
       rejectUnresolvedBearer("agent_key_inactive_agent");
+      return;
+    }
+
+    if (!(await agentRunBindingOk(key.agentId, key.companyId))) {
+      rejectRunIdentityMismatch(key.agentId, key.companyId);
       return;
     }
 

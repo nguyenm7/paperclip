@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import {
   agents,
   approvals,
@@ -75,11 +75,15 @@ describeEmbeddedPostgres("stale-gate alarm delivery vs. wake coalescing (LOOA-33
     heartbeat = heartbeatService(db);
   }, 60_000);
 
-  afterEach(async () => {
+  // Each test gets its own company rather than truncating between tests. Once
+  // the alarm is delivered correctly it gets a REAL follow-up run, which
+  // enqueueWakeup starts inline; that execution keeps writing (run events,
+  // activity log) after the test body returns. A `truncate ... cascade` races
+  // those writes — it deadlocks, the truncate loses, and the surviving company
+  // then collides with the next test on the unique issue_prefix index. Isolating
+  // by company removes the race instead of papering over it.
+  afterEach(() => {
     runningProcesses.clear();
-    // heartbeat_runs <-> agent_wakeup_requests reference each other, so drop the
-    // whole graph in one cascade rather than ordering deletes.
-    await db.execute(sql`truncate table companies cascade`);
   });
 
   afterAll(async () => {
@@ -93,10 +97,16 @@ describeEmbeddedPostgres("stale-gate alarm delivery vs. wake coalescing (LOOA-33
     });
   }
 
+  let companySeq = 0;
+
   /** A pending board approval whose only source issue is already `done`. */
   async function seedStaleCard() {
     const companyId = randomUUID();
-    await db.insert(companies).values({ id: companyId, name: "Test Co", status: "active" });
+    // Companies coexist across tests now, so the prefix must be unique.
+    const issuePrefix = `SG${(companySeq += 1)}`;
+    await db
+      .insert(companies)
+      .values({ id: companyId, name: "Test Co", status: "active", issuePrefix });
 
     const ceoId = randomUUID();
     const creatorId = randomUUID();
@@ -111,7 +121,8 @@ describeEmbeddedPostgres("stale-gate alarm delivery vs. wake coalescing (LOOA-33
       companyId,
       title: "Ship the Signal Aggregator",
       status: "done",
-      identifier: "LOOA-4",
+      // issues_identifier_idx is globally unique, so scope it to this company.
+      identifier: `${issuePrefix}-4`,
     });
 
     const approvalId = randomUUID();

@@ -371,7 +371,17 @@ function mergeAdapterRecoveryMetadata(input: {
       : {}),
   };
 }
-const RUNNING_ISSUE_WAKE_REASONS_REQUIRING_FOLLOWUP = new Set(["approval_approved"]);
+// Wakes that must never be merged into an already-RUNNING run: the adapter was
+// spawned with its prompt and never re-reads contextSnapshot, so a merged
+// wakeMessage is silently dropped. `stale_gate_alarm` carries no issueId/taskKey,
+// so it shares the null task scope with the CEO's ordinary runs and would
+// otherwise coalesce into whatever they are already doing — burning raise-once on
+// an alarm that was never rendered. Invariant pinned by
+// stale-gate-alarm-delivery.test.ts, which asserts delivery, not this mechanism.
+const RUNNING_ISSUE_WAKE_REASONS_REQUIRING_FOLLOWUP = new Set([
+  "approval_approved",
+  "stale_gate_alarm",
+]);
 const SESSIONED_LOCAL_ADAPTERS = new Set([
   "claude_local",
   "codex_local",

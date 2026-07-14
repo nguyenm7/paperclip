@@ -1188,14 +1188,37 @@ export interface PluginIssueCheckoutOwnership {
 }
 
 export interface PluginIssueWakeupResult {
+  /**
+   * True when the heartbeat returned a run for this wake. NOT a delivery
+   * receipt: a wake coalesced into an already-running run is `queued: true`
+   * but its prompt will never render (LOOA-342). Gate notified/raise-once
+   * markers on `delivered`, not on this flag.
+   */
   queued: boolean;
   runId: string | null;
+  /** Whether the wake was coalesced into a pre-existing run. `null` when the wake was skipped by heartbeat policy (`queued: false`). */
+  coalesced: boolean | null;
+  /**
+   * How the wake was delivered — same contract as `PluginAgentsClient.invoke`:
+   * `"merged_running"` means the prompt was merged into a run whose process
+   * was spawned before the merge and **will never be seen**; `"merged_queued"`
+   * still delivers at run start. `null` when the wake was skipped by
+   * heartbeat policy (`queued: false`). Callers persisting a notified marker
+   * must gate on `delivered !== "merged_running"` and retry undelivered wakes
+   * on a later cycle.
+   */
+  delivered: "new_run" | "merged_queued" | "merged_running" | null;
 }
 
 export interface PluginIssueWakeupBatchResult {
   issueId: string;
+  /** See {@link PluginIssueWakeupResult.queued} — not a delivery receipt. */
   queued: boolean;
   runId: string | null;
+  /** See {@link PluginIssueWakeupResult.coalesced}. */
+  coalesced: boolean | null;
+  /** See {@link PluginIssueWakeupResult.delivered}. */
+  delivered: "new_run" | "merged_queued" | "merged_running" | null;
 }
 
 export interface PluginIssueRunSummary {

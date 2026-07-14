@@ -40,3 +40,11 @@ export const withdrawApprovalSchema = z.object({
 });
 
 export type WithdrawApproval = z.infer<typeof withdrawApprovalSchema>;
+
+// LOOA-296 stale-gate detector: mark a card premise-exempt (deliberately
+// pending on a done/cancelled source issue) so the detector never alarms on it.
+export const setPremiseExemptSchema = z.object({
+  reason: multilineTextSchema.optional().nullable(),
+});
+
+export type SetPremiseExempt = z.infer<typeof setPremiseExemptSchema>;

@@ -39,6 +39,7 @@ import {
   backfillPrincipalAccessCompatibility,
   bootstrapExecutionPolicyFromEnv,
   heartbeatService,
+  staleGateDetectorService,
   instanceSettingsService,
   reconcileCloudUpstreamRunsOnStartup,
   reconcilePersistedRuntimeServicesOnStartup,
@@ -893,6 +894,28 @@ export async function startServer(): Promise<StartedServer> {
           logger.error({ err }, "periodic heartbeat recovery failed");
         });
     }, config.heartbeatSchedulerIntervalMs);
+
+    // LOOA-296 stale-gate detector (gate-policy Rule 9): alarm the company
+    // CEO once per pending decision card whose source issue is already
+    // done/cancelled. Alarm-only — it never withdraws or decides. The first
+    // sweep fires one full interval after boot (not at startup) so operators
+    // have a window to premise-exempt deliberately-standing cards via the new
+    // routes before the detector sees them — a deploy restarts this process.
+    const staleGates = staleGateDetectorService(db as any, {
+      wakeup: (agentId, opts) => heartbeat.wakeup(agentId, opts),
+    });
+    setInterval(() => {
+      void staleGates
+        .sweep()
+        .then((result) => {
+          if (result.flagged > 0 || result.companiesSkippedNoCeo > 0 || result.wakesFailed > 0) {
+            logger.warn({ ...result }, "stale-gate sweep raised or deferred alarms");
+          }
+        })
+        .catch((err) => {
+          logger.error({ err }, "stale-gate sweep failed");
+        });
+    }, config.staleGateSweepIntervalMs);
   }
   
   if (config.databaseBackupEnabled) {

@@ -50,6 +50,7 @@ import {
   updateDocumentAnnotationThreadSchema,
   upsertIssueDocumentSchema,
   updateIssueSchema,
+  setPremiseExemptSchema,
   withdrawIssueThreadInteractionSchema,
   getClosedIsolatedExecutionWorkspaceMessage,
   isClosedIsolatedExecutionWorkspace,
@@ -90,9 +91,13 @@ import {
   routineService,
   workProductService,
 } from "../services/index.js";
+// Direct import (not via the services index) so partial index mocks in
+// existing route tests keep working — see routes/approvals.ts.
+import { staleGateDetectorService } from "../services/stale-gate-detector.js";
 import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized, unprocessable } from "../errors.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertPremiseExemptActor } from "./premise-exempt-authz.js";
 import {
   assertNoAgentHostWorkspaceCommandMutation,
   collectIssueWorkspaceCommandPaths,
@@ -6511,6 +6516,97 @@ export function issueRoutes(
       }
 
       res.json(interaction);
+    },
+  );
+
+  // LOOA-296 stale-gate detector: premise-exempt marker for issue-thread
+  // cards — parity with POST /approvals/:id/premise-exempt. A card
+  // deliberately left pending on a done/cancelled issue (record-keeping) is
+  // marked exempt so the detector never alarms the CEO about it. Exempting
+  // silences an alarm, so authz is decision-grade: the card's creator agent,
+  // the company's CEO agent, or an authenticated board identity. DELETE
+  // clears the mark and re-arms the card.
+  const staleGates = staleGateDetectorService(db, {
+    wakeup: (agentId, opts) => heartbeat.wakeup(agentId, opts),
+  });
+
+  async function requireInteractionForPremiseExempt(req: Request, res: Response) {
+    const id = req.params.id as string;
+    const interactionId = req.params.interactionId as string;
+    const issue = await svc.getById(id);
+    if (!issue) {
+      res.status(404).json({ error: "Issue not found" });
+      return null;
+    }
+    assertCompanyAccess(req, issue.companyId);
+    const interaction = await issueThreadInteractionsSvc.getById(interactionId);
+    if (!interaction || interaction.issueId !== issue.id) {
+      res.status(404).json({ error: "Interaction not found" });
+      return null;
+    }
+    return { issue, interaction };
+  }
+
+  router.post(
+    "/issues/:id/interactions/:interactionId/premise-exempt",
+    validate(setPremiseExemptSchema),
+    async (req, res) => {
+      const found = await requireInteractionForPremiseExempt(req, res);
+      if (!found) return;
+      const { issue, interaction } = found;
+      const actor = await assertPremiseExemptActor(
+        req,
+        { companyId: issue.companyId, createdByAgentId: interaction.createdByAgentId ?? null },
+        (lookupId) => agentsSvc.getById(lookupId),
+      );
+      const reason =
+        typeof req.body.reason === "string" && req.body.reason.trim() ? req.body.reason.trim() : null;
+      const updated = await staleGates.setInteractionPremiseExempt(interaction.id, reason, actor);
+      if (!updated) {
+        res.status(404).json({ error: "Interaction not found" });
+        return;
+      }
+      await logActivity(db, {
+        companyId: issue.companyId,
+        actorType: actor.agentId ? "agent" : "user",
+        actorId: actor.agentId ?? actor.userId ?? "board",
+        agentId: actor.agentId,
+        action: "issue.thread_interaction_premise_exempt_set",
+        entityType: "issue",
+        entityId: issue.id,
+        details: { interactionId: interaction.id, interactionKind: interaction.kind, reason },
+      });
+      res.json(updated);
+    },
+  );
+
+  router.delete(
+    "/issues/:id/interactions/:interactionId/premise-exempt",
+    async (req, res) => {
+      const found = await requireInteractionForPremiseExempt(req, res);
+      if (!found) return;
+      const { issue, interaction } = found;
+      const actor = await assertPremiseExemptActor(
+        req,
+        { companyId: issue.companyId, createdByAgentId: interaction.createdByAgentId ?? null },
+        (lookupId) => agentsSvc.getById(lookupId),
+      );
+      const updated = await staleGates.clearInteractionPremiseExempt(interaction.id);
+      if (!updated) {
+        res.status(404).json({ error: "Interaction not found" });
+        return;
+      }
+      await logActivity(db, {
+        companyId: issue.companyId,
+        actorType: actor.agentId ? "agent" : "user",
+        actorId: actor.agentId ?? actor.userId ?? "board",
+        agentId: actor.agentId,
+        action: "issue.thread_interaction_premise_exempt_cleared",
+        entityType: "issue",
+        entityId: issue.id,
+        details: { interactionId: interaction.id, interactionKind: interaction.kind },
+      });
+      res.json(updated);
     },
   );
 

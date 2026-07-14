@@ -415,6 +415,8 @@ export {
   type ResubmitApproval,
   type AddApprovalComment,
   type WithdrawApproval,
+  setPremiseExemptSchema,
+  type SetPremiseExempt,
 } from "./approval.js";
 
 export {

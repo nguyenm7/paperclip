@@ -374,14 +374,17 @@ function mergeAdapterRecoveryMetadata(input: {
       : {}),
   };
 }
+// Legacy allow-list: a reason here forces a NEW follow-up run instead of
+// coalescing into an already-running one. Do NOT enroll new reasons — since
+// LOOA-342, wakeup reports coalescing truthfully (`coalesced` / `delivered` on
+// the returned run), and callers that persist notified/raise-once markers must
+// gate on `delivered !== "merged_running"` and retry undelivered wakes
+// themselves (see the gateway aging sweep, paperclip-gateway/src/aging.ts).
+// `approval_approved` stays: an approval resolution must interrupt as its own
+// run — the requester is woken exactly once, so there is no retrying caller to
+// hand the truth to.
 const RUNNING_ISSUE_WAKE_REASONS_REQUIRING_FOLLOWUP = new Set([
   "approval_approved",
-  // The gateway aging-gate sweep (paperclip-gateway/src/aging.ts) stamps a 7-day
-  // re-nudge marker on any truthy wakeup return; coalescing its no-issue-scope wake
-  // into an already-running run would silently swallow the Rule-11 question while
-  // the sweep's ledger records it as delivered (LOOA-335).
-  "aging_gate_rule11",
-  "aging_gate_rule11_escalation",
 ]);
 const SESSIONED_LOCAL_ADAPTERS = new Set([
   "claude_local",
@@ -1515,6 +1518,31 @@ interface WakeupOptions {
   requestedByActorType?: "user" | "agent" | "system";
   requestedByActorId?: string | null;
   contextSnapshot?: Record<string, unknown>;
+}
+
+/**
+ * How a wake was (or was not) delivered to the target agent.
+ *
+ * - `new_run`: the wake got a run of its own; the prompt renders when it starts.
+ * - `merged_queued`: coalesced into a queued/scheduled_retry run that has not
+ *   started yet — the merged wakeMessage renders at run start, so the wake is
+ *   still delivered.
+ * - `merged_running`: coalesced into an already-RUNNING run whose adapter
+ *   process was spawned with its prompt before the merge and never re-reads
+ *   the context column. **The prompt will never be seen.** Callers that
+ *   persist a notified/raise-once marker must gate on
+ *   `delivered !== "merged_running"`, never on truthiness of the returned run
+ *   (LOOA-342; instances: LOOA-334, LOOA-335).
+ */
+export type WakeDelivery = "new_run" | "merged_queued" | "merged_running";
+
+export type EnqueuedWakeRun = typeof heartbeatRuns.$inferSelect & {
+  coalesced: boolean;
+  delivered: WakeDelivery;
+};
+
+function wakeDeliveryForCoalesceTarget(targetStatusBeforeMerge: string): WakeDelivery {
+  return targetStatusBeforeMerge === "running" ? "merged_running" : "merged_queued";
 }
 
 type UsageTotals = {
@@ -10430,7 +10458,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     await startNextQueuedRunForAgent(promotedRun.agentId);
   }
 
-  async function enqueueWakeup(agentId: string, opts: WakeupOptions = {}) {
+  async function enqueueWakeup(agentId: string, opts: WakeupOptions = {}): Promise<EnqueuedWakeRun | null> {
     const source = opts.source ?? "on_demand";
     const triggerDetail = opts.triggerDetail ?? null;
     const contextSnapshot: Record<string, unknown> = { ...(opts.contextSnapshot ?? {}) };
@@ -10960,6 +10988,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             && !shouldQueueFollowupForRunningWake
             && availableActiveExecutionRun
           ) {
+            const delivered = wakeDeliveryForCoalesceTarget(availableActiveExecutionRun.status);
             const mergedContextSnapshot = mergeCoalescedContextSnapshot(
               availableActiveExecutionRun.contextSnapshot,
               enrichedContextSnapshot,
@@ -10990,7 +11019,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               finishedAt: new Date(),
             });
 
-            return { kind: "coalesced" as const, run: mergedRun };
+            return { kind: "coalesced" as const, run: mergedRun, delivered };
           }
 
           if (availableActiveExecutionRun) {
@@ -11109,7 +11138,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       if (outcome.kind === "deferred" || outcome.kind === "skipped") return null;
       if (outcome.kind === "coalesced") {
         await startNextQueuedRunForAgent(agent.id);
-        return outcome.run;
+        return { ...outcome.run, coalesced: true, delivered: outcome.delivered };
       }
 
       const newRun = outcome.run;
@@ -11126,7 +11155,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       });
 
       await startNextQueuedRunForAgent(agent.id);
-      return newRun;
+      return { ...newRun, coalesced: false, delivered: "new_run" as const };
     }
 
     const activeRuns = await db
@@ -11160,6 +11189,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     );
 
     if (coalescedTargetRun) {
+      const delivered = wakeDeliveryForCoalesceTarget(coalescedTargetRun.status);
       const mergedContextSnapshot = mergeCoalescedContextSnapshot(
         coalescedTargetRun.contextSnapshot,
         enrichedContextSnapshot,
@@ -11189,7 +11219,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         runId: mergedRun.id,
         finishedAt: new Date(),
       });
-      return mergedRun;
+      return { ...mergedRun, coalesced: true, delivered };
     }
 
     const wakeupRequest = await db
@@ -11247,7 +11277,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
     await startNextQueuedRunForAgent(agent.id);
 
-    return newRun;
+    return { ...newRun, coalesced: false, delivered: "new_run" as const };
   }
 
   async function listProjectScopedRunIds(companyId: string, projectId: string) {

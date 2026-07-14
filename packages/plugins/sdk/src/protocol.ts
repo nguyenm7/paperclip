@@ -1253,7 +1253,7 @@ export interface WorkerToHostMethods {
   ];
   "agents.invoke": [
     params: { agentId: string; companyId: string; prompt: string; reason?: string },
-    result: { runId: string },
+    result: { runId: string; coalesced: boolean; delivered: "new_run" | "merged_queued" | "merged_running" },
   ];
   "agents.managed.get": [
     params: { agentKey: string; companyId: string },

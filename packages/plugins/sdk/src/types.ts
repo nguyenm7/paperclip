@@ -1606,8 +1606,24 @@ export interface PluginAgentsClient {
   pause(agentId: string, companyId: string): Promise<Agent>;
   /** Resume a paused agent (sets status to idle). Throws if terminated, pending_approval, or not found. Requires `agents.resume`. */
   resume(agentId: string, companyId: string): Promise<Agent>;
-  /** Invoke (wake up) an agent with a prompt payload. Throws if paused, terminated, pending_approval, or not found. Requires `agents.invoke`. */
-  invoke(agentId: string, companyId: string, opts: { prompt: string; reason?: string }): Promise<{ runId: string }>;
+  /**
+   * Invoke (wake up) an agent with a prompt payload. Throws if paused,
+   * terminated, pending_approval, or not found. Requires `agents.invoke`.
+   *
+   * The result reports how the wake was delivered. `delivered:
+   * "merged_running"` means the wake was coalesced into an already-running
+   * run whose process was spawned before the merge — **the prompt will never
+   * be rendered**. Callers that persist a notified/raise-once marker must
+   * gate on `delivered !== "merged_running"` and retry undelivered wakes on a
+   * later cycle; a truthy runId alone is not a delivery receipt (LOOA-342).
+   * `merged_queued` still delivers: the merged wake message renders when the
+   * queued run starts.
+   */
+  invoke(agentId: string, companyId: string, opts: { prompt: string; reason?: string }): Promise<{
+    runId: string;
+    coalesced: boolean;
+    delivered: "new_run" | "merged_queued" | "merged_running";
+  }>;
   /** Resolve and reconcile manifest-declared plugin-managed agents by stable key. Requires `agents.managed`. */
   managed: {
     get(agentKey: string, companyId: string): Promise<PluginManagedAgentResolution>;

@@ -182,6 +182,8 @@ import {
 } from "@paperclipai/adapter-utils";
 import {
   ADAPTER_CONFIG_REJECTED_ERROR_CODE,
+  BOUNDED_TRANSIENT_RETRY_DELAYS_MS,
+  BOUNDED_TRANSIENT_RETRY_JITTER_RATIO,
   PROVIDER_QUOTA_REJECTED_ERROR_FAMILY,
   isAdapterConfigRejectedError,
   readPaperclipSkillSyncPreference,
@@ -246,13 +248,11 @@ export {
   ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS,
 } from "./recovery/service.js";
 export const ACTIVE_RUN_OUTPUT_PROGRESS_FLUSH_INTERVAL_MS = 60 * 1000;
-export const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_DELAYS_MS = [
-  2 * 60 * 1000,
-  10 * 60 * 1000,
-  30 * 60 * 1000,
-  2 * 60 * 60 * 1000,
-] as const;
-const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_JITTER_RATIO = 0.25;
+// Single source of truth lives in adapter-utils: the claude-local adapter must
+// reason about the same ladder to decide whether a provider block outlasts every
+// retry we would attempt. A second copy here would drift silently (LOOA-360).
+export const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_DELAYS_MS = BOUNDED_TRANSIENT_RETRY_DELAYS_MS;
+const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_JITTER_RATIO = BOUNDED_TRANSIENT_RETRY_JITTER_RATIO;
 const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_REASON = "transient_failure";
 const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_WAKE_REASON = "transient_failure_retry";
 const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_MAX_ATTEMPTS = BOUNDED_TRANSIENT_HEARTBEAT_RETRY_DELAYS_MS.length;

@@ -21,6 +21,49 @@ export const ADAPTER_CONFIG_REJECTED_ERROR_CODE = "adapter_config_rejected";
  */
 export const PROVIDER_QUOTA_REJECTED_ERROR_FAMILY = "provider_quota_rejected";
 
+// The bounded transient-retry ladder. Defined here, rather than in the server,
+// because adapters must reason about the SAME numbers when they decide whether
+// a provider-imposed block outlasts every retry we would attempt. Two copies of
+// this policy would drift, and the drift is silent: too short a horizon
+// suppresses retries that would have succeeded.
+export const BOUNDED_TRANSIENT_RETRY_DELAYS_MS = [
+  2 * 60 * 1000,
+  10 * 60 * 1000,
+  30 * 60 * 1000,
+  2 * 60 * 60 * 1000,
+] as const;
+
+/** Each delay is jittered by ±this ratio, so the worst case is 1 + ratio. */
+export const BOUNDED_TRANSIENT_RETRY_JITTER_RATIO = 0.25;
+
+/**
+ * Latest a retry can still fire, measured from the first failure: every rung of
+ * the ladder stretched by maximum jitter (162m * 1.25 = 202.5m today).
+ *
+ * This is a FLOOR, not an exact bound — the retry runs themselves take wall
+ * clock time between attempts, which only pushes the final attempt later. Any
+ * cutoff derived from it must add margin on top.
+ */
+export const BOUNDED_TRANSIENT_RETRY_MAX_ELAPSED_MS = Math.round(
+  BOUNDED_TRANSIENT_RETRY_DELAYS_MS.reduce((total, delay) => total + delay, 0) *
+    (1 + BOUNDED_TRANSIENT_RETRY_JITTER_RATIO),
+);
+
+/**
+ * A provider block is only deterministic if it outlasts EVERY retry we would
+ * attempt. Getting this wrong in the tight direction is the dangerous one: it
+ * suppresses a retry that would have succeeded after the window reopened, and
+ * the agent goes silent instead of recovering (LOOA-365 review).
+ *
+ * So the cutoff is the last possible retry (above) plus a full 2h ladder rung of
+ * slack, which dominates any plausible run execution time between attempts. It
+ * also lands the cutoff (~5h22m) beyond the longest rolling `five_hour` window,
+ * so a rolling five-hour limit can never be classified as a permanent block —
+ * only genuinely long blocks (weekly / monthly / org-level, days out) clear it.
+ */
+export const PROVIDER_QUOTA_DETERMINISTIC_HORIZON_MS =
+  BOUNDED_TRANSIENT_RETRY_MAX_ELAPSED_MS + 2 * 60 * 60 * 1000;
+
 /** Structured detail carried on `resultJson.providerQuotaRejection`. */
 export type ProviderQuotaRejection = {
   model: string | null;

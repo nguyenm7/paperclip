@@ -4,6 +4,7 @@ import {
   asNumber,
   parseObject,
   parseJson,
+  PROVIDER_QUOTA_DETERMINISTIC_HORIZON_MS,
 } from "@paperclipai/adapter-utils/server-utils";
 
 const CLAUDE_AUTH_REQUIRED_RE = /(?:not\s+logged\s+in|please\s+log\s+in|please\s+run\s+`?claude\s+login`?|login\s+required|requires\s+login|unauthorized|authentication\s+required)/i;
@@ -450,17 +451,16 @@ export function isClaudeSafetyRefusalError(input: {
 }
 
 // A 429 is normally a throttle, and waiting is the right answer: the bounded
-// backoff ladder (~2h45m end to end) absorbs it. But the Claude stream also
-// reports *quota* rejections as 429s, and those are deterministic for the whole
-// window they name — `rate_limit_info.status: "rejected"` with an
-// `overageDisabledReason` such as `org_level_disabled_until` and a `resetsAt`
-// days out means every retry inside the window fails before a single token is
-// spent. LOOA-360 burned 10+ consecutive zero-cost runs on exactly that.
+// backoff ladder absorbs it. But the Claude stream also reports *quota*
+// rejections as 429s, and those are deterministic for the whole window they
+// name — `rate_limit_info.status: "rejected"` with a `resetsAt` days out means
+// every retry inside the window fails before a single token is spent. LOOA-360
+// burned 10+ consecutive zero-cost runs on exactly that.
 //
-// Only treat a rejection as deterministic when we can PROVE it outlasts the
-// retry ladder, so a rolling 5-hour/weekly limit that resets soon keeps its
-// existing backoff + retry-not-before behaviour.
-const CLAUDE_QUOTA_RETRY_HORIZON_MS = 3 * 60 * 60 * 1_000;
+// The cutoff is PROVIDER_QUOTA_DETERMINISTIC_HORIZON_MS, derived from the retry
+// ladder itself rather than hand-tuned here: a hand-picked constant drifts out
+// from under the ladder, and a cutoff shorter than the last possible retry
+// suppresses attempts that would have succeeded (LOOA-365 review).
 
 export type ClaudeQuotaRejection = {
   model: string | null;
@@ -531,13 +531,14 @@ export function extractClaudeQuotaRejection(
   const rateLimitType = asString(info.rateLimitType ?? info.rate_limit_type, "").trim() || null;
   const resetsAt = readRateLimitResetsAt(info);
 
-  // The window must provably outlast the retry ladder. With no `resetsAt` we
-  // cannot bound it, so an explicit org-level disable reason is the only signal
-  // we accept as open-ended; a bare rejection with no horizon stays transient.
-  const outlastsRetryLadder = resetsAt
-    ? resetsAt.getTime() > now.getTime() + CLAUDE_QUOTA_RETRY_HORIZON_MS
-    : Boolean(reason);
-  if (!outlastsRetryLadder) return null;
+  // A bounded `resetsAt` beyond the horizon is the ONLY thing that proves the
+  // block outlasts every retry. In particular an `overageDisabledReason` does
+  // not: it proves overage is unavailable, not that the included rolling quota
+  // stays blocked, so a rejection with no reset time stays transient and gets
+  // its normal (bounded) retries. Anything weaker than a proven horizon would
+  // fail closed on a window that was about to reopen (LOOA-365 review).
+  if (!resetsAt) return null;
+  if (resetsAt.getTime() <= now.getTime() + PROVIDER_QUOTA_DETERMINISTIC_HORIZON_MS) return null;
 
   const parsed = input.parsed ?? null;
   const status = parsed ? asNumber(parsed.api_error_status, 0) || null : null;

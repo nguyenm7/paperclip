@@ -44,14 +44,13 @@ import {
   shapePaperclipWorkspaceEnvForExecution,
   stringifyPaperclipWakePayload,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
-  PROVIDER_QUOTA_REJECTED_ERROR_FAMILY,
 } from "@paperclipai/adapter-utils/server-utils";
 import { shellQuote } from "@paperclipai/adapter-utils/ssh";
 import {
   parseClaudeStreamJson,
   describeClaudeFailure,
   detectClaudeLoginRequired,
-  extractClaudeQuotaRejection,
+  extractClaudeRateLimitRejection,
   extractClaudeRetryNotBefore,
   isClaudeMaxTurnsResult,
   isClaudeSafetyRefusalError,
@@ -860,11 +859,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           stderr: proc.stderr,
           errorMessage: fallbackErrorMessage,
         });
-      // Strict subset of transientUpstream: a hard quota rejection whose window
-      // outlasts the retry ladder is deterministic, so it escalates instead of
-      // retrying forever (LOOA-360).
-      const quotaRejection = transientUpstream
-        ? extractClaudeQuotaRejection({
+      // Strict refinement of transientUpstream: report the blocked window when
+      // the provider names one, so the server can retry AT the reset instead of
+      // burning attempts inside it. The permanence judgement is the server's —
+      // it depends on the retry ladder and the issue lock (LOOA-360).
+      const rateLimitRejection = transientUpstream
+        ? extractClaudeRateLimitRejection({
             parsed: null,
             stdout: proc.stdout,
             stderr: proc.stderr,
@@ -872,21 +872,22 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
             model,
           })
         : null;
-      const transientRetryNotBefore =
-        transientUpstream && !quotaRejection
-          ? extractClaudeRetryNotBefore({
-              parsed: null,
-              stdout: proc.stdout,
-              stderr: proc.stderr,
-              errorMessage: fallbackErrorMessage,
-            })
-          : null;
+      // A structured `resetsAt` is authoritative over the scraped "resets at 3pm"
+      // wording, so prefer it as the retry-not-before hint.
+      const transientRetryNotBefore = rateLimitRejection
+        ? new Date(rateLimitRejection.resetsAt)
+        : transientUpstream
+        ? extractClaudeRetryNotBefore({
+            parsed: null,
+            stdout: proc.stdout,
+            stderr: proc.stderr,
+            errorMessage: fallbackErrorMessage,
+          })
+        : null;
       const errorCode = loginMeta.requiresLogin
         ? "claude_auth_required"
         : safetyRefusal
         ? "claude_safety_refusal"
-        : quotaRejection
-        ? "claude_quota_rejected"
         : transientUpstream
         ? "claude_transient_upstream"
         : null;
@@ -896,23 +897,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         timedOut: false,
         errorMessage: fallbackErrorMessage,
         errorCode,
-        errorFamily: quotaRejection
-          ? PROVIDER_QUOTA_REJECTED_ERROR_FAMILY
-          : transientUpstream
-          ? "transient_upstream"
-          : null,
+        errorFamily: transientUpstream ? "transient_upstream" : null,
         retryNotBefore: transientRetryNotBefore ? transientRetryNotBefore.toISOString() : null,
         errorMeta,
         resultJson: {
           stdout: proc.stdout,
           stderr: proc.stderr,
-          ...(transientUpstream && !quotaRejection ? { errorFamily: "transient_upstream" } : {}),
-          ...(quotaRejection
-            ? {
-                errorFamily: PROVIDER_QUOTA_REJECTED_ERROR_FAMILY,
-                providerQuotaRejection: quotaRejection,
-              }
-            : {}),
+          ...(transientUpstream ? { errorFamily: "transient_upstream" } : {}),
+          ...(rateLimitRejection ? { providerRateLimitRejection: rateLimitRejection } : {}),
           ...(transientRetryNotBefore
             ? { retryNotBefore: transientRetryNotBefore.toISOString() }
             : {}),
@@ -992,11 +984,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         stderr: proc.stderr,
         errorMessage,
       });
-    // Strict subset of transientUpstream: a hard quota rejection whose window
-    // outlasts the retry ladder is deterministic, so it escalates instead of
-    // retrying forever (LOOA-360).
-    const quotaRejection = transientUpstream
-      ? extractClaudeQuotaRejection({
+    // Strict refinement of transientUpstream: report the blocked window when the
+    // provider names one, so the server can retry AT the reset instead of
+    // burning attempts inside it. The permanence judgement is the server's — it
+    // depends on the retry ladder and the issue lock (LOOA-360).
+    const rateLimitRejection = transientUpstream
+      ? extractClaudeRateLimitRejection({
           parsed,
           stdout: proc.stdout,
           stderr: proc.stderr,
@@ -1004,15 +997,18 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           model: parsedStream.model || asString(parsed.model, model),
         })
       : null;
-    const transientRetryNotBefore =
-      transientUpstream && !quotaRejection
-        ? extractClaudeRetryNotBefore({
-            parsed,
-            stdout: proc.stdout,
-            stderr: proc.stderr,
-            errorMessage,
-          })
-        : null;
+    // A structured `resetsAt` is authoritative over the scraped "resets at 3pm"
+    // wording, so prefer it as the retry-not-before hint.
+    const transientRetryNotBefore = rateLimitRejection
+      ? new Date(rateLimitRejection.resetsAt)
+      : transientUpstream
+      ? extractClaudeRetryNotBefore({
+          parsed,
+          stdout: proc.stdout,
+          stderr: proc.stderr,
+          errorMessage,
+        })
+      : null;
     const resolvedErrorCode = loginMeta.requiresLogin
       ? "claude_auth_required"
       : failed && clearSessionForMaxTurns
@@ -1021,8 +1017,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ? "claude_poisoned_previous_message_id"
       : safetyRefusal
       ? "claude_safety_refusal"
-      : quotaRejection
-      ? "claude_quota_rejected"
       : transientUpstream
       ? "claude_transient_upstream"
       : null;
@@ -1030,13 +1024,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ...parsed,
       ...(failed && clearSessionForMaxTurns ? { stopReason: "max_turns_exhausted" } : {}),
       ...(failed && poisonedPreviousMessageId ? { stopReason: "claude_poisoned_previous_message_id" } : {}),
-      ...(transientUpstream && !quotaRejection ? { errorFamily: "transient_upstream" } : {}),
-      ...(quotaRejection
-        ? {
-            errorFamily: PROVIDER_QUOTA_REJECTED_ERROR_FAMILY,
-            providerQuotaRejection: quotaRejection,
-          }
-        : {}),
+      ...(transientUpstream ? { errorFamily: "transient_upstream" } : {}),
+      ...(rateLimitRejection ? { providerRateLimitRejection: rateLimitRejection } : {}),
       ...(transientRetryNotBefore ? { retryNotBefore: transientRetryNotBefore.toISOString() } : {}),
       ...(transientRetryNotBefore ? { transientRetryNotBefore: transientRetryNotBefore.toISOString() } : {}),
     };
@@ -1047,11 +1036,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       timedOut: false,
       errorMessage,
       errorCode: resolvedErrorCode,
-      errorFamily: quotaRejection
-        ? PROVIDER_QUOTA_REJECTED_ERROR_FAMILY
-        : transientUpstream
-        ? "transient_upstream"
-        : null,
+      errorFamily: transientUpstream ? "transient_upstream" : null,
       retryNotBefore: transientRetryNotBefore ? transientRetryNotBefore.toISOString() : null,
       errorMeta,
       usage,

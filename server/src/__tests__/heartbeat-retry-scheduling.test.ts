@@ -1446,7 +1446,7 @@ describeEmbeddedPostgres("heartbeat bounded retry scheduling", () => {
     );
   });
 
-  it("schedules no retry for an org-disabled quota rejection whose window outlasts the ladder (LOOA-360)", async () => {
+  it("schedules no retry for a quota block whose window outlives the deferral budget (LOOA-360)", async () => {
     const companyId = randomUUID();
     const agentId = randomUUID();
     const runId = randomUUID();
@@ -1457,9 +1457,11 @@ describeEmbeddedPostgres("heartbeat bounded retry scheduling", () => {
       companyId,
       agentId,
       now,
-      errorCode: "claude_quota_rejected",
+      errorCode: "claude_transient_upstream",
       adapterType: "claude_local",
       resultJson: {
+        // What heartbeat finalize stamps once it decides the window outlives the
+        // deferral budget: leaves the transient family, carries no retry hint.
         errorFamily: "provider_quota_rejected",
         providerQuotaRejection: {
           model: "claude-fable-5",
@@ -1479,8 +1481,8 @@ describeEmbeddedPostgres("heartbeat bounded retry scheduling", () => {
     if (scheduled.outcome !== "not_scheduled") return;
     expect(scheduled.errorCode).toBe("provider_quota_rejected");
 
-    // The decisive assertion: no retry run and no wakeup were queued, so the
-    // agent cannot burn another zero-token run inside the blocked window.
+    // The decisive assertion: nothing queued. No retry run to burn a zero-token
+    // attempt, and no queued run holding this issue's execution lock for 5 days.
     const runs = await db
       .select({ id: heartbeatRuns.id, scheduledRetryAt: heartbeatRuns.scheduledRetryAt })
       .from(heartbeatRuns)
@@ -1494,5 +1496,33 @@ describeEmbeddedPostgres("heartbeat bounded retry scheduling", () => {
       .from(agentWakeupRequests)
       .where(eq(agentWakeupRequests.agentId, agentId));
     expect(wakeups).toHaveLength(0);
+  });
+
+  it("retries a short quota window AT the reset instead of burning attempts inside it (LOOA-360)", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const runId = randomUUID();
+    const now = new Date(2026, 6, 14, 10, 0, 0);
+    // Inside the deferral budget, so the run stays transient and simply waits.
+    const resetsAt = new Date(2026, 6, 14, 11, 30, 0);
+
+    await seedRetryFixture({
+      runId,
+      companyId,
+      agentId,
+      now,
+      errorCode: "claude_transient_upstream",
+      errorFamily: "transient_upstream",
+      adapterType: "claude_local",
+      retryNotBefore: resetsAt.toISOString(),
+    });
+
+    const scheduled = await heartbeat.scheduleBoundedRetry(runId, { now, random: () => 0.5 });
+
+    // Nothing is suppressed: the retry is scheduled, and it lands exactly when
+    // the window reopens rather than at the blind 2m first rung.
+    expect(scheduled.outcome).toBe("scheduled");
+    if (scheduled.outcome !== "scheduled") return;
+    expect(scheduled.dueAt.getTime()).toBe(resetsAt.getTime());
   });
 });

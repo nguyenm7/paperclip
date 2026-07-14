@@ -37,32 +37,31 @@ export const BOUNDED_TRANSIENT_RETRY_DELAYS_MS = [
 export const BOUNDED_TRANSIENT_RETRY_JITTER_RATIO = 0.25;
 
 /**
- * Latest a retry can still fire, measured from the first failure: every rung of
- * the ladder stretched by maximum jitter (162m * 1.25 = 202.5m today).
+ * How long we are willing to leave a retry queued for a provider window that has
+ * not reopened yet.
  *
- * This is a FLOOR, not an exact bound — the retry runs themselves take wall
- * clock time between attempts, which only pushes the final attempt later. Any
- * cutoff derived from it must add margin on top.
- */
-export const BOUNDED_TRANSIENT_RETRY_MAX_ELAPSED_MS = Math.round(
-  BOUNDED_TRANSIENT_RETRY_DELAYS_MS.reduce((total, delay) => total + delay, 0) *
-    (1 + BOUNDED_TRANSIENT_RETRY_JITTER_RATIO),
-);
-
-/**
- * A provider block is only deterministic if it outlasts EVERY retry we would
- * attempt. Getting this wrong in the tight direction is the dangerous one: it
- * suppresses a retry that would have succeeded after the window reopened, and
- * the agent goes silent instead of recovering (LOOA-365 review).
+ * This deliberately does NOT try to predict when the last retry would fire.
+ * Retry wall time is unbounded — each attempt is scheduled only after the
+ * previous run finishes, local adapters default to no timeout, and due runs can
+ * be promoted late — so no constant can prove "every retry lands inside the
+ * block" (LOOA-367 review). Any threshold that claims to is a guess wearing a
+ * proof's clothes.
  *
- * So the cutoff is the last possible retry (above) plus a full 2h ladder rung of
- * slack, which dominates any plausible run execution time between attempts. It
- * also lands the cutoff (~5h22m) beyond the longest rolling `five_hour` window,
- * so a rolling five-hour limit can never be classified as a permanent block —
- * only genuinely long blocks (weekly / monthly / org-level, days out) clear it.
+ * What we CAN bound is our own behaviour. Scheduling a retry transfers the
+ * issue's execution lock to the queued run (heartbeat scheduleBoundedRetryForRun),
+ * and a queued holder makes comments/PATCH/release 409 on that issue (LOOA-375).
+ * So a retry parked on a five-day quota window would freeze the issue for five
+ * days — worse than the burned runs we are fixing.
+ *
+ * Hence: if the window reopens within this budget, wait for it and retry exactly
+ * at the reset (no wasted attempts, and nothing is suppressed). If it reopens
+ * later, refuse to hold the lock — release the issue and escalate instead.
+ *
+ * The budget is the longest single deferral the retry system can already produce
+ * today, so this never holds an issue lock longer than the existing ladder can.
+ * The invariant is asserted in tests against the ladder above.
  */
-export const PROVIDER_QUOTA_DETERMINISTIC_HORIZON_MS =
-  BOUNDED_TRANSIENT_RETRY_MAX_ELAPSED_MS + 2 * 60 * 60 * 1000;
+export const MAX_DEFERRED_RETRY_LOCK_HOLD_MS = 2 * 60 * 60 * 1000;
 
 /** Structured detail carried on `resultJson.providerQuotaRejection`. */
 export type ProviderQuotaRejection = {

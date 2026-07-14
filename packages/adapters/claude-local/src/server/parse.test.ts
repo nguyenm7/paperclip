@@ -2,11 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   BOUNDED_TRANSIENT_RETRY_DELAYS_MS,
   BOUNDED_TRANSIENT_RETRY_JITTER_RATIO,
-  BOUNDED_TRANSIENT_RETRY_MAX_ELAPSED_MS,
-  PROVIDER_QUOTA_DETERMINISTIC_HORIZON_MS,
+  MAX_DEFERRED_RETRY_LOCK_HOLD_MS,
 } from "@paperclipai/adapter-utils/server-utils";
 import {
-  extractClaudeQuotaRejection,
+  extractClaudeRateLimitRejection,
   extractClaudeRetryNotBefore,
   isClaudeSafetyRefusalError,
   isClaudeTransientUpstreamError,
@@ -397,13 +396,10 @@ describe("extractClaudeRetryNotBefore", () => {
   });
 });
 
-// LOOA-360 / LOOA-365 review. The dangerous direction is suppressing a retry
-// that would have succeeded: the agent then goes silent instead of recovering.
-// So a rejection is only deterministic when a bounded `resetsAt` proves the
-// block outlasts EVERY retry we would attempt.
-describe("extractClaudeQuotaRejection", () => {
-  const NOW = new Date("2026-07-14T16:00:00.000Z");
-
+// LOOA-360 / LOOA-367 review. The adapter reports the FACT (what is blocked and
+// until when) and makes no permanence judgement -- that policy needs the retry
+// ladder and the issue lock, which live in the server.
+describe("extractClaudeRateLimitRejection", () => {
   function streamWithRateLimit(rateLimitInfo: Record<string, unknown>) {
     return [
       JSON.stringify({ type: "rate_limit_event", rate_limit_info: rateLimitInfo }),
@@ -417,108 +413,67 @@ describe("extractClaudeQuotaRejection", () => {
     ].join("\n");
   }
 
-  function epochSecondsFromNow(ms: number) {
-    return Math.floor((NOW.getTime() + ms) / 1_000);
-  }
-
-  // The horizon is derived from the ladder, not hand-tuned. If someone adds a
-  // rung or widens the jitter, this fires instead of silently suppressing
-  // retries that could still have fired. The original bug was a hand-picked
-  // 3h constant sitting UNDER a 202.5m worst-case ladder.
-  it("keeps the deterministic horizon beyond the last possible retry", () => {
-    const maxLadderElapsedMs =
-      BOUNDED_TRANSIENT_RETRY_DELAYS_MS.reduce((total, delay) => total + delay, 0) *
-      (1 + BOUNDED_TRANSIENT_RETRY_JITTER_RATIO);
-    expect(BOUNDED_TRANSIENT_RETRY_MAX_ELAPSED_MS).toBe(Math.round(maxLadderElapsedMs));
-    expect(PROVIDER_QUOTA_DETERMINISTIC_HORIZON_MS).toBeGreaterThan(maxLadderElapsedMs);
-    // A rolling five-hour window can never clear the horizon, so it can never be
-    // mistaken for a permanent block.
-    expect(PROVIDER_QUOTA_DETERMINISTIC_HORIZON_MS).toBeGreaterThan(5 * 60 * 60 * 1_000);
+  // Non-vacuous on purpose: the budget is a policy constant and the ladder is an
+  // independent one, so raising the budget past the longest deferral the retry
+  // system can already produce FAILS this. The previous revision asserted
+  // `horizon > maxElapsed` where the horizon was derived as `maxElapsed + 2h` --
+  // a tautology that could never fail, which certified a guarantee we did not
+  // have (LOOA-367 review).
+  it("never parks a retry longer than the retry ladder's own worst-case deferral", () => {
+    const longestJitteredRung =
+      Math.max(...BOUNDED_TRANSIENT_RETRY_DELAYS_MS) * (1 + BOUNDED_TRANSIENT_RETRY_JITTER_RATIO);
+    expect(MAX_DEFERRED_RETRY_LOCK_HOLD_MS).toBeLessThanOrEqual(longestJitteredRung);
   });
 
-  it("classifies the org-disabled spend-limit block (resetsAt days out) as deterministic", () => {
-    const resetsAt = epochSecondsFromNow(5 * 24 * 60 * 60 * 1_000);
+  it("reports the blocked window from the org-disabled spend-limit stream", () => {
+    const resetsAtEpochSeconds = 1784448000; // 2026-07-19T08:00:00Z
     expect(
-      extractClaudeQuotaRejection(
-        {
-          parsed: {
-            is_error: true,
-            api_error_status: 429,
-            terminal_reason: "api_error",
-            result: "You've hit your monthly spend limit.",
-          },
-          stdout: streamWithRateLimit({
-            status: "rejected",
-            resetsAt,
-            rateLimitType: "seven_day_overage_included",
-            overageStatus: "rejected",
-            overageDisabledReason: "org_level_disabled_until",
-            isUsingOverage: false,
-          }),
-          model: "claude-fable-5",
-        },
-        NOW,
-      ),
-    ).toMatchObject({
+      extractClaudeRateLimitRejection({
+        parsed: { is_error: true, api_error_status: 429, result: "You've hit your monthly spend limit." },
+        stdout: streamWithRateLimit({
+          status: "rejected",
+          resetsAt: resetsAtEpochSeconds,
+          rateLimitType: "seven_day_overage_included",
+          overageStatus: "rejected",
+          overageDisabledReason: "org_level_disabled_until",
+          isUsingOverage: false,
+        }),
+        model: "claude-fable-5",
+      }),
+    ).toEqual({
       model: "claude-fable-5",
+      resetsAt: "2026-07-19T08:00:00.000Z",
       reason: "org_level_disabled_until",
-      resetsAt: new Date(resetsAt * 1_000).toISOString(),
+      overageStatus: "rejected",
+      rateLimitType: "seven_day_overage_included",
       status: 429,
+      message: "You've hit your monthly spend limit.",
     });
   });
 
-  it("keeps a rejection whose reset lands inside the jittered retry ladder transient", () => {
-    // Rook's repro: 190 minutes out. The old 180m horizon called this permanent,
-    // but a max-jitter fourth retry fires at ~202.5m — after the reset.
-    expect(
-      extractClaudeQuotaRejection(
-        {
-          stdout: streamWithRateLimit({
-            status: "rejected",
-            resetsAt: epochSecondsFromNow(190 * 60 * 1_000),
-            rateLimitType: "five_hour",
-            overageStatus: "rejected",
-          }),
-          model: "claude-fable-5",
-        },
-        NOW,
-      ),
-    ).toBeNull();
-  });
-
-  it("keeps an overage-disabled rejection with no reset time transient", () => {
+  it("requires a bounded reset time -- an overage-disabled reason alone is not one", () => {
     // Rook's repro: `overageDisabledReason` proves overage is unavailable, NOT
     // that the included rolling quota stays blocked. With no reset time there is
-    // no proven horizon, so it must not be treated as permanent.
+    // no window, so this stays an ordinary transient rate limit.
     expect(
-      extractClaudeQuotaRejection(
-        {
-          stdout: streamWithRateLimit({
-            status: "rejected",
-            rateLimitType: "five_hour",
-            overageStatus: "rejected",
-            overageDisabledReason: "user_level_disabled",
-          }),
-          model: "claude-fable-5",
-        },
-        NOW,
-      ),
+      extractClaudeRateLimitRejection({
+        stdout: streamWithRateLimit({
+          status: "rejected",
+          rateLimitType: "five_hour",
+          overageStatus: "rejected",
+          overageDisabledReason: "user_level_disabled",
+        }),
+        model: "claude-fable-5",
+      }),
     ).toBeNull();
   });
 
   it("ignores benign and absent rate-limit events", () => {
     expect(
-      extractClaudeQuotaRejection(
-        {
-          stdout: streamWithRateLimit({
-            status: "allowed",
-            resetsAt: epochSecondsFromNow(5 * 24 * 60 * 60 * 1_000),
-            overageStatus: "allowed",
-          }),
-        },
-        NOW,
-      ),
+      extractClaudeRateLimitRejection({
+        stdout: streamWithRateLimit({ status: "allowed", resetsAt: 1784448000, overageStatus: "allowed" }),
+      }),
     ).toBeNull();
-    expect(extractClaudeQuotaRejection({ stdout: "" }, NOW)).toBeNull();
+    expect(extractClaudeRateLimitRejection({ stdout: "" })).toBeNull();
   });
 });

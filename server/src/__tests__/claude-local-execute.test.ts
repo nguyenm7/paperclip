@@ -1328,8 +1328,7 @@ describe("claude execute", () => {
     }
   }
 
-  it("classifies an org-disabled spend-limit 429 as a deterministic quota rejection, not a retryable throttle (LOOA-360)", async () => {
-    // resetsAt days out: provably outlasts the bounded retry ladder.
+  it("reports the blocked window on an org-disabled spend-limit 429 and defers the retry to the reset (LOOA-360)", async () => {
     const resetsAtEpochSeconds = Math.floor(Date.now() / 1_000) + 5 * 24 * 60 * 60;
     const result = await runQuotaRejectionExecute({
       label: "quota-org-disabled",
@@ -1343,26 +1342,25 @@ describe("claude execute", () => {
       },
     });
 
+    const resetsAtIso = new Date(resetsAtEpochSeconds * 1_000).toISOString();
     expect(result.exitCode).toBe(1);
-    expect(result.errorCode).toBe("claude_quota_rejected");
-    expect(result.errorFamily).toBe("provider_quota_rejected");
-    // The retry contract keys off errorFamily === "transient_upstream", so this
-    // run must NOT carry a retry hint: no further retries inside the window.
-    expect(result.retryNotBefore ?? null).toBeNull();
-    expect(result.resultJson?.retryNotBefore).toBeUndefined();
-    expect(result.resultJson?.errorFamily).toBe("provider_quota_rejected");
-    expect(result.resultJson?.providerQuotaRejection).toMatchObject({
+    // The adapter reports the fact and stays transient; the SERVER decides what
+    // the window means, because that turns on the retry ladder and the issue lock.
+    expect(result.errorCode).toBe("claude_transient_upstream");
+    expect(result.errorFamily).toBe("transient_upstream");
+    expect(result.resultJson?.providerRateLimitRejection).toMatchObject({
       model: "claude-fable-5",
-      resetsAt: new Date(resetsAtEpochSeconds * 1_000).toISOString(),
+      resetsAt: resetsAtIso,
       reason: "org_level_disabled_until",
       overageStatus: "rejected",
       rateLimitType: "seven_day_overage_included",
       status: 429,
     });
+    // The structured reset is authoritative: never retry before the window reopens.
+    expect(result.retryNotBefore).toBe(resetsAtIso);
   });
 
-  it("keeps a plain rate-limit 429 whose window resets inside the retry ladder on the transient backoff (LOOA-360)", async () => {
-    // Same 429, but a rolling window that reopens in 30m — the backoff absorbs it.
+  it("prefers the structured reset over the scraped wording for a short rolling window (LOOA-360)", async () => {
     const resetsAtEpochSeconds = Math.floor(Date.now() / 1_000) + 30 * 60;
     const result = await runQuotaRejectionExecute({
       label: "quota-transient",
@@ -1378,8 +1376,9 @@ describe("claude execute", () => {
     expect(result.exitCode).toBe(1);
     expect(result.errorCode).toBe("claude_transient_upstream");
     expect(result.errorFamily).toBe("transient_upstream");
-    expect(result.resultJson?.errorFamily).toBe("transient_upstream");
-    expect(result.resultJson?.providerQuotaRejection).toBeUndefined();
+    // Retried, but at the reset rather than blindly at the 2m first rung -- so no
+    // attempt is burned inside the window and nothing is suppressed.
+    expect(result.retryNotBefore).toBe(new Date(resetsAtEpochSeconds * 1_000).toISOString());
   });
 
   it("auto-rotates session on previous_message_id 400 (synthetic-msg poisoning) and succeeds on retry", async () => {

@@ -4,7 +4,6 @@ import {
   asNumber,
   parseObject,
   parseJson,
-  PROVIDER_QUOTA_DETERMINISTIC_HORIZON_MS,
 } from "@paperclipai/adapter-utils/server-utils";
 
 const CLAUDE_AUTH_REQUIRED_RE = /(?:not\s+logged\s+in|please\s+log\s+in|please\s+run\s+`?claude\s+login`?|login\s+required|requires\s+login|unauthorized|authentication\s+required)/i;
@@ -450,21 +449,21 @@ export function isClaudeSafetyRefusalError(input: {
   return CLAUDE_SAFETY_REFUSAL_RE.test(haystack);
 }
 
-// A 429 is normally a throttle, and waiting is the right answer: the bounded
-// backoff ladder absorbs it. But the Claude stream also reports *quota*
-// rejections as 429s, and those are deterministic for the whole window they
-// name — `rate_limit_info.status: "rejected"` with a `resetsAt` days out means
-// every retry inside the window fails before a single token is spent. LOOA-360
-// burned 10+ consecutive zero-cost runs on exactly that.
+// A 429 is normally a throttle. But the Claude stream also reports *quota*
+// rejections as 429s, and those name the window they are blocked for:
+// `rate_limit_info.status: "rejected"` with a `resetsAt`. Every attempt before
+// that reset fails before a single token is spent — LOOA-360 burned 10+
+// consecutive zero-cost runs on exactly that.
 //
-// The cutoff is PROVIDER_QUOTA_DETERMINISTIC_HORIZON_MS, derived from the retry
-// ladder itself rather than hand-tuned here: a hand-picked constant drifts out
-// from under the ladder, and a cutoff shorter than the last possible retry
-// suppresses attempts that would have succeeded (LOOA-365 review).
+// This function reports the FACT and nothing more: what is blocked and until
+// when. It deliberately makes no judgement about whether the block is
+// "permanent", because that judgement depends on the retry ladder and the issue
+// execution lock — server policy the adapter cannot see (LOOA-367 review).
 
-export type ClaudeQuotaRejection = {
+export type ClaudeRateLimitRejection = {
   model: string | null;
-  resetsAt: string | null;
+  /** Always present: a rejection without a bounded reset time is not reported. */
+  resetsAt: string;
   reason: string | null;
   overageStatus: string | null;
   rateLimitType: string | null;
@@ -506,39 +505,30 @@ function readRateLimitResetsAt(info: Record<string, unknown>): Date | null {
 }
 
 /**
- * Classify a hard, window-long quota rejection out of an otherwise-transient
- * rate-limit failure. Callers MUST only invoke this for runs that already
- * classified as transient-upstream, which keeps the deterministic branch a
- * strict subset of the transient one: it can convert a would-be retry into an
- * escalation, but can never invent a new failure class.
+ * Report a rate-limit rejection that names the window it is blocked for.
+ *
+ * Callers MUST only invoke this for runs that already classified as
+ * transient-upstream, which keeps this a strict refinement of the transient
+ * branch: it can only ever make an existing retry smarter or escalate it. It
+ * can never invent a new failure class.
+ *
+ * A bounded `resetsAt` is required. In particular an `overageDisabledReason` is
+ * NOT accepted as a substitute: it proves overage is unavailable, not that the
+ * included rolling quota stays blocked, so a rejection with no reset time keeps
+ * its ordinary backoff (LOOA-365 review).
  */
-export function extractClaudeQuotaRejection(
-  input: {
-    parsed?: Record<string, unknown> | null;
-    stdout?: string | null;
-    stderr?: string | null;
-    errorMessage?: string | null;
-    model?: string | null;
-  },
-  now = new Date(),
-): ClaudeQuotaRejection | null {
+export function extractClaudeRateLimitRejection(input: {
+  parsed?: Record<string, unknown> | null;
+  stdout?: string | null;
+  stderr?: string | null;
+  errorMessage?: string | null;
+  model?: string | null;
+}): ClaudeRateLimitRejection | null {
   const info = readRejectedRateLimitInfo(input.stdout ?? "");
   if (!info) return null;
 
-  const reason =
-    asString(info.overageDisabledReason ?? info.overage_disabled_reason, "").trim() || null;
-  const overageStatus = asString(info.overageStatus ?? info.overage_status, "").trim() || null;
-  const rateLimitType = asString(info.rateLimitType ?? info.rate_limit_type, "").trim() || null;
   const resetsAt = readRateLimitResetsAt(info);
-
-  // A bounded `resetsAt` beyond the horizon is the ONLY thing that proves the
-  // block outlasts every retry. In particular an `overageDisabledReason` does
-  // not: it proves overage is unavailable, not that the included rolling quota
-  // stays blocked, so a rejection with no reset time stays transient and gets
-  // its normal (bounded) retries. Anything weaker than a proven horizon would
-  // fail closed on a window that was about to reopen (LOOA-365 review).
   if (!resetsAt) return null;
-  if (resetsAt.getTime() <= now.getTime() + PROVIDER_QUOTA_DETERMINISTIC_HORIZON_MS) return null;
 
   const parsed = input.parsed ?? null;
   const status = parsed ? asNumber(parsed.api_error_status, 0) || null : null;
@@ -549,10 +539,11 @@ export function extractClaudeQuotaRejection(
 
   return {
     model: (input.model ?? "").trim() || null,
-    resetsAt: resetsAt ? resetsAt.toISOString() : null,
-    reason,
-    overageStatus,
-    rateLimitType,
+    resetsAt: resetsAt.toISOString(),
+    reason:
+      asString(info.overageDisabledReason ?? info.overage_disabled_reason, "").trim() || null,
+    overageStatus: asString(info.overageStatus ?? info.overage_status, "").trim() || null,
+    rateLimitType: asString(info.rateLimitType ?? info.rate_limit_type, "").trim() || null,
     status,
     message: message ? message.slice(0, 2_000) : null,
   };

@@ -184,6 +184,7 @@ import {
   ADAPTER_CONFIG_REJECTED_ERROR_CODE,
   BOUNDED_TRANSIENT_RETRY_DELAYS_MS,
   BOUNDED_TRANSIENT_RETRY_JITTER_RATIO,
+  MAX_DEFERRED_RETRY_LOCK_HOLD_MS,
   PROVIDER_QUOTA_REJECTED_ERROR_FAMILY,
   isAdapterConfigRejectedError,
   readPaperclipSkillSyncPreference,
@@ -963,17 +964,57 @@ function isModelSafetyRefusalRun(
   return run?.errorCode === MODEL_SAFETY_REFUSAL_ERROR_CODE;
 }
 
-// A hard provider quota rejection (monthly spend limit, org-level overage
-// disable) is deterministic for the entire window it names: every retry inside
-// that window fails before a single token is spent. The finalize path already
-// skips the retry chain, because readTransientRecoveryContractFromRun only
-// honours "transient_upstream" — but suppress it at the scheduler too, so a
-// caller that reaches the scheduler without the finalize gate cannot reopen the
-// loop. LOOA-360 burned 10+ consecutive zero-cost runs on one of these.
+// A hard provider quota rejection is a rate-limit block whose window does not
+// reopen inside the deferral budget. The finalize path skips the retry chain for
+// these, because readTransientRecoveryContractFromRun only honours
+// "transient_upstream" — but suppress it at the scheduler too, so a caller that
+// reaches the scheduler without the finalize gate cannot reopen the loop.
+// LOOA-360 burned 10+ consecutive zero-cost runs on one of these.
 function isProviderQuotaRejectedRun(
   run: Pick<typeof heartbeatRuns.$inferSelect, "errorCode" | "resultJson"> | null | undefined,
 ) {
   return run ? readHeartbeatRunErrorFamily(run) === PROVIDER_QUOTA_REJECTED_ERROR_FAMILY : false;
+}
+
+/**
+ * Decide what a provider-named rate-limit block means for the retry chain.
+ *
+ * The adapter reports only the FACT — what is blocked and until when. The policy
+ * is here, because it turns on two things the adapter cannot see: the retry
+ * ladder, and the fact that scheduling a retry hands the issue's execution lock
+ * to the queued run (scheduleBoundedRetryForRun below), which 409s writes to that
+ * issue until it starts.
+ *
+ * - Window reopens within the deferral budget → keep it transient and let the
+ *   existing retry-not-before machinery wait for the reset. The retry fires when
+ *   it can actually succeed, so nothing is suppressed and no attempt is burned
+ *   inside the window.
+ * - Window reopens later → refuse to park a retry on it. Holding an issue's
+ *   execution lock for hours or days is a worse failure than the burned runs we
+ *   are fixing, so release the issue and escalate instead.
+ *
+ * Note what this does NOT claim: it never asserts that the block outlasts every
+ * retry we might have attempted. Retry wall time is unbounded (runs are
+ * scheduled only after their predecessor finishes, local adapters default to no
+ * timeout), so that claim is unprovable — an earlier revision of this fix tried
+ * to make it with a constant and was rightly rejected (LOOA-367 review).
+ */
+function omitKeys(source: Record<string, unknown>, keys: string[]) {
+  const next = { ...source };
+  for (const key of keys) delete next[key];
+  return next;
+}
+
+function readProviderQuotaBlock(
+  resultJson: Record<string, unknown> | null | undefined,
+  now: Date,
+): Record<string, unknown> | null {
+  const rejection = parseObject(resultJson?.providerRateLimitRejection);
+  const resetsAtRaw = readNonEmptyString(rejection.resetsAt);
+  if (!resetsAtRaw) return null;
+  const resetsAt = new Date(resetsAtRaw);
+  if (Number.isNaN(resetsAt.getTime())) return null;
+  return resetsAt.getTime() > now.getTime() + MAX_DEFERRED_RETRY_LOCK_HOLD_MS ? rejection : null;
 }
 
 async function hasGitMetadata(cwd: string | null | undefined) {
@@ -9354,13 +9395,31 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             } as Record<string, unknown>)
           : null;
 
+      // A rate-limit block whose window outlives the deferral budget leaves the
+      // transient family: parking a retry on it would hold the issue's execution
+      // lock until the reset. Escalate and release instead (LOOA-360).
+      const providerQuotaBlock =
+        outcome === "failed"
+          ? readProviderQuotaBlock(adapterResult.resultJson, new Date())
+          : null;
       const persistedResultJson = mergeHeartbeatRunResultJson(
         mergeRunStopMetadataForAgent(agent, outcome, {
           resultJson: mergeModelProfileRunMetadata(
             mergeAdapterRecoveryMetadata({
-              resultJson: adapterResult.resultJson ?? null,
-              errorFamily: adapterResult.errorFamily ?? null,
-              retryNotBefore: adapterResult.retryNotBefore ?? null,
+              resultJson: providerQuotaBlock
+                ? {
+                    ...omitKeys(adapterResult.resultJson ?? {}, [
+                      "retryNotBefore",
+                      "transientRetryNotBefore",
+                    ]),
+                    providerQuotaRejection: providerQuotaBlock,
+                  }
+                : (adapterResult.resultJson ?? null),
+              errorFamily: providerQuotaBlock
+                ? PROVIDER_QUOTA_REJECTED_ERROR_FAMILY
+                : (adapterResult.errorFamily ?? null),
+              // Drop the retry hint with it: nothing should be scheduled.
+              retryNotBefore: providerQuotaBlock ? null : (adapterResult.retryNotBefore ?? null),
             }),
             modelProfileApplication,
           ),

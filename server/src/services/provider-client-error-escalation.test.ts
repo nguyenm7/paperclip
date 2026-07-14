@@ -258,11 +258,39 @@ describe("provider client-error escalation", () => {
 
       expect(addSystemIssueComment).toHaveBeenCalledOnce();
       const body = String(addSystemIssueComment.mock.calls[0]?.[1] ?? "");
-      expect(body).toContain("## Provider quota exhausted — retries stopped");
+      expect(body).toContain("## Provider quota exhausted — automatic retries stopped");
       expect(body).toContain("claude-fable-5");
       expect(body).toContain("2026-07-19T08:00:00.000Z");
       expect(body).toContain("org_level_disabled_until");
-      expect(body).toContain("no further retries are scheduled");
+      // The reason we stopped, stated as policy: we refuse to hold the issue lock
+      // for the window. An operator reading this must be able to act on it.
+      expect(body).toContain("holds this issue's execution lock");
+      expect(body).toContain("wake this agent again at or after");
+    });
+
+    // LOOA-379 review: the escalation is the operator-facing contract, and an
+    // earlier revision claimed the block "lasts longer than Paperclip's retry
+    // ladder" and that "every retry inside this window fails". That proof was
+    // retracted (LOOA-367) — retry wall time has no upper bound, so nothing can
+    // establish it. We stop because we will not park the issue lock that long.
+    // Pin the retraction: this fails if the unprovable claim returns to the wire.
+    it("never claims the block outlasts the retry ladder or that every retry is futile", async () => {
+      const addSystemIssueComment = vi.fn().mockResolvedValue({ id: "comment-4" });
+      await surfaceProviderClientError(
+        { run: makeQuotaRun(), agent: { name: "CTO", adapterType: "claude_local" } },
+        { findRecentEscalation: vi.fn().mockResolvedValue(null), addSystemIssueComment },
+      );
+
+      const body = String(addSystemIssueComment.mock.calls[0]?.[1] ?? "").toLowerCase();
+      for (const forbidden of [
+        "retry ladder",
+        "every retry",
+        "outlasts",
+        "guaranteed to fail",
+        "bounded retry window",
+      ]) {
+        expect(body).not.toContain(forbidden);
+      }
     });
 
     it("dedups across retry runs by (model, window) rather than per run", async () => {

@@ -456,9 +456,10 @@ export function isClaudeSafetyRefusalError(input: {
 // consecutive zero-cost runs on exactly that.
 //
 // This function reports the FACT and nothing more: what is blocked and until
-// when. It deliberately makes no judgement about whether the block is
-// "permanent", because that judgement depends on the retry ladder and the issue
-// execution lock — server policy the adapter cannot see (LOOA-367 review).
+// when. It deliberately makes no judgement about whether the block should stop
+// the retry chain, because that turns on how long the server is willing to hold
+// an issue's execution lock for a queued retry — policy the adapter cannot see
+// (LOOA-367 review).
 
 export type ClaudeRateLimitRejection = {
   model: string | null;

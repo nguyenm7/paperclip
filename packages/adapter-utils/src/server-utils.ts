@@ -14,18 +14,20 @@ import type {
 export const ADAPTER_CONFIG_REJECTED_ERROR_CODE = "adapter_config_rejected";
 
 /**
- * Error family for a hard provider quota / spend-limit rejection whose blocked
- * window outlasts the bounded retry ladder. Runs carrying this family are
- * deterministic for the whole window — every retry fails before a token is
- * spent — so they must be escalated rather than retried (LOOA-360).
+ * Error family for a provider quota / spend-limit rejection whose blocked window
+ * reopens later than MAX_DEFERRED_RETRY_LOCK_HOLD_MS. Runs carrying this family
+ * are escalated rather than retried — not because every retry is proven futile
+ * (see MAX_DEFERRED_RETRY_LOCK_HOLD_MS: that claim is unprovable), but because
+ * parking a retry until the reset would hold the issue's execution lock for the
+ * whole window (LOOA-360).
  */
 export const PROVIDER_QUOTA_REJECTED_ERROR_FAMILY = "provider_quota_rejected";
 
 // The bounded transient-retry ladder. Defined here, rather than in the server,
-// because adapters must reason about the SAME numbers when they decide whether
-// a provider-imposed block outlasts every retry we would attempt. Two copies of
-// this policy would drift, and the drift is silent: too short a horizon
-// suppresses retries that would have succeeded.
+// because MAX_DEFERRED_RETRY_LOCK_HOLD_MS below is only defensible while it stays
+// inside the longest deferral this ladder already produces, and that invariant is
+// asserted against these exact numbers. Two copies would drift silently, and the
+// assertion would quietly stop binding.
 export const BOUNDED_TRANSIENT_RETRY_DELAYS_MS = [
   2 * 60 * 1000,
   10 * 60 * 1000,

@@ -220,9 +220,9 @@ export function buildRunRejectionComment(input: {
       .filter(Boolean)
       .join(", ");
     return [
-      "## Provider quota exhausted — retries stopped",
+      "## Provider quota exhausted — automatic retries stopped",
       "",
-      `The provider rejected ${input.agentName}'s run at the quota level, and the block lasts longer than Paperclip's retry ladder. Every retry inside this window fails before a single token is spent, so no further retries are scheduled.`,
+      `The provider rejected ${input.agentName}'s run at the quota level and named the window it is blocked for. That window is longer than Paperclip is willing to keep a retry queued: a queued retry holds this issue's execution lock until it runs, so parking one until the reset would freeze the issue for the whole window. Paperclip released the lock and stopped here instead of waiting.`,
       "",
       `- Adapter: \`${input.adapterType}\``,
       ...(detail.model ? [`- Model: \`${detail.model}\``] : []),
@@ -230,7 +230,7 @@ export function buildRunRejectionComment(input: {
       `- Blocked until: ${window}`,
       ...(limitDetail ? [`- Provider detail: ${limitDetail}`] : []),
       ...(detail.status ? [`- Provider status: \`${detail.status}\``] : []),
-      "- Next action: move this agent to a model with available quota, or raise the spend limit, before waking it again. The quota will not recover on its own inside the window above.",
+      `- Next action: either wake this agent again at or after ${window}, when the provider says the quota reopens, or move it to a model with available quota (or raise the spend limit) to resume now. Paperclip will not retry on its own before then.`,
       ...(detail.message
         ? ["", "Provider response:", "", indentCodeBlock(detail.message)]
         : []),

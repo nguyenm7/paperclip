@@ -1260,9 +1260,9 @@ describe("claude execute", () => {
     }
   });
 
-  // LOOA-360: the org-disabled spend-limit 429. The retry ladder tops out around
-  // 2h45m, so a quota window that runs days out is deterministic — every retry
-  // inside it fails before a token is spent. Reproduces the real incident stream.
+  // LOOA-360: the org-disabled spend-limit 429. Reproduces the real incident
+  // stream — the adapter's job here is only to surface the window the provider
+  // named; whether that window is too long to park a retry on is the server's.
   async function runQuotaRejectionExecute(input: {
     label: string;
     rateLimitInfo: Record<string, unknown>;
@@ -1345,7 +1345,7 @@ describe("claude execute", () => {
     const resetsAtIso = new Date(resetsAtEpochSeconds * 1_000).toISOString();
     expect(result.exitCode).toBe(1);
     // The adapter reports the fact and stays transient; the SERVER decides what
-    // the window means, because that turns on the retry ladder and the issue lock.
+    // the window means, because that turns on the issue lock a queued retry holds.
     expect(result.errorCode).toBe("claude_transient_upstream");
     expect(result.errorFamily).toBe("transient_upstream");
     expect(result.resultJson?.providerRateLimitRejection).toMatchObject({

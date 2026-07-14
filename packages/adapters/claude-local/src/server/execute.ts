@@ -861,8 +861,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         });
       // Strict refinement of transientUpstream: report the blocked window when
       // the provider names one, so the server can retry AT the reset instead of
-      // burning attempts inside it. The permanence judgement is the server's —
-      // it depends on the retry ladder and the issue lock (LOOA-360).
+      // burning attempts inside it. Whether the window is too long to wait on is
+      // the server's call — it depends on the issue lock a queued retry would
+      // hold (LOOA-360).
       const rateLimitRejection = transientUpstream
         ? extractClaudeRateLimitRejection({
             parsed: null,
@@ -986,8 +987,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       });
     // Strict refinement of transientUpstream: report the blocked window when the
     // provider names one, so the server can retry AT the reset instead of
-    // burning attempts inside it. The permanence judgement is the server's — it
-    // depends on the retry ladder and the issue lock (LOOA-360).
+    // burning attempts inside it. Whether the window is too long to wait on is
+    // the server's call — it depends on the issue lock a queued retry would hold
+    // (LOOA-360).
     const rateLimitRejection = transientUpstream
       ? extractClaudeRateLimitRejection({
           parsed,

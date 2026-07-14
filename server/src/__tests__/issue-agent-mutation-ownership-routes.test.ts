@@ -1149,6 +1149,106 @@ describe("agent issue mutation checkout ownership", () => {
     );
   });
 
+  it("allows a displaced recovery participant to correct another agent's issue status (additive handoff)", async () => {
+    mockIssueService.getById.mockResolvedValue(
+      makeIssue({ status: "blocked", assigneeAgentId: ownerAgentId }),
+    );
+    mockIssueRecoveryActionService.getActiveForIssue.mockResolvedValue({
+      id: recoveryActionId,
+      ownerAgentId,
+      previousOwnerAgentId: peerAgentId,
+      returnOwnerAgentId: peerAgentId,
+    });
+
+    const res = await request(await createApp(peerActor())).patch(`/api/issues/${issueId}`).send({ status: "todo" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockIssueService.update).toHaveBeenCalledWith(
+      issueId,
+      expect.objectContaining({ status: "todo" }),
+    );
+  });
+
+  it("allows the recovery owner to correct the source issue after ownership returned to the displaced assignee", async () => {
+    mockIssueService.getById.mockResolvedValue(
+      makeIssue({ status: "in_progress", assigneeAgentId: ownerAgentId }),
+    );
+    mockIssueRecoveryActionService.getActiveForIssue.mockResolvedValue({
+      id: recoveryActionId,
+      ownerAgentId: peerAgentId,
+      previousOwnerAgentId: ownerAgentId,
+      returnOwnerAgentId: ownerAgentId,
+    });
+
+    const res = await request(await createApp(peerActor())).patch(`/api/issues/${issueId}`).send({ status: "todo" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockIssueService.assertCheckoutOwner).not.toHaveBeenCalled();
+  });
+
+  it("allows the assignee to correct a stuck in_progress status without the dead checkout lock when recovery names them", async () => {
+    mockIssueService.getById.mockResolvedValue(
+      makeIssue({ status: "in_progress", assigneeAgentId: ownerAgentId }),
+    );
+    mockIssueRecoveryActionService.getActiveForIssue.mockResolvedValue({
+      id: recoveryActionId,
+      ownerAgentId: peerAgentId,
+      previousOwnerAgentId: ownerAgentId,
+      returnOwnerAgentId: ownerAgentId,
+    });
+    mockIssueService.assertCheckoutOwner.mockRejectedValue(new Error("checkout lock must not be asserted"));
+
+    const res = await request(await createApp(ownerActor())).patch(`/api/issues/${issueId}`).send({ status: "todo" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockIssueService.assertCheckoutOwner).not.toHaveBeenCalled();
+  });
+
+  it("still rejects a peer who is not named on the active recovery action", async () => {
+    mockIssueService.getById.mockResolvedValue(
+      makeIssue({ status: "blocked", assigneeAgentId: ownerAgentId }),
+    );
+    mockIssueRecoveryActionService.getActiveForIssue.mockResolvedValue({
+      id: recoveryActionId,
+      ownerAgentId,
+      previousOwnerAgentId: ownerAgentId,
+      returnOwnerAgentId: ownerAgentId,
+    });
+
+    const res = await request(await createApp(peerActor())).patch(`/api/issues/${issueId}`).send({ status: "todo" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.error).toBe("Agent cannot mutate another agent's issue");
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+  });
+
+  it("allows the displaced return owner to resolve the recovery action on its former issue", async () => {
+    mockIssueService.getById.mockResolvedValue(
+      makeIssue({ status: "blocked", assigneeAgentId: ownerAgentId }),
+    );
+    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      ...makeIssue({ status: "blocked", assigneeAgentId: ownerAgentId }),
+      ...patch,
+    }));
+    mockIssueRecoveryActionService.getActiveForIssue.mockResolvedValue({
+      id: recoveryActionId,
+      ownerAgentId,
+      previousOwnerAgentId: peerAgentId,
+      returnOwnerAgentId: peerAgentId,
+    });
+
+    const res = await request(await createApp(peerActor()))
+      .post(`/api/issues/${issueId}/recovery-actions/resolve`)
+      .send({
+        actionId: recoveryActionId,
+        outcome: "restored",
+        sourceIssueStatus: "todo",
+      });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockIssueRecoveryActionService.resolveActiveForIssue).toHaveBeenCalled();
+  });
+
   it("uses the authorization decision path for assignment changes", async () => {
     const decide = vi.fn(async () => ({
       allowed: false,

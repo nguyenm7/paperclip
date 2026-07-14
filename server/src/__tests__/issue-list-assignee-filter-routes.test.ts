@@ -2,7 +2,15 @@ import { randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { agents, companies, companyMemberships, createDb, issues, principalPermissionGrants } from "@paperclipai/db";
+import {
+  agents,
+  authUsers,
+  companies,
+  companyMemberships,
+  createDb,
+  issues,
+  principalPermissionGrants,
+} from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -20,7 +28,7 @@ if (!embeddedPostgresSupport.supported) {
   );
 }
 
-describeEmbeddedPostgres("issue list routes assigneeAgentId filter", () => {
+describeEmbeddedPostgres("issue assignee read responses", () => {
   let db!: ReturnType<typeof createDb>;
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
 
@@ -34,6 +42,7 @@ describeEmbeddedPostgres("issue list routes assigneeAgentId filter", () => {
     await db.delete(agents);
     await db.delete(principalPermissionGrants);
     await db.delete(companyMemberships);
+    await db.delete(authUsers);
     await db.delete(companies);
   });
 
@@ -132,6 +141,12 @@ describeEmbeddedPostgres("issue list routes assigneeAgentId filter", () => {
 
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.body.map((issue: { id: string }) => issue.id)).toEqual([unassignedIssueId]);
+    expect(res.body[0]).toHaveProperty("assignee", null);
+
+    const detailRes = await request(app).get(`/api/issues/${unassignedIssueId}`);
+
+    expect(detailRes.status, JSON.stringify(detailRes.body)).toBe(200);
+    expect(detailRes.body).toHaveProperty("assignee", null);
   });
 
   it("keeps UUID assignee filtering behavior unchanged", async () => {
@@ -198,6 +213,72 @@ describeEmbeddedPostgres("issue list routes assigneeAgentId filter", () => {
 
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.body.map((issue: { id: string }) => issue.id)).toEqual([assignedIssueId]);
+    expect(res.body[0].assignee).toEqual({
+      type: "agent",
+      id: assigneeAgentId,
+      name: "Assignee",
+      role: "engineer",
+      title: null,
+      urlKey: "assignee",
+    });
+
+    const detailRes = await request(app).get(`/api/issues/${assignedIssueId}`);
+
+    expect(detailRes.status, JSON.stringify(detailRes.body)).toBe(200);
+    expect(detailRes.body.assignee).toEqual(res.body[0].assignee);
+  });
+
+  it("distinguishes user assignees from agent assignees", async () => {
+    const companyId = randomUUID();
+    const userId = randomUUID();
+    const userAssignedIssueId = randomUUID();
+    const now = new Date();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: uniqueIssuePrefix(),
+      requireBoardApprovalForNewAgents: false,
+    });
+    await seedCloudTenantMember(companyId);
+    await db.insert(authUsers).values({
+      id: userId,
+      name: "Board Reviewer",
+      email: "reviewer@example.com",
+      emailVerified: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.insert(companyMemberships).values({
+      companyId,
+      principalType: "user",
+      principalId: userId,
+      status: "active",
+      membershipRole: "member",
+      updatedAt: now,
+    });
+    await db.insert(issues).values({
+      id: userAssignedIssueId,
+      companyId,
+      title: "Human review",
+      status: "in_review",
+      priority: "medium",
+      assigneeUserId: userId,
+    });
+
+    const res = await request(createApp(companyId))
+      .get(`/api/companies/${companyId}/issues`)
+      .query({ status: "in_review", limit: "20" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body[0].assignee).toEqual({
+      type: "user",
+      id: userId,
+      name: "Board Reviewer",
+      role: "member",
+      title: null,
+      urlKey: null,
+    });
   });
 
   it("returns 422 for malformed assigneeAgentId filters", async () => {

@@ -81,6 +81,18 @@ const mockIssueReferenceService = vi.hoisted(() => ({
   syncIssue: vi.fn(async () => undefined),
 }));
 
+const mockIssueAssigneeSummary = vi.hoisted(() => ({
+  list: vi.fn(async () => new Map()),
+  get: vi.fn(() => ({
+    type: "agent",
+    id: "33333333-3333-4333-8333-333333333333",
+    name: "Legacy Agent",
+    role: "engineer",
+    title: null,
+    urlKey: "legacy-agent",
+  })),
+}));
+
 const mockLogActivity = vi.hoisted(() => vi.fn(async () => undefined));
 
 const mockRoutineService = vi.hoisted(() => ({
@@ -123,6 +135,8 @@ vi.mock("../services/index.js", () => ({
     expireStaleRequestConfirmationsForIssueDocument: vi.fn(async () => []),
   }),
   issueReferenceService: () => mockIssueReferenceService,
+  issueAssigneeSummary: mockIssueAssigneeSummary.get,
+  listIssueAssigneeSummaries: mockIssueAssigneeSummary.list,
   issueService: () => mockIssueService,
   logActivity: mockLogActivity,
   projectService: () => mockProjectService,
@@ -270,6 +284,14 @@ describe.sequential("issue goal context routes", () => {
         title: projectGoal.title,
       }),
     );
+    expect(res.body.assignee).toEqual({
+      type: "agent",
+      id: "33333333-3333-4333-8333-333333333333",
+      name: "Legacy Agent",
+      role: "engineer",
+      title: null,
+      urlKey: "legacy-agent",
+    });
     expect(mockIssueService.findMentionedProjectIds).toHaveBeenCalledWith(
       "11111111-1111-4111-8111-111111111111",
       { includeCommentBodies: false },

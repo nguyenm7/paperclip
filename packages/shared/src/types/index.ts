@@ -268,6 +268,7 @@ export type {
 export type {
   Issue,
   IssueWorkMode,
+  IssueAssigneeSummary,
   IssueAssigneeAdapterOverrides,
   IssueBlockerAttention,
   IssueBlockerAttentionReason,

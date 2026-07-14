@@ -81,7 +81,9 @@ import {
   ISSUE_LIST_DEFAULT_LIMIT,
   ISSUE_LIST_MAX_LIMIT,
   issueReferenceService,
+  issueAssigneeSummary,
   issueService,
+  listIssueAssigneeSummaries,
   clampIssueListLimit,
   documentService,
   documentAnnotationService,
@@ -2664,9 +2666,10 @@ export function issueRoutes(
       ? rawResult
       : await filterIssuesForActor(req, rawResult);
     const issueIds = result.map((issue) => issue.id);
-    const [handoffStates, recoveryActionByIssue] = await Promise.all([
+    const [handoffStates, recoveryActionByIssue, assigneeSummaries] = await Promise.all([
       listSuccessfulRunHandoffStates(db, companyId, issueIds),
       recoveryActionsSvc.listActiveForIssues(companyId, issueIds),
+      listIssueAssigneeSummaries(db, companyId, result),
     ]);
     const actor = getActorInfo(req);
     await Promise.all(result.map(async (issue) => {
@@ -2683,6 +2686,7 @@ export function issueRoutes(
     }));
     res.json(result.map((issue) => ({
       ...issue,
+      assignee: issueAssigneeSummary(assigneeSummaries, issue),
       successfulRunHandoff: handoffStates.get(issue.id) ?? null,
       activeRecoveryAction: recoveryActionByIssue.get(issue.id) ?? null,
     })));
@@ -2993,6 +2997,7 @@ export function issueRoutes(
       successfulRunHandoffStates,
       scheduledRetry,
       activeRecoveryAction,
+      assigneeSummaries,
     ] = await Promise.all([
       resolveIssueProjectAndGoal(issue),
       svc.getAncestors(issue.id),
@@ -3005,6 +3010,7 @@ export function issueRoutes(
       listSuccessfulRunHandoffStates(db, issue.companyId, [issue.id]),
       svc.getCurrentScheduledRetry(issue.id),
       recoveryActionsSvc.getActiveForIssue(issue.companyId, issue.id),
+      listIssueAssigneeSummaries(db, issue.companyId, [issue]),
     ]);
     const recoveryActionsByRelationIssue = await relationRecoveryActionMap(
       recoveryActionsSvc,
@@ -3030,6 +3036,7 @@ export function issueRoutes(
     const workProducts = await workProductsSvc.listForIssue(issue.id);
     res.json({
       ...issue,
+      assignee: issueAssigneeSummary(assigneeSummaries, issue),
       goalId: goal?.id ?? issue.goalId,
       ancestors,
       ...(blockerAttention ? { blockerAttention } : {}),

@@ -522,6 +522,7 @@ export type {
   UpdateDocumentAnnotationThreadRequest,
   AttachmentArtifactWorkProductMetadata,
   Issue,
+  IssueAssigneeSummary,
   IssueAssigneeAdapterOverrides,
   IssueBlockerAttention,
   IssueBlockerAttentionReason,

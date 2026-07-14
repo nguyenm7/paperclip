@@ -28,6 +28,7 @@ import type {
 } from "../constants.js";
 import type { Goal } from "./goal.js";
 import type { Project, ProjectWorkspace } from "./project.js";
+import type { RoutineAgentSummary } from "./routine.js";
 import type { ExecutionWorkspace, IssueExecutionWorkspaceSettings } from "./workspace-runtime.js";
 import type { IssueWorkProduct } from "./work-product.js";
 import type {
@@ -37,6 +38,10 @@ import type {
 } from "../trust-policy.js";
 
 export type { IssueWorkMode };
+
+export interface IssueAssigneeSummary extends RoutineAgentSummary {
+  type: "agent" | "user";
+}
 
 export interface IssueAncestorProject {
   id: string;
@@ -516,6 +521,8 @@ export interface Issue {
   priority: IssuePriority;
   assigneeAgentId: string | null;
   assigneeUserId: string | null;
+  /** Present on issue list and detail read responses; mutation responses may omit it. */
+  assignee?: IssueAssigneeSummary | null;
   checkoutRunId: string | null;
   executionRunId: string | null;
   executionAgentNameKey: string | null;

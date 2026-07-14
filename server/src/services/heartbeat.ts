@@ -371,7 +371,15 @@ function mergeAdapterRecoveryMetadata(input: {
       : {}),
   };
 }
-const RUNNING_ISSUE_WAKE_REASONS_REQUIRING_FOLLOWUP = new Set(["approval_approved"]);
+const RUNNING_ISSUE_WAKE_REASONS_REQUIRING_FOLLOWUP = new Set([
+  "approval_approved",
+  // The gateway aging-gate sweep (paperclip-gateway/src/aging.ts) stamps a 7-day
+  // re-nudge marker on any truthy wakeup return; coalescing its no-issue-scope wake
+  // into an already-running run would silently swallow the Rule-11 question while
+  // the sweep's ledger records it as delivered (LOOA-335).
+  "aging_gate_rule11",
+  "aging_gate_rule11_escalation",
+]);
 const SESSIONED_LOCAL_ADAPTERS = new Set([
   "claude_local",
   "codex_local",

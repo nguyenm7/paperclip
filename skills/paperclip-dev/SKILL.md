@@ -47,25 +47,43 @@ If schema changes landed, also run `pnpm db:generate && pnpm db:migrate`.
 
 ## Worktrees
 
-> 🚨 **The primary checkout is PRODUCTION. Never develop in it.**
+> 🚨 **Never develop in the primary checkout. All development happens in a worktree.**
 >
-> The live server runs from the primary checkout under `tsx watch`. Its working
-> files are the deployed bytes: **every save is a deploy**, and a half-written
-> file is a half-deployed server. Editing there is not a style violation, it is
-> a rolling outage — on 2026-07-14 an uncommitted in-progress feature
-> hot-reloaded mid-edit and returned `500` from every issues route
-> company-wide. Checking out a branch there is just as bad: the server then
-> serves that unreviewed branch.
+> The server runs under `tsx watch`, so the working files of whatever tree it
+> runs from are the deployed bytes: **every save is a deploy**, and a
+> half-written file is a half-deployed server. On 2026-07-14 an uncommitted
+> in-progress feature hot-reloaded mid-edit and returned `500` from every issues
+> route company-wide (LOOA-371).
 >
-> **All development happens in a worktree. `master` only ever advances by
-> merge, and merging to `master` IS the deploy step.**
+> **The server no longer runs from the primary checkout.** It runs from a
+> dedicated serving checkout — `/Users/annica/paperclip-live` — that no agent
+> ever enters (LOOA-382). The primary checkout is the *integration* tree: where
+> `master` lives, where worktrees branch from, and where merges land. It must
+> still be clean and on `master`, but editing it can no longer take production
+> down.
 >
-> This is enforced, not merely requested: a `pre-commit` hook refuses any
-> commit that *authors* new work in the primary checkout. (It still allows the
-> primary checkout to *integrate* — merge, revert, cherry-pick.) If you hit
-> that block, you are in the wrong tree; your changes are preserved, move them
-> to a worktree. Check the live tree's health at any time with
-> `pnpm check:live-tree`, and install the hooks with `pnpm hooks:install`.
+> Ask, don't assume, which tree is live: `pnpm live:where` reports it from the
+> serving process itself. `pnpm check:live-tree` checks that tree's health.
+>
+> **The deploy contract, in full:**
+>
+> ```bash
+> # 1. develop in a worktree, get it reviewed, merge to master (integration tree)
+> git merge --no-ff paperclip-<ticket>
+>
+> # 2. ship it — fast-forwards the serving tree; tsx watch picks it up
+> pnpm deploy:live
+> ```
+>
+> Merging to `master` is no longer the deploy. **`pnpm deploy:live` is the
+> deploy.** The serving tree only ever fast-forwards, so it is by construction
+> always at a committed, reviewed `master` — there is no state it can reach that
+> `master` was not in.
+>
+> A `pre-commit` hook refuses any commit that *authors* new work in a main
+> worktree (it still allows *integrating* — merge, revert, cherry-pick). If you
+> hit that block, you are in the wrong tree; your changes are preserved, move
+> them to a worktree. Install the hooks with `pnpm hooks:install`.
 
 Paperclip worktrees combine git worktrees with isolated Paperclip instances — each gets its own database, server port, and environment seeded from the primary instance.
 

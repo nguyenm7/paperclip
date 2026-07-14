@@ -2,23 +2,29 @@
 /**
  * check-live-tree.mjs
  *
- * The repository's *main* worktree is production.
+ * The tree the server runs from is production.
  *
- * The server runs from it under `tsx watch`, so the main worktree's files are
- * the deployed bytes: every save is a deploy, and a half-written file is a
- * half-deployed server. On 2026-07-14 an in-progress feature sitting
- * uncommitted in the main worktree hot-reloaded into the running process and
- * 500'd every issues route company-wide (LOOA-371).
+ * The server runs under `tsx watch`, so that tree's files are the deployed
+ * bytes: every save is a deploy, and a half-written file is a half-deployed
+ * server. On 2026-07-14 an in-progress feature sitting uncommitted in it
+ * hot-reloaded into the running process and 500'd every issues route
+ * company-wide (LOOA-371).
  *
  * The invariant, therefore:
  *
- *   The main worktree is only ever on `master`, and only ever clean.
+ *   The live tree is only ever on `master`, and only ever clean.
  *
- * All development happens in a linked worktree (`git worktree add`). `master`
- * only advances by merge. This script is the *detector* for that invariant;
- * `scripts/git-hooks/pre-commit` is the *preventer* (it refuses commits that
- * author new work in the main worktree). Install the hooks with
- * `pnpm hooks:install`.
+ * *Which* tree that is comes from `scripts/live-service.mjs`, which asks the
+ * serving process rather than assuming a layout. Until LOOA-382 the answer was
+ * the main worktree; after it, the server runs from a dedicated checkout that
+ * no agent enters. Deriving it from the running process means this check stays
+ * correct across that move instead of confidently guarding the wrong directory.
+ *
+ * This script is the *detector*; `scripts/git-hooks/pre-commit` is the
+ * *preventer* (it refuses commits that author new work in the main worktree).
+ * Install the hooks with `pnpm hooks:install`. Note that neither can see a
+ * *save* or a *checkout* -- only a dedicated serving tree removes those, which
+ * is what LOOA-382 does.
  *
  * A merge/revert/cherry-pick/rebase in progress is the sanctioned way `master`
  * advances, so it is reported as a transient state rather than a violation --
@@ -28,13 +34,15 @@
  *   node scripts/check-live-tree.mjs          # exit 1 on violation
  *   node scripts/check-live-tree.mjs --json
  *
- * Runnable from any worktree: it always inspects the main one.
+ * Runnable from any worktree: it always inspects the live one.
  */
 
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+
+import { resolveLiveTree } from "./live-service.mjs";
 
 /** Branch the main worktree must be parked on. */
 export const LIVE_BRANCH = "master";
@@ -101,34 +109,24 @@ function git(args, cwd) {
   }).trim();
 }
 
-/**
- * The main worktree is the first entry of `git worktree list --porcelain`.
- * Resolving it this way (rather than hard-coding a path) keeps the check
- * correct on any machine and any clone.
- */
-export function findMainWorktree(cwd = process.cwd()) {
-  const listing = git(["worktree", "list", "--porcelain"], cwd);
-  const first = listing.split("\n").find((line) => line.startsWith("worktree "));
-  if (!first) throw new Error("could not resolve the main worktree");
-  return first.slice("worktree ".length);
-}
-
 export function inspectLiveTree(cwd = process.cwd()) {
-  const mainWorktree = findMainWorktree(cwd);
-  const gitDir = git(["rev-parse", "--path-format=absolute", "--git-dir"], mainWorktree);
+  const { tree: liveTree, source, service } = resolveLiveTree(cwd);
+  const gitDir = git(["rev-parse", "--path-format=absolute", "--git-dir"], liveTree);
 
   const integrationInProgress = INTEGRATION_MARKERS.some((marker) =>
     existsSync(path.join(gitDir, marker)),
   );
 
-  const branch = git(["rev-parse", "--abbrev-ref", "HEAD"], mainWorktree);
-  const dirtyPaths = git(["status", "--porcelain"], mainWorktree)
+  const branch = git(["rev-parse", "--abbrev-ref", "HEAD"], liveTree);
+  const dirtyPaths = git(["status", "--porcelain"], liveTree)
     .split("\n")
     .filter(Boolean)
     .map((line) => line.slice(3));
 
   return {
-    mainWorktree,
+    liveTree,
+    source,
+    service,
     state: { branch, dirtyPaths, integrationInProgress },
     result: evaluateLiveTree({ branch, dirtyPaths, integrationInProgress }),
   };
@@ -136,23 +134,28 @@ export function inspectLiveTree(cwd = process.cwd()) {
 
 function main() {
   const asJson = process.argv.includes("--json");
-  const { mainWorktree, state, result } = inspectLiveTree();
+  const { liveTree, source, service, state, result } = inspectLiveTree();
+
+  const provenance =
+    source === "service-registry"
+      ? `served by pid ${service.pid} on ${service.url ?? "?"}`
+      : `no server registered -- assuming the main worktree`;
 
   if (asJson) {
-    console.log(JSON.stringify({ mainWorktree, ...state, ...result }, null, 2));
+    console.log(JSON.stringify({ liveTree, source, service, ...state, ...result }, null, 2));
   } else if (result.transient) {
-    console.log(`live tree (${mainWorktree}): integration in progress -- skipping check`);
+    console.log(`live tree (${liveTree}): integration in progress -- skipping check`);
   } else if (result.ok) {
-    console.log(`live tree (${mainWorktree}): clean, on ${LIVE_BRANCH}`);
+    console.log(`live tree (${liveTree}): clean, on ${LIVE_BRANCH}  [${provenance}]`);
   } else {
-    console.error(`LIVE TREE VIOLATION -- ${mainWorktree} is production.\n`);
+    console.error(`LIVE TREE VIOLATION -- ${liveTree} is production (${provenance}).\n`);
     for (const violation of result.violations) {
       console.error(`  [${violation.code}] ${violation.detail}`);
     }
     console.error(
       `\nThe server runs from this tree under \`tsx watch\`, so its working files are\n` +
         `the deployed bytes. Move the work into a linked worktree:\n\n` +
-        `  git -C ${mainWorktree} stash                      # or: git switch -c <branch> && git commit\n` +
+        `  git -C ${liveTree} stash                          # or: git switch -c <branch> && git commit\n` +
         `  git worktree add ../paperclip-<ticket> -b <branch>\n\n` +
         `Never discard the work to clear this -- preserve it first, then restore master.`,
     );

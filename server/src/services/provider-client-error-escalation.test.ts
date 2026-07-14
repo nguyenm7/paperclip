@@ -30,6 +30,7 @@ function makeRun(overrides: Partial<{
   status: string;
   errorCode: string | null;
   error: string | null;
+  resultJson: unknown;
   contextSnapshot: unknown;
 }> = {}) {
   return {
@@ -41,6 +42,29 @@ function makeRun(overrides: Partial<{
     contextSnapshot: { issueId: "issue-1" },
     ...overrides,
   };
+}
+
+// LOOA-360: what the claude-local adapter persists for an org-disabled 429.
+const quotaDetail = {
+  model: "claude-fable-5",
+  resetsAt: "2026-07-19T08:00:00.000Z",
+  reason: "org_level_disabled_until",
+  overageStatus: "rejected",
+  rateLimitType: "seven_day_overage_included",
+  status: 429,
+  message: "You've hit your monthly spend limit.",
+};
+
+function makeQuotaRun(overrides: Parameters<typeof makeRun>[0] = {}) {
+  return makeRun({
+    errorCode: "claude_quota_rejected",
+    error: "You've hit your monthly spend limit.",
+    resultJson: {
+      errorFamily: "provider_quota_rejected",
+      providerQuotaRejection: quotaDetail,
+    },
+    ...overrides,
+  });
 }
 
 const agent = { name: "Forge", adapterType: "codex_local" };
@@ -190,5 +214,112 @@ describe("provider client-error escalation", () => {
       ),
     ).resolves.toBe("not_applicable");
     expect(deps.addSystemIssueComment).not.toHaveBeenCalled();
+  });
+
+  describe("org-disabled quota 429 (LOOA-360)", () => {
+    it("classifies a quota-rejected run as deterministic even though 429 is a retryable status", () => {
+      // The status code alone still proves nothing — it is the structured
+      // payload that makes this deterministic.
+      expect(extractProviderClientError('HTTP status 429 Too Many Requests')).toBeNull();
+      expect(extractDeterministicRunRejection(makeQuotaRun())).toEqual({
+        kind: "provider_quota_rejected",
+        body: [
+          "model=claude-fable-5",
+          "resetsAt=2026-07-19T08:00:00.000Z",
+          "reason=org_level_disabled_until",
+          "overageStatus=rejected",
+          "rateLimitType=seven_day_overage_included",
+        ].join("\n"),
+        detail: quotaDetail,
+      });
+    });
+
+    it("ignores a transient 429 that carries no quota payload", () => {
+      expect(
+        extractDeterministicRunRejection(
+          makeRun({
+            errorCode: "claude_transient_upstream",
+            error: "You've hit a rate limit.",
+            resultJson: { errorFamily: "transient_upstream", retryNotBefore: "2026-07-14T15:00:00.000Z" },
+          }),
+        ),
+      ).toBeNull();
+    });
+
+    it("posts exactly one escalation naming the model and the reset time", async () => {
+      const addSystemIssueComment = vi.fn().mockResolvedValue({ id: "comment-3" });
+
+      await expect(
+        surfaceProviderClientError(
+          { run: makeQuotaRun(), agent: { name: "CTO", adapterType: "claude_local" } },
+          { findRecentEscalation: vi.fn().mockResolvedValue(null), addSystemIssueComment },
+        ),
+      ).resolves.toBe("surfaced");
+
+      expect(addSystemIssueComment).toHaveBeenCalledOnce();
+      const body = String(addSystemIssueComment.mock.calls[0]?.[1] ?? "");
+      expect(body).toContain("## Provider quota exhausted — automatic retries stopped");
+      expect(body).toContain("claude-fable-5");
+      expect(body).toContain("2026-07-19T08:00:00.000Z");
+      expect(body).toContain("org_level_disabled_until");
+      // The reason we stopped, stated as policy: we refuse to hold the issue lock
+      // for the window. An operator reading this must be able to act on it.
+      expect(body).toContain("holds this issue's execution lock");
+      expect(body).toContain("wake this agent again at or after");
+    });
+
+    // LOOA-379 review: the escalation is the operator-facing contract, and an
+    // earlier revision claimed the block "lasts longer than Paperclip's retry
+    // ladder" and that "every retry inside this window fails". That proof was
+    // retracted (LOOA-367) — retry wall time has no upper bound, so nothing can
+    // establish it. We stop because we will not park the issue lock that long.
+    // Pin the retraction: this fails if the unprovable claim returns to the wire.
+    it("never claims the block outlasts the retry ladder or that every retry is futile", async () => {
+      const addSystemIssueComment = vi.fn().mockResolvedValue({ id: "comment-4" });
+      await surfaceProviderClientError(
+        { run: makeQuotaRun(), agent: { name: "CTO", adapterType: "claude_local" } },
+        { findRecentEscalation: vi.fn().mockResolvedValue(null), addSystemIssueComment },
+      );
+
+      const body = String(addSystemIssueComment.mock.calls[0]?.[1] ?? "").toLowerCase();
+      for (const forbidden of [
+        "retry ladder",
+        "every retry",
+        "outlasts",
+        "guaranteed to fail",
+        "bounded retry window",
+      ]) {
+        expect(body).not.toContain(forbidden);
+      }
+    });
+
+    it("dedups across retry runs by (model, window) rather than per run", async () => {
+      const addSystemIssueComment = vi.fn();
+      await expect(
+        surfaceProviderClientError(
+          { run: makeQuotaRun({ id: "run-9" }), agent },
+          {
+            findRecentEscalation: vi.fn().mockResolvedValue({ id: "comment-3" }),
+            addSystemIssueComment,
+          },
+        ),
+      ).resolves.toBe("already_surfaced");
+      expect(addSystemIssueComment).not.toHaveBeenCalled();
+
+      // A different window is a different fact and must escalate again.
+      const first = escalationSignatureMarker(extractDeterministicRunRejection(makeQuotaRun())!);
+      const nextWindow = escalationSignatureMarker(
+        extractDeterministicRunRejection(
+          makeQuotaRun({
+            resultJson: {
+              errorFamily: "provider_quota_rejected",
+              providerQuotaRejection: { ...quotaDetail, resetsAt: "2026-08-19T08:00:00.000Z" },
+            },
+          }),
+        )!,
+      );
+      expect(first).not.toBe(nextWindow);
+      expect(first).toMatch(/^<!-- paperclip:provider-client-error-signature:[0-9a-f]{16} -->$/);
+    });
   });
 });

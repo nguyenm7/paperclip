@@ -182,6 +182,10 @@ import {
 } from "@paperclipai/adapter-utils";
 import {
   ADAPTER_CONFIG_REJECTED_ERROR_CODE,
+  BOUNDED_TRANSIENT_RETRY_DELAYS_MS,
+  BOUNDED_TRANSIENT_RETRY_JITTER_RATIO,
+  MAX_DEFERRED_RETRY_LOCK_HOLD_MS,
+  PROVIDER_QUOTA_REJECTED_ERROR_FAMILY,
   isAdapterConfigRejectedError,
   readPaperclipSkillSyncPreference,
   writePaperclipSkillSyncPreference,
@@ -245,13 +249,13 @@ export {
   ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS,
 } from "./recovery/service.js";
 export const ACTIVE_RUN_OUTPUT_PROGRESS_FLUSH_INTERVAL_MS = 60 * 1000;
-export const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_DELAYS_MS = [
-  2 * 60 * 1000,
-  10 * 60 * 1000,
-  30 * 60 * 1000,
-  2 * 60 * 60 * 1000,
-] as const;
-const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_JITTER_RATIO = 0.25;
+// Single source of truth lives in adapter-utils, alongside
+// MAX_DEFERRED_RETRY_LOCK_HOLD_MS: the lock-hold budget is only defensible while
+// it stays within the longest deferral this ladder can already produce, and that
+// invariant is asserted against these exact numbers. A second copy here would
+// drift silently and the assertion would stop binding (LOOA-360).
+export const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_DELAYS_MS = BOUNDED_TRANSIENT_RETRY_DELAYS_MS;
+const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_JITTER_RATIO = BOUNDED_TRANSIENT_RETRY_JITTER_RATIO;
 const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_REASON = "transient_failure";
 const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_WAKE_REASON = "transient_failure_retry";
 const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_MAX_ATTEMPTS = BOUNDED_TRANSIENT_HEARTBEAT_RETRY_DELAYS_MS.length;
@@ -960,6 +964,114 @@ function isModelSafetyRefusalRun(
   run: Pick<typeof heartbeatRuns.$inferSelect, "errorCode"> | null | undefined,
 ) {
   return run?.errorCode === MODEL_SAFETY_REFUSAL_ERROR_CODE;
+}
+
+// A hard provider quota rejection is a rate-limit block whose window does not
+// reopen inside the deferral budget. The finalize path skips the retry chain for
+// these, because readTransientRecoveryContractFromRun only honours
+// "transient_upstream" — but suppress it at the scheduler too, so a caller that
+// reaches the scheduler without the finalize gate cannot reopen the loop.
+// LOOA-360 burned 10+ consecutive zero-cost runs on one of these.
+function isProviderQuotaRejectedRun(
+  run: Pick<typeof heartbeatRuns.$inferSelect, "errorCode" | "resultJson"> | null | undefined,
+) {
+  return run ? readHeartbeatRunErrorFamily(run) === PROVIDER_QUOTA_REJECTED_ERROR_FAMILY : false;
+}
+
+function omitKeys(source: Record<string, unknown>, keys: string[]) {
+  const next = { ...source };
+  for (const key of keys) delete next[key];
+  return next;
+}
+
+/**
+ * Decide what a provider-named rate-limit block means for the retry chain.
+ *
+ * The adapter reports only the FACT — what is blocked and until when. The policy
+ * is here, because it turns on something the adapter cannot see: scheduling a
+ * retry hands the issue's execution lock to the queued run
+ * (scheduleBoundedRetryForRun below), which 409s writes to that issue until it
+ * starts.
+ *
+ * - Window reopens within MAX_DEFERRED_RETRY_LOCK_HOLD_MS → keep it transient and
+ *   let the existing retry-not-before machinery wait for the reset. The retry
+ *   fires when it can actually succeed, so nothing is suppressed and no attempt
+ *   is burned inside the window.
+ * - Window reopens later → refuse to park a retry on it. Holding an issue's
+ *   execution lock for hours or days is a worse failure than the burned runs we
+ *   are fixing, so release the issue and escalate instead.
+ *
+ * Note what this does NOT claim: it never asserts that the block outlasts every
+ * retry we might have attempted, and callers must not say so either. Retry wall
+ * time is unbounded (runs are scheduled only after their predecessor finishes,
+ * local adapters default to no timeout), so that claim is unprovable — an earlier
+ * revision of this fix tried to make it with a constant and was rightly rejected
+ * (LOOA-367 review). We stop because we refuse to hold the lock that long, not
+ * because we have proven futility.
+ */
+function readProviderQuotaBlock(
+  resultJson: Record<string, unknown> | null | undefined,
+  now: Date,
+): Record<string, unknown> | null {
+  const rejection = parseObject(resultJson?.providerRateLimitRejection);
+  const resetsAtRaw = readNonEmptyString(rejection.resetsAt);
+  if (!resetsAtRaw) return null;
+  const resetsAt = new Date(resetsAtRaw);
+  if (Number.isNaN(resetsAt.getTime())) return null;
+  return resetsAt.getTime() > now.getTime() + MAX_DEFERRED_RETRY_LOCK_HOLD_MS ? rejection : null;
+}
+
+/**
+ * The finalize-time classification: turn the adapter's reported FACT (the blocked
+ * window) into the run's recovery contract.
+ *
+ * A long window leaves the transient family and drops its retry hints, so nothing
+ * downstream can schedule against it. A short window is left exactly as the
+ * adapter reported it — still transient, still carrying its retry-not-before — so
+ * the existing machinery waits and retries at the reset.
+ *
+ * Exported because this is the load-bearing decision and it must be tested on its
+ * own inputs. Seeding an already-classified run and asserting the scheduler obeys
+ * it proves nothing about this function: it would pass with the comparison
+ * inverted (LOOA-379 review).
+ */
+export function applyProviderQuotaRejectionPolicy(
+  input: {
+    outcome: string;
+    resultJson: Record<string, unknown> | null | undefined;
+    errorFamily?: string | null;
+    retryNotBefore?: string | null;
+  },
+  now: Date,
+): {
+  resultJson: Record<string, unknown> | null;
+  errorFamily: string | null;
+  retryNotBefore: string | null;
+} {
+  const block = input.outcome === "failed" ? readProviderQuotaBlock(input.resultJson, now) : null;
+  if (!block) {
+    return {
+      resultJson: input.resultJson ?? null,
+      errorFamily: input.errorFamily ?? null,
+      retryNotBefore: input.retryNotBefore ?? null,
+    };
+  }
+  return {
+    resultJson: {
+      ...omitKeys(input.resultJson ?? {}, ["retryNotBefore", "transientRetryNotBefore"]),
+      // Stamp the family INSIDE the blob, not just on the returned field. The
+      // adapter's resultJson still says "transient_upstream", and
+      // readHeartbeatRunErrorFamily reads the blob — so a caller that persists
+      // this resultJson without folding the field in would store a run that still
+      // looks transient, and the retry loop this whole fix exists to close would
+      // reopen. Keep the return value true on its own terms.
+      errorFamily: PROVIDER_QUOTA_REJECTED_ERROR_FAMILY,
+      providerQuotaRejection: block,
+    },
+    errorFamily: PROVIDER_QUOTA_REJECTED_ERROR_FAMILY,
+    // Drop the retry hint with it: nothing should be scheduled.
+    retryNotBefore: null,
+  };
 }
 
 async function hasGitMetadata(cwd: string | null | undefined) {
@@ -6144,6 +6256,33 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         issueId: readNonEmptyString(parseObject(run.contextSnapshot).issueId),
       };
     }
+    if (retryReason === BOUNDED_TRANSIENT_HEARTBEAT_RETRY_REASON && isProviderQuotaRejectedRun(run)) {
+      // Same belt-and-braces as the refusal gate above: the finalize path already
+      // took this run out of the transient family because the provider's blocked
+      // window reopens later than we are willing to keep a retry queued. Queuing
+      // one here would hold the issue's execution lock for that whole window. The
+      // rejection is surfaced on the wake-source issue by
+      // maybeSurfaceProviderClientError instead (LOOA-360).
+      await appendRunEvent(run, await nextRunEventSeq(run.id), {
+        eventType: "lifecycle",
+        stream: "system",
+        level: "warn",
+        message:
+          "Transient retry suppressed: the provider quota window reopens later than Paperclip will hold the issue lock for a queued retry",
+        payload: {
+          retryReason,
+          errorCode: run.errorCode,
+          providerQuotaRejection: parseObject(run.resultJson).providerQuotaRejection ?? null,
+        },
+      });
+      return {
+        outcome: "not_scheduled" as const,
+        reason:
+          "Provider quota is blocked past the deferred-retry lock-hold budget; the issue lock was released instead of parking a retry",
+        errorCode: PROVIDER_QUOTA_REJECTED_ERROR_FAMILY,
+        issueId: readNonEmptyString(parseObject(run.contextSnapshot).issueId),
+      };
+    }
     const nextAttempt = (run.scheduledRetryAttempt ?? 0) + 1;
     const baseSchedule = opts?.delayMs != null
       ? nextAttempt <= maxAttempts
@@ -9315,13 +9454,25 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             } as Record<string, unknown>)
           : null;
 
+      // A rate-limit block whose window outlives the deferral budget leaves the
+      // transient family: parking a retry on it would hold the issue's execution
+      // lock until the reset. Escalate and release instead (LOOA-360).
+      const quotaPolicy = applyProviderQuotaRejectionPolicy(
+        {
+          outcome,
+          resultJson: adapterResult.resultJson,
+          errorFamily: adapterResult.errorFamily,
+          retryNotBefore: adapterResult.retryNotBefore,
+        },
+        new Date(),
+      );
       const persistedResultJson = mergeHeartbeatRunResultJson(
         mergeRunStopMetadataForAgent(agent, outcome, {
           resultJson: mergeModelProfileRunMetadata(
             mergeAdapterRecoveryMetadata({
-              resultJson: adapterResult.resultJson ?? null,
-              errorFamily: adapterResult.errorFamily ?? null,
-              retryNotBefore: adapterResult.retryNotBefore ?? null,
+              resultJson: quotaPolicy.resultJson,
+              errorFamily: quotaPolicy.errorFamily,
+              retryNotBefore: quotaPolicy.retryNotBefore,
             }),
             modelProfileApplication,
           ),

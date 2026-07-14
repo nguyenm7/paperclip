@@ -11,6 +11,34 @@ import type {
   AdapterSkillSnapshot,
 } from "./types.js";
 
+export const ADAPTER_CONFIG_REJECTED_ERROR_CODE = "adapter_config_rejected";
+
+/**
+ * Deterministic pre-flight rejection: the adapter refused to start the
+ * provider process because the effective configuration can never succeed
+ * as-is. Heartbeat finalization persists this as run errorCode
+ * "adapter_config_rejected" so the failure is surfaced on the wake-source
+ * issue instead of only inside run logs.
+ */
+export class AdapterConfigRejectedError extends Error {
+  readonly adapterErrorCode = ADAPTER_CONFIG_REJECTED_ERROR_CODE;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "AdapterConfigRejectedError";
+  }
+}
+
+export function isAdapterConfigRejectedError(error: unknown): boolean {
+  if (error instanceof AdapterConfigRejectedError) return true;
+  // Duck-typed fallback: the adapter packages and the server may not share a
+  // single class instance across package boundaries.
+  return (
+    error instanceof Error &&
+    (error as { adapterErrorCode?: unknown }).adapterErrorCode === ADAPTER_CONFIG_REJECTED_ERROR_CODE
+  );
+}
+
 export interface RunProcessResult {
   exitCode: number | null;
   signal: string | null;

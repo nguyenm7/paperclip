@@ -23,12 +23,12 @@ export const agentSkillSyncModeSchema = z.enum([
 ]);
 
 export const agentDesiredSkillEntrySchema = z.object({
-  key: z.string().min(1),
+  key: z.string().trim().min(1),
   versionId: z.string().uuid().nullable(),
 });
 
 export const agentDesiredSkillSelectionSchema = z.union([
-  z.string().min(1),
+  z.string().trim().min(1),
   agentDesiredSkillEntrySchema,
 ]);
 

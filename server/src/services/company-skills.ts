@@ -47,7 +47,7 @@ import type {
 } from "@paperclipai/shared";
 import { normalizeAgentUrlKey } from "@paperclipai/shared";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
-import { conflict, notFound, unprocessable } from "../errors.js";
+import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
 import { ghFetch, gitHubApiBase, resolveRawGitHubUrl } from "./github-fetch.js";
 import { agentService } from "./agents.js";
 import { projectService } from "./projects.js";
@@ -1616,6 +1616,38 @@ function resolveSkillReference(
   return { skill: null, ambiguous: false };
 }
 
+function throwInvalidRequestedSkills(
+  skills: SkillReferenceTarget[],
+  missing: Set<string>,
+  ambiguous: Set<string>,
+): never {
+  const unknownSkills = Array.from(missing).sort();
+  const ambiguousSkills = Array.from(ambiguous).sort();
+  const invalidSkills = Array.from(new Set([...unknownSkills, ...ambiguousSkills])).sort();
+  const availableSkills = Array.from(new Set(skills.map((skill) => skill.key))).sort();
+  const problems: string[] = [];
+  if (ambiguousSkills.length > 0) {
+    problems.push(`ambiguous references: ${ambiguousSkills.join(", ")}`);
+  }
+  if (unknownSkills.length > 0) {
+    problems.push(`unknown references: ${unknownSkills.join(", ")}`);
+  }
+
+  throw badRequest(
+    `Invalid desiredSkills selection (${problems.join("; ")}).` +
+      (availableSkills.length > 0
+        ? ` Available skills: ${availableSkills.join(", ")}.`
+        : " No company skills are available."),
+    {
+      unknownFields: invalidSkills,
+      acceptedFields: availableSkills,
+      unknownSkills,
+      ambiguousSkills,
+      availableSkills,
+    },
+  );
+}
+
 function resolveRequestedSkillKeysOrThrow(
   skills: CompanySkill[],
   requestedReferences: string[],
@@ -1643,14 +1675,7 @@ function resolveRequestedSkillKeysOrThrow(
   }
 
   if (ambiguous.size > 0 || missing.size > 0) {
-    const problems: string[] = [];
-    if (ambiguous.size > 0) {
-      problems.push(`ambiguous references: ${Array.from(ambiguous).sort().join(", ")}`);
-    }
-    if (missing.size > 0) {
-      problems.push(`unknown references: ${Array.from(missing).sort().join(", ")}`);
-    }
-    throw unprocessable(`Invalid company skill selection (${problems.join("; ")}).`);
+    throwInvalidRequestedSkills(skills, missing, ambiguous);
   }
 
   return Array.from(resolved);
@@ -1728,14 +1753,7 @@ async function resolveRequestedSkillEntriesOrThrow(
   }
 
   if (ambiguous.size > 0 || missing.size > 0) {
-    const problems: string[] = [];
-    if (ambiguous.size > 0) {
-      problems.push(`ambiguous references: ${Array.from(ambiguous).sort().join(", ")}`);
-    }
-    if (missing.size > 0) {
-      problems.push(`unknown references: ${Array.from(missing).sort().join(", ")}`);
-    }
-    throw unprocessable(`Invalid company skill selection (${problems.join("; ")}).`);
+    throwInvalidRequestedSkills(skills, missing, ambiguous);
   }
 
   return Array.from(resolved.values());

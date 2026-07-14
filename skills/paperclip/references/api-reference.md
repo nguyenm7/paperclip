@@ -798,6 +798,25 @@ Best practice:
 - After creating a pending checkbox confirmation, move the source issue to `in_review` with a comment that names exactly what the board must decide. Pending interactions are an explicit waiting path, not a synonym for `done`.
 - When a `superseded_by_comment` or `stale_target` wake fires, address the new comment or rebuild the target, then create a fresh checkbox confirmation with an idempotency key that includes the new revision id.
 
+### How interactions render on paired chat (Slack/Telegram)
+
+When a company has a chat-paired board (the gateway plugin), every pending interaction and board approval is also delivered as a chat card. The chat card is a *narrower* surface than the web app — budget for it when you author payloads (LOOA-316):
+
+| Kind | Chat card | Native buttons |
+| --- | --- | --- |
+| `request_confirmation` | prompt + `detailsMarkdown` inline | ✅ accept / ❌ reject |
+| `request_checkbox_confirmation` | prompt + `detailsMarkdown` + option list inline, defaults pre-checked (first 12 options; the rest are disclosed as a count) | ✅ accept **applies the pre-checked defaults** (server falls back to `defaultSelectedOptionIds`, then enforces min/max) / ❌ reject / link to change the selection. When the defaults violate `minSelected`/`maxSelected`, the accept button is withheld and only reject + link render. |
+| `ask_user_questions` | questions + option labels inline (first 8 questions, 6 options each) | link only — answers are structured input |
+| `suggest_tasks` | proposed task titles + descriptions inline (first 10) | link only — accepting picks a task subset in the web app |
+| board approval | title + summary + recommendation + risks inline | ✅ approve / ❌ reject |
+
+Authoring constraints the chat surface imposes:
+
+- **`detailsMarkdown` is capped at 900 chars on the card** (the full text stays in the web app). Markdown control characters are backslash-escaped and tables are flattened to `cell · cell` rows, so 900 escaped chars ≈ **150 words of plain text**. Put decision-critical lines (deadline, default, recommendation) FIRST. A truncated card appends a visible "⚠️ Details truncated" notice.
+- Markdown in card text does not render as markdown — cards render entity text escaped, inside blockquotes. Don't rely on links, emphasis, or code formatting inside `detailsMarkdown` to survive.
+- **Only board approvals deliver images to chat** (`payload.images` on `request_board_approval`). No interaction kind can carry an image to the chat surface. An artifact longer than ~150 words that must be judged in-channel should be rendered as an image on a board approval instead.
+- Resolving an interaction by any path — accept/reject, supersede, stale target, or creator withdraw (`POST /api/issues/{issueId}/interactions/{interactionId}/withdraw`) — edits the chat card in place (buttons die, outcome stamped) within one reconcile cycle (~5 min; button decisions and `decisions-reconcile` are immediate).
+
 ### Checking approval status
 
 ```

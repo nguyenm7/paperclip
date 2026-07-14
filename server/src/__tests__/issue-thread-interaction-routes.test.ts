@@ -943,8 +943,9 @@ describe.sequential("issue thread interaction routes", () => {
     );
   });
 
-  // LOOA-294 authz matrix: withdraw is agent-only and creator-scoped; the
-  // board keeps accept/reject/cancel. Mirrors approval-decision-auth.test.ts.
+  // LOOA-294 authz matrix: withdraw is agent-only and creator-scoped, with
+  // the LOOA-320 manager-chain escalation on top; the board keeps
+  // accept/reject/cancel. Mirrors approval-decision-auth.test.ts.
   it("lets a creator agent withdraw its card, logs a withdrawal, and skips the wake when the creator is the assignee", async () => {
     mockIssueService.getById.mockResolvedValue(createIssue({ assigneeAgentId: CREATED_AGENT_ID }));
     const app = await createApp({
@@ -974,12 +975,88 @@ describe.sequential("issue thread interaction routes", () => {
         details: expect.objectContaining({
           interactionId: "interaction-4",
           interactionStatus: "withdrawn",
+          withdrawnVia: "creator",
+          creatorAgentId: CREATED_AGENT_ID,
           withdrawnReason: "Stale card",
         }),
       }),
     );
     // The creator initiated the retraction from a live run — no self-wake.
     expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+  });
+
+  it("logs a manager-chain withdrawal distinctly and wakes the creator still parked on the gate", async () => {
+    const MANAGER_AGENT_ID = "33333333-3333-4333-8333-333333333333";
+    // LOOA-320: the creator is the assignee stranded on its own gate; the
+    // manager escalates the retraction, so the creator must get the standard
+    // continuation wake instead of being skipped as the withdrawing actor.
+    mockIssueService.getById.mockResolvedValue(createIssue({ assigneeAgentId: CREATED_AGENT_ID }));
+    mockInteractionService.withdrawInteraction.mockResolvedValueOnce({
+      interaction: {
+        id: "interaction-4",
+        companyId: "company-1",
+        issueId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        kind: "request_confirmation",
+        status: "withdrawn",
+        continuationPolicy: "wake_assignee",
+        idempotencyKey: null,
+        sourceCommentId: null,
+        sourceRunId: "run-1",
+        createdByAgentId: CREATED_AGENT_ID,
+        createdByUserId: null,
+        resolvedByAgentId: MANAGER_AGENT_ID,
+        resolvedByUserId: null,
+        payload: {
+          version: 1,
+          prompt: "Confirm?",
+          supersedeOnUserComment: true,
+        },
+        result: {
+          version: 1,
+          outcome: "withdrawn_by_manager",
+          reason: "Creator cannot run",
+        },
+        createdAt: "2026-04-20T12:00:00.000Z",
+        updatedAt: "2026-04-20T12:05:00.000Z",
+        resolvedAt: "2026-04-20T12:05:00.000Z",
+      },
+      applied: true,
+    });
+    const app = await createApp({
+      type: "agent",
+      agentId: MANAGER_AGENT_ID,
+      companyId: "company-1",
+      runId: "run-2",
+    });
+
+    const res = await request(app)
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-4/withdraw")
+      .send({ reason: "Creator cannot run" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("withdrawn");
+    expect(res.body.result.outcome).toBe("withdrawn_by_manager");
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "issue.thread_interaction_withdrawn",
+        details: expect.objectContaining({
+          interactionId: "interaction-4",
+          withdrawnVia: "manager_chain",
+          creatorAgentId: CREATED_AGENT_ID,
+          withdrawnReason: "Creator cannot run",
+        }),
+      }),
+    );
+    expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
+      CREATED_AGENT_ID,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          interactionId: "interaction-4",
+          interactionStatus: "withdrawn",
+        }),
+      }),
+    );
   });
 
   it("wakes a different assignee still parked on the withdrawn gate", async () => {

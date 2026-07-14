@@ -470,5 +470,142 @@ describe("issueThreadInteractionService", () => {
         { agentId: "agent-1" },
       )).rejects.toMatchObject({ status: 404 });
     });
+
+    // LOOA-320: manager-chain escalation — who can retract a gate when its
+    // creator can't. The creator's reportsTo ancestors are fallback
+    // principals; everyone else (peers, the creator's own reports) stays 403.
+    describe("manager-chain escalation", () => {
+      const COMPANY_AGENTS = [
+        { id: "agent-ceo", companyId: "company-1", name: "CEO", status: "active", reportsTo: null },
+        { id: "agent-manager", companyId: "company-1", name: "Manager", status: "active", reportsTo: "agent-ceo" },
+        { id: "agent-1", companyId: "company-1", name: "Creator", status: "active", reportsTo: "agent-manager" },
+        { id: "agent-peer", companyId: "company-1", name: "Peer", status: "active", reportsTo: "agent-manager" },
+        { id: "agent-report", companyId: "company-1", name: "Report", status: "active", reportsTo: "agent-1" },
+      ];
+
+      it("lets the creator's direct manager withdraw with a distinct escalation outcome", async () => {
+        const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+        const state = createFakeDb({ interactionRow: confirmationRow(), parentRows: COMPANY_AGENTS });
+        const svc = issueThreadInteractionService(state.db as never);
+
+        const { interaction, applied } = await svc.withdrawInteraction(
+          ISSUE_REF,
+          "interaction-3",
+          { reason: "Creator cannot run; retracting on its behalf" },
+          { agentId: "agent-manager" },
+        );
+
+        expect(applied).toBe(true);
+        expect(interaction.status).toBe("withdrawn");
+        expect(interaction.result).toEqual({
+          version: 1,
+          outcome: "withdrawn_by_manager",
+          reason: "Creator cannot run; retracting on its behalf",
+        });
+        expect(interaction.resolvedByAgentId).toBe("agent-manager");
+        expect(interaction.resolvedByUserId).toBeNull();
+      });
+
+      it("lets a transitive reportsTo ancestor withdraw", async () => {
+        const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+        const state = createFakeDb({ interactionRow: confirmationRow(), parentRows: COMPANY_AGENTS });
+        const svc = issueThreadInteractionService(state.db as never);
+
+        const { interaction, applied } = await svc.withdrawInteraction(
+          ISSUE_REF,
+          "interaction-3",
+          {},
+          { agentId: "agent-ceo" },
+        );
+
+        expect(applied).toBe(true);
+        expect(interaction.result).toMatchObject({ outcome: "withdrawn_by_manager" });
+        expect(interaction.resolvedByAgentId).toBe("agent-ceo");
+      });
+
+      it("records escalation in the resolved actor for kinds without an outcome field", async () => {
+        const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+        const state = createFakeDb({
+          interactionRow: confirmationRow({
+            kind: "ask_user_questions",
+            payload: {
+              version: 1,
+              questions: [{
+                id: "scope",
+                prompt: "Pick one scope",
+                selectionMode: "single",
+                options: [{ id: "phase-1", label: "Phase 1" }],
+              }],
+            },
+          }),
+          parentRows: COMPANY_AGENTS,
+        });
+        const svc = issueThreadInteractionService(state.db as never);
+
+        const { interaction, applied } = await svc.withdrawInteraction(
+          ISSUE_REF,
+          "interaction-3",
+          { reason: "Question is stranded" },
+          { agentId: "agent-manager" },
+        );
+
+        expect(applied).toBe(true);
+        expect(interaction.result).toEqual({
+          version: 1,
+          answers: [],
+          withdrawnReason: "Question is stranded",
+        });
+        expect(interaction.resolvedByAgentId).toBe("agent-manager");
+      });
+
+      it("rejects a peer that shares the creator's manager with 403", async () => {
+        const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+        const state = createFakeDb({ interactionRow: confirmationRow(), parentRows: COMPANY_AGENTS });
+        const svc = issueThreadInteractionService(state.db as never);
+
+        await expect(svc.withdrawInteraction(
+          ISSUE_REF,
+          "interaction-3",
+          {},
+          { agentId: "agent-peer" },
+        )).rejects.toMatchObject({ status: 403 });
+        expect(state.interactionUpdates).toHaveLength(0);
+      });
+
+      it("rejects the creator's own report — escalation only goes up the chain", async () => {
+        const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+        const state = createFakeDb({ interactionRow: confirmationRow(), parentRows: COMPANY_AGENTS });
+        const svc = issueThreadInteractionService(state.db as never);
+
+        await expect(svc.withdrawInteraction(
+          ISSUE_REF,
+          "interaction-3",
+          {},
+          { agentId: "agent-report" },
+        )).rejects.toMatchObject({ status: 403 });
+        expect(state.interactionUpdates).toHaveLength(0);
+      });
+
+      it("still authorizes ancestors below a reporting cycle without looping", async () => {
+        const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+        const cyclicalAgents = [
+          { id: "agent-a", companyId: "company-1", name: "A", status: "active", reportsTo: "agent-b" },
+          { id: "agent-b", companyId: "company-1", name: "B", status: "active", reportsTo: "agent-a" },
+          { id: "agent-1", companyId: "company-1", name: "Creator", status: "active", reportsTo: "agent-a" },
+        ];
+        const state = createFakeDb({ interactionRow: confirmationRow(), parentRows: cyclicalAgents });
+        const svc = issueThreadInteractionService(state.db as never);
+
+        const { interaction, applied } = await svc.withdrawInteraction(
+          ISSUE_REF,
+          "interaction-3",
+          {},
+          { agentId: "agent-a" },
+        );
+
+        expect(applied).toBe(true);
+        expect(interaction.result).toMatchObject({ outcome: "withdrawn_by_manager" });
+      });
+    });
   });
 });

@@ -4,6 +4,7 @@ import {
   buildSuggestedTaskTree,
   collectSuggestedTaskClientKeys,
   countSuggestedTaskNodes,
+  describeWithdrawnInteractionActor,
   getCheckboxConfirmationSelectedLabels,
   getRequestConfirmationTargetHref,
   getQuestionAnswerLabels,
@@ -169,6 +170,44 @@ describe("issue thread interaction helpers", () => {
       status: "expired",
       result: { version: 1, outcome: "stale_target" },
     })).toBe("Selection expired after target changed");
+  });
+
+  // LOOA-320: a manager-chain withdrawal must not render as the creator's own
+  // retraction — the created/resolved actor pair is the discriminator.
+  it("distinguishes creator withdrawals from manager-chain withdrawals", () => {
+    const base = {
+      id: "interaction-withdrawn",
+      companyId: "company-1",
+      issueId: "issue-1",
+      kind: "request_confirmation" as const,
+      status: "withdrawn" as const,
+      continuationPolicy: "wake_assignee" as const,
+      createdAt: "2026-04-06T12:00:00.000Z",
+      updatedAt: "2026-04-06T12:00:00.000Z",
+      createdByAgentId: "agent-creator",
+      payload: {
+        version: 1 as const,
+        prompt: "Confirm?",
+      },
+    };
+
+    const byCreator = {
+      ...base,
+      resolvedByAgentId: "agent-creator",
+      result: { version: 1 as const, outcome: "withdrawn_by_creator" as const },
+    };
+    expect(describeWithdrawnInteractionActor(byCreator)).toBe("Withdrawn by the requesting agent");
+    expect(buildIssueThreadInteractionSummary(byCreator)).toBe("Confirmation withdrawn by its author");
+
+    const byManager = {
+      ...base,
+      resolvedByAgentId: "agent-manager",
+      result: { version: 1 as const, outcome: "withdrawn_by_manager" as const },
+    };
+    expect(describeWithdrawnInteractionActor(byManager))
+      .toBe("Withdrawn by the requesting agent's manager");
+    expect(buildIssueThreadInteractionSummary(byManager))
+      .toBe("Confirmation withdrawn by its author's manager");
   });
 
   it("maps selected checkbox option ids back to labels", () => {

@@ -64,7 +64,11 @@ export interface AdapterRuntimeServiceReport {
   healthStatus?: "unknown" | "healthy" | "unhealthy";
 }
 
-export type AdapterExecutionErrorFamily = "transient_upstream";
+// `transient_upstream` is retried on the bounded backoff ladder.
+// `provider_quota_rejected` is a hard quota/spend-limit rejection whose window
+// outlasts that ladder: retrying inside it is guaranteed to fail before a token
+// is spent, so it must NOT enter the retry chain (LOOA-360).
+export type AdapterExecutionErrorFamily = "transient_upstream" | "provider_quota_rejected";
 
 export interface AdapterExecutionResult {
   exitCode: number | null;

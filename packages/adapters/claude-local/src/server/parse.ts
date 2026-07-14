@@ -449,6 +449,114 @@ export function isClaudeSafetyRefusalError(input: {
   return CLAUDE_SAFETY_REFUSAL_RE.test(haystack);
 }
 
+// A 429 is normally a throttle, and waiting is the right answer: the bounded
+// backoff ladder (~2h45m end to end) absorbs it. But the Claude stream also
+// reports *quota* rejections as 429s, and those are deterministic for the whole
+// window they name — `rate_limit_info.status: "rejected"` with an
+// `overageDisabledReason` such as `org_level_disabled_until` and a `resetsAt`
+// days out means every retry inside the window fails before a single token is
+// spent. LOOA-360 burned 10+ consecutive zero-cost runs on exactly that.
+//
+// Only treat a rejection as deterministic when we can PROVE it outlasts the
+// retry ladder, so a rolling 5-hour/weekly limit that resets soon keeps its
+// existing backoff + retry-not-before behaviour.
+const CLAUDE_QUOTA_RETRY_HORIZON_MS = 3 * 60 * 60 * 1_000;
+
+export type ClaudeQuotaRejection = {
+  model: string | null;
+  resetsAt: string | null;
+  reason: string | null;
+  overageStatus: string | null;
+  rateLimitType: string | null;
+  status: number | null;
+  message: string | null;
+};
+
+/** Last `rate_limit_event` whose info reports an actual rejection, if any. */
+function readRejectedRateLimitInfo(stdout: string): Record<string, unknown> | null {
+  let latest: Record<string, unknown> | null = null;
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line.includes("rate_limit_event")) continue;
+    const event = parseJson(line);
+    if (!event || asString(event.type, "") !== "rate_limit_event") continue;
+    const info = parseObject(event.rate_limit_info);
+    if (asString(info.status, "").trim().toLowerCase() !== "rejected") continue;
+    latest = info;
+  }
+  return latest;
+}
+
+/** `resetsAt` arrives as unix seconds; tolerate millis and ISO strings too. */
+function readRateLimitResetsAt(info: Record<string, unknown>): Date | null {
+  const raw = info.resetsAt ?? info.resets_at;
+  const fromEpoch = (value: number) => {
+    // Unix seconds until the value is large enough to only make sense as millis.
+    const parsed = new Date(value < 1e12 ? value * 1_000 : value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+  if (typeof raw === "number" && Number.isFinite(raw)) return fromEpoch(raw);
+  if (typeof raw === "string" && raw.trim()) {
+    const numeric = Number(raw.trim());
+    if (Number.isFinite(numeric)) return fromEpoch(numeric);
+    const parsed = new Date(raw.trim());
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  return null;
+}
+
+/**
+ * Classify a hard, window-long quota rejection out of an otherwise-transient
+ * rate-limit failure. Callers MUST only invoke this for runs that already
+ * classified as transient-upstream, which keeps the deterministic branch a
+ * strict subset of the transient one: it can convert a would-be retry into an
+ * escalation, but can never invent a new failure class.
+ */
+export function extractClaudeQuotaRejection(
+  input: {
+    parsed?: Record<string, unknown> | null;
+    stdout?: string | null;
+    stderr?: string | null;
+    errorMessage?: string | null;
+    model?: string | null;
+  },
+  now = new Date(),
+): ClaudeQuotaRejection | null {
+  const info = readRejectedRateLimitInfo(input.stdout ?? "");
+  if (!info) return null;
+
+  const reason =
+    asString(info.overageDisabledReason ?? info.overage_disabled_reason, "").trim() || null;
+  const overageStatus = asString(info.overageStatus ?? info.overage_status, "").trim() || null;
+  const rateLimitType = asString(info.rateLimitType ?? info.rate_limit_type, "").trim() || null;
+  const resetsAt = readRateLimitResetsAt(info);
+
+  // The window must provably outlast the retry ladder. With no `resetsAt` we
+  // cannot bound it, so an explicit org-level disable reason is the only signal
+  // we accept as open-ended; a bare rejection with no horizon stays transient.
+  const outlastsRetryLadder = resetsAt
+    ? resetsAt.getTime() > now.getTime() + CLAUDE_QUOTA_RETRY_HORIZON_MS
+    : Boolean(reason);
+  if (!outlastsRetryLadder) return null;
+
+  const parsed = input.parsed ?? null;
+  const status = parsed ? asNumber(parsed.api_error_status, 0) || null : null;
+  const message =
+    (parsed ? asString(parsed.result, "").trim() : "") ||
+    (input.errorMessage ?? "").trim() ||
+    null;
+
+  return {
+    model: (input.model ?? "").trim() || null,
+    resetsAt: resetsAt ? resetsAt.toISOString() : null,
+    reason,
+    overageStatus,
+    rateLimitType,
+    status,
+    message: message ? message.slice(0, 2_000) : null,
+  };
+}
+
 export function isClaudeTransientUpstreamError(input: {
   parsed?: Record<string, unknown> | null;
   stdout?: string | null;

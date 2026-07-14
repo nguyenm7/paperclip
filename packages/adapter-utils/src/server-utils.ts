@@ -14,6 +14,25 @@ import type {
 export const ADAPTER_CONFIG_REJECTED_ERROR_CODE = "adapter_config_rejected";
 
 /**
+ * Error family for a hard provider quota / spend-limit rejection whose blocked
+ * window outlasts the bounded retry ladder. Runs carrying this family are
+ * deterministic for the whole window — every retry fails before a token is
+ * spent — so they must be escalated rather than retried (LOOA-360).
+ */
+export const PROVIDER_QUOTA_REJECTED_ERROR_FAMILY = "provider_quota_rejected";
+
+/** Structured detail carried on `resultJson.providerQuotaRejection`. */
+export type ProviderQuotaRejection = {
+  model: string | null;
+  resetsAt: string | null;
+  reason: string | null;
+  overageStatus: string | null;
+  rateLimitType: string | null;
+  status: number | null;
+  message: string | null;
+};
+
+/**
  * Deterministic pre-flight rejection: the adapter refused to start the
  * provider process because the effective configuration can never succeed
  * as-is. Heartbeat finalization persists this as run errorCode

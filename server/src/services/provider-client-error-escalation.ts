@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import { ADAPTER_CONFIG_REJECTED_ERROR_CODE } from "@paperclipai/adapter-utils/server-utils";
+import {
+  ADAPTER_CONFIG_REJECTED_ERROR_CODE,
+  PROVIDER_QUOTA_REJECTED_ERROR_FAMILY,
+  type ProviderQuotaRejection,
+} from "@paperclipai/adapter-utils/server-utils";
 
 export type ProviderClientError = {
   status: number;
@@ -8,7 +12,8 @@ export type ProviderClientError = {
 
 export type DeterministicRunRejection =
   | { kind: "provider_client_error"; status: number; body: string }
-  | { kind: "adapter_config_rejected"; body: string };
+  | { kind: "adapter_config_rejected"; body: string }
+  | { kind: "provider_quota_rejected"; body: string; detail: ProviderQuotaRejection };
 
 export const PROVIDER_CLIENT_ERROR_COMMENT_MARKER =
   "<!-- paperclip:provider-client-error -->";
@@ -22,6 +27,14 @@ export const ESCALATION_DEDUP_WINDOW_MS = 24 * 60 * 60 * 1_000;
 
 // 4xx statuses that are retryable for an unchanged request (timeouts, rate
 // limits). Escalating them as "expected to fail identically" would be false.
+//
+// 429 is the subtle one. Most 429s are throttles and belong on the backoff
+// ladder, so the *status code* alone can never justify an escalation. But a
+// quota/spend-limit 429 is deterministic for the entire window it names, and
+// the adapter — the only layer that still sees the rate-limit payload — splits
+// those out into the `provider_quota_rejected` error family. Those arrive here
+// as a structured `resultJson.providerQuotaRejection`, not as a parsed status
+// code, which is why 429 stays excluded below (LOOA-360).
 const RETRYABLE_CLIENT_STATUSES = new Set([408, 425, 429]);
 
 type ProviderErrorRun = {
@@ -30,6 +43,9 @@ type ProviderErrorRun = {
   status: string;
   errorCode: string | null;
   error: string | null;
+  // Optional so adapters/callers that never carry structured failure detail
+  // (and the pre-LOOA-360 call shape) stay valid.
+  resultJson?: unknown;
   contextSnapshot: unknown;
 };
 
@@ -94,9 +110,70 @@ export function extractProviderClientError(error: string | null | undefined): Pr
   return { status, body };
 }
 
-export function extractDeterministicRunRejection(
-  run: Pick<ProviderErrorRun, "errorCode" | "error">,
+function readOptionalString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/**
+ * Canonical, stable rendering of the quota rejection. This doubles as the
+ * signature input, so it must contain exactly the fields that define "the same
+ * block": the model and the window (plus the reason that produced it). One
+ * escalation per (model, window) per issue per 24h — not one per retry.
+ *
+ * Two agents blocked by the same org-level quota on the same model *are* the
+ * same fact, so collapsing them onto one comment is correct, not a miss.
+ */
+function buildQuotaRejectionBody(detail: ProviderQuotaRejection): string {
+  return (
+    [
+      ["model", detail.model],
+      ["resetsAt", detail.resetsAt],
+      ["reason", detail.reason],
+      ["overageStatus", detail.overageStatus],
+      ["rateLimitType", detail.rateLimitType],
+    ] as const
+  )
+    .filter(([, value]) => Boolean(value))
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n");
+}
+
+function extractProviderQuotaRejection(
+  run: Pick<ProviderErrorRun, "resultJson">,
 ): DeterministicRunRejection | null {
+  const resultJson = asRecord(run.resultJson);
+  if (!resultJson) return null;
+  if (readOptionalString(resultJson.errorFamily) !== PROVIDER_QUOTA_REJECTED_ERROR_FAMILY) {
+    return null;
+  }
+  const raw = asRecord(resultJson.providerQuotaRejection);
+  if (!raw) return null;
+
+  const status = typeof raw.status === "number" && Number.isInteger(raw.status) ? raw.status : null;
+  const detail: ProviderQuotaRejection = {
+    model: readOptionalString(raw.model),
+    resetsAt: readOptionalString(raw.resetsAt),
+    reason: readOptionalString(raw.reason),
+    overageStatus: readOptionalString(raw.overageStatus),
+    rateLimitType: readOptionalString(raw.rateLimitType),
+    status,
+    message: readOptionalString(raw.message),
+  };
+
+  const body = buildQuotaRejectionBody(detail);
+  if (!body) return null;
+  return { kind: "provider_quota_rejected", body, detail };
+}
+
+export function extractDeterministicRunRejection(
+  run: Pick<ProviderErrorRun, "errorCode" | "error" | "resultJson">,
+): DeterministicRunRejection | null {
+  // Checked first: a quota rejection is identified by its structured payload,
+  // not by an error code or a parsed status, and its 429 would otherwise be
+  // discarded as retryable below.
+  const quotaRejection = extractProviderQuotaRejection(run);
+  if (quotaRejection) return quotaRejection;
+
   if (run.errorCode === ADAPTER_CONFIG_REJECTED_ERROR_CODE) {
     const body = run.error?.trim();
     return body ? { kind: "adapter_config_rejected", body } : null;
@@ -130,6 +207,37 @@ export function buildRunRejectionComment(input: {
   rejection: DeterministicRunRejection;
 }) {
   const footer = [PROVIDER_CLIENT_ERROR_COMMENT_MARKER, escalationSignatureMarker(input.rejection)];
+  if (input.rejection.kind === "provider_quota_rejected") {
+    const { detail } = input.rejection;
+    const window = detail.resetsAt
+      ? `\`${detail.resetsAt}\``
+      : "an unspecified time (the provider reported no reset)";
+    const limitDetail = [
+      detail.reason ? `reason: \`${detail.reason}\`` : null,
+      detail.overageStatus ? `overage status: \`${detail.overageStatus}\`` : null,
+      detail.rateLimitType ? `limit: \`${detail.rateLimitType}\`` : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    return [
+      "## Provider quota exhausted — retries stopped",
+      "",
+      `The provider rejected ${input.agentName}'s run at the quota level, and the block lasts longer than Paperclip's retry ladder. Every retry inside this window fails before a single token is spent, so no further retries are scheduled.`,
+      "",
+      `- Adapter: \`${input.adapterType}\``,
+      ...(detail.model ? [`- Model: \`${detail.model}\``] : []),
+      `- Latest run: \`${input.runId}\``,
+      `- Blocked until: ${window}`,
+      ...(limitDetail ? [`- Provider detail: ${limitDetail}`] : []),
+      ...(detail.status ? [`- Provider status: \`${detail.status}\``] : []),
+      "- Next action: move this agent to a model with available quota, or raise the spend limit, before waking it again. The quota will not recover on its own inside the window above.",
+      ...(detail.message
+        ? ["", "Provider response:", "", indentCodeBlock(detail.message)]
+        : []),
+      "",
+      ...footer,
+    ].join("\n");
+  }
   if (input.rejection.kind === "adapter_config_rejected") {
     return [
       "## Adapter configuration rejected",

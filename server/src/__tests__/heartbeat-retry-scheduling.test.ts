@@ -68,7 +68,7 @@ describeEmbeddedPostgres("heartbeat bounded retry scheduling", () => {
     agentId: string;
     now: Date;
     errorCode: string;
-    errorFamily?: "transient_upstream" | null;
+    errorFamily?: "transient_upstream" | "provider_quota_rejected" | null;
     retryNotBefore?: string | null;
     scheduledRetryAttempt?: number;
     resultJson?: Record<string, unknown> | null;
@@ -1444,5 +1444,55 @@ describeEmbeddedPostgres("heartbeat bounded retry scheduling", () => {
     expect((wakeupRequest?.payload as Record<string, unknown> | null)?.transientRetryNotBefore).toBe(
       retryNotBefore.toISOString(),
     );
+  });
+
+  it("schedules no retry for an org-disabled quota rejection whose window outlasts the ladder (LOOA-360)", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const runId = randomUUID();
+    const now = new Date(2026, 6, 14, 10, 0, 0);
+
+    await seedRetryFixture({
+      runId,
+      companyId,
+      agentId,
+      now,
+      errorCode: "claude_quota_rejected",
+      adapterType: "claude_local",
+      resultJson: {
+        errorFamily: "provider_quota_rejected",
+        providerQuotaRejection: {
+          model: "claude-fable-5",
+          resetsAt: "2026-07-19T08:00:00.000Z",
+          reason: "org_level_disabled_until",
+          overageStatus: "rejected",
+          rateLimitType: "seven_day_overage_included",
+          status: 429,
+          message: "You've hit your monthly spend limit.",
+        },
+      },
+    });
+
+    const scheduled = await heartbeat.scheduleBoundedRetry(runId, { now, random: () => 0.5 });
+
+    expect(scheduled.outcome).toBe("not_scheduled");
+    if (scheduled.outcome !== "not_scheduled") return;
+    expect(scheduled.errorCode).toBe("provider_quota_rejected");
+
+    // The decisive assertion: no retry run and no wakeup were queued, so the
+    // agent cannot burn another zero-token run inside the blocked window.
+    const runs = await db
+      .select({ id: heartbeatRuns.id, scheduledRetryAt: heartbeatRuns.scheduledRetryAt })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.companyId, companyId));
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.id).toBe(runId);
+    expect(runs[0]?.scheduledRetryAt ?? null).toBeNull();
+
+    const wakeups = await db
+      .select({ id: agentWakeupRequests.id })
+      .from(agentWakeupRequests)
+      .where(eq(agentWakeupRequests.agentId, agentId));
+    expect(wakeups).toHaveLength(0);
   });
 });

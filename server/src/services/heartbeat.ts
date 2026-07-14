@@ -182,6 +182,7 @@ import {
 } from "@paperclipai/adapter-utils";
 import {
   ADAPTER_CONFIG_REJECTED_ERROR_CODE,
+  PROVIDER_QUOTA_REJECTED_ERROR_FAMILY,
   isAdapterConfigRejectedError,
   readPaperclipSkillSyncPreference,
   writePaperclipSkillSyncPreference,
@@ -960,6 +961,19 @@ function isModelSafetyRefusalRun(
   run: Pick<typeof heartbeatRuns.$inferSelect, "errorCode"> | null | undefined,
 ) {
   return run?.errorCode === MODEL_SAFETY_REFUSAL_ERROR_CODE;
+}
+
+// A hard provider quota rejection (monthly spend limit, org-level overage
+// disable) is deterministic for the entire window it names: every retry inside
+// that window fails before a single token is spent. The finalize path already
+// skips the retry chain, because readTransientRecoveryContractFromRun only
+// honours "transient_upstream" — but suppress it at the scheduler too, so a
+// caller that reaches the scheduler without the finalize gate cannot reopen the
+// loop. LOOA-360 burned 10+ consecutive zero-cost runs on one of these.
+function isProviderQuotaRejectedRun(
+  run: Pick<typeof heartbeatRuns.$inferSelect, "errorCode" | "resultJson"> | null | undefined,
+) {
+  return run ? readHeartbeatRunErrorFamily(run) === PROVIDER_QUOTA_REJECTED_ERROR_FAMILY : false;
 }
 
 async function hasGitMetadata(cwd: string | null | undefined) {
@@ -6141,6 +6155,31 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         outcome: "not_scheduled" as const,
         reason: "Model-safety refusals are deterministic for the run context; no automatic retry",
         errorCode: MODEL_SAFETY_REFUSAL_ERROR_CODE,
+        issueId: readNonEmptyString(parseObject(run.contextSnapshot).issueId),
+      };
+    }
+    if (retryReason === BOUNDED_TRANSIENT_HEARTBEAT_RETRY_REASON && isProviderQuotaRejectedRun(run)) {
+      // Same belt-and-braces as the refusal gate above: the quota window
+      // outlasts the retry ladder, so every attempt is guaranteed to fail
+      // before a token is spent. The rejection is surfaced on the wake-source
+      // issue by maybeSurfaceProviderClientError instead (LOOA-360).
+      await appendRunEvent(run, await nextRunEventSeq(run.id), {
+        eventType: "lifecycle",
+        stream: "system",
+        level: "warn",
+        message:
+          "Transient retry suppressed: the provider quota rejection outlasts the bounded retry window",
+        payload: {
+          retryReason,
+          errorCode: run.errorCode,
+          providerQuotaRejection: parseObject(run.resultJson).providerQuotaRejection ?? null,
+        },
+      });
+      return {
+        outcome: "not_scheduled" as const,
+        reason:
+          "Provider quota is exhausted for a window longer than the bounded retry ladder; no automatic retry",
+        errorCode: PROVIDER_QUOTA_REJECTED_ERROR_FAMILY,
         issueId: readNonEmptyString(parseObject(run.contextSnapshot).issueId),
       };
     }

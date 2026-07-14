@@ -3,7 +3,7 @@ import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, lt, lte, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gt, gte, inArray, isNull, lt, lte, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
@@ -181,6 +181,8 @@ import {
   type SessionCompactionPolicy,
 } from "@paperclipai/adapter-utils";
 import {
+  ADAPTER_CONFIG_REJECTED_ERROR_CODE,
+  isAdapterConfigRejectedError,
   readPaperclipSkillSyncPreference,
   writePaperclipSkillSyncPreference,
 } from "@paperclipai/adapter-utils/server-utils";
@@ -197,10 +199,7 @@ import {
 } from "./low-trust-runtime-containment.js";
 import { resolveCoreTrustPreset, type TrustPresetResolution } from "./trust-preset-resolver.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
-import {
-  PROVIDER_CLIENT_ERROR_COMMENT_MARKER,
-  surfaceProviderClientError,
-} from "./provider-client-error-escalation.js";
+import { surfaceProviderClientError } from "./provider-client-error-escalation.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -7295,7 +7294,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     await surfaceProviderClientError(
       { run, agent },
       {
-        findExistingEscalation: (runId, companyId, issueId) =>
+        findRecentEscalation: (companyId, issueId, signatureMarker, since) =>
           db
             .select({ id: issueComments.id })
             .from(issueComments)
@@ -7303,8 +7302,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               and(
                 eq(issueComments.companyId, companyId),
                 eq(issueComments.issueId, issueId),
-                eq(issueComments.createdByRunId, runId),
-                sql`${issueComments.body} like ${`%${PROVIDER_CLIENT_ERROR_COMMENT_MARKER}%`}`,
+                gte(issueComments.createdAt, since),
+                sql`${issueComments.body} like ${`%${signatureMarker}%`}`,
               ),
             )
             .limit(1)
@@ -9550,7 +9549,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         await getCurrentUserRedactionOptions(),
       );
       const workspaceValidationFailure = isWorkspaceValidationFailure(err) ? err : null;
-      const failureErrorCode = workspaceValidationFailure?.code ?? "adapter_failed";
+      const failureErrorCode =
+        workspaceValidationFailure?.code ??
+        (isAdapterConfigRejectedError(err) ? ADAPTER_CONFIG_REJECTED_ERROR_CODE : "adapter_failed");
       logger.error({ err, runId }, "heartbeat execution failed");
 
       let logSummary: { bytes: number; sha256?: string; compressed: boolean } | null = null;

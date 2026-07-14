@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { asString, asStringArray } from "@paperclipai/adapter-utils/server-utils";
+import { AdapterConfigRejectedError, asString, asStringArray } from "@paperclipai/adapter-utils/server-utils";
 
 const DEFAULT_MODELS_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 
@@ -282,7 +282,7 @@ export async function validateCodexReasoningEffort(input: {
   const supportedEfforts = readSupportedEfforts(entry);
   if (supportedEfforts.length === 0 || supportedEfforts.includes(effort.value)) return;
 
-  throw new Error(
+  throw new AdapterConfigRejectedError(
     `Invalid Codex reasoning effort ${JSON.stringify(effort.value)} from ${effort.source} for model ` +
       `${JSON.stringify(model.value)} from ${model.source}. Supported values from ${cachePath}: ` +
       `${supportedEfforts.join(", ")}. Update the offending setting before retrying; Paperclip did not start Codex.`,

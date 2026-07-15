@@ -1987,7 +1987,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
         ) {
           throw new Error(`Agent is not invokable in its current state: ${agent!.status}`);
         }
-        return { runId: randomUUID() };
+        return { runId: randomUUID(), coalesced: false, delivered: "new_run" as const };
       },
       managed: {
         async get(agentKey, companyId) {

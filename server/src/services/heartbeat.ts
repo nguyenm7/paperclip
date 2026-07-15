@@ -374,14 +374,17 @@ function mergeAdapterRecoveryMetadata(input: {
       : {}),
   };
 }
+// Legacy allow-list: a reason here forces a NEW follow-up run instead of
+// coalescing into an already-running one. Do NOT enroll new reasons — since
+// LOOA-342, wakeup reports coalescing truthfully (`coalesced` / `delivered` on
+// the returned run), and callers that persist notified/raise-once markers must
+// gate on `delivered !== "merged_running"` and retry undelivered wakes
+// themselves (see the gateway aging sweep, paperclip-gateway/src/aging.ts).
+// `approval_approved` stays: an approval resolution must interrupt as its own
+// run — the requester is woken exactly once, so there is no retrying caller to
+// hand the truth to.
 const RUNNING_ISSUE_WAKE_REASONS_REQUIRING_FOLLOWUP = new Set([
   "approval_approved",
-  // The gateway aging-gate sweep (paperclip-gateway/src/aging.ts) stamps a 7-day
-  // re-nudge marker on any truthy wakeup return; coalescing its no-issue-scope wake
-  // into an already-running run would silently swallow the Rule-11 question while
-  // the sweep's ledger records it as delivered (LOOA-335).
-  "aging_gate_rule11",
-  "aging_gate_rule11_escalation",
 ]);
 const SESSIONED_LOCAL_ADAPTERS = new Set([
   "claude_local",
@@ -1517,6 +1520,58 @@ interface WakeupOptions {
   contextSnapshot?: Record<string, unknown>;
 }
 
+/**
+ * How a wake was (or was not) delivered to the target agent.
+ *
+ * - `new_run`: the wake got a run of its own; the prompt renders when it starts.
+ * - `merged_queued`: coalesced into a queued/scheduled_retry run that has not
+ *   started yet — the merged wakeMessage renders at run start, so the wake is
+ *   still delivered.
+ * - `merged_running`: coalesced into an already-RUNNING run whose adapter
+ *   process was spawned with its prompt before the merge and never re-reads
+ *   the context column. **The prompt will never be seen.** Callers that
+ *   persist a notified/raise-once marker must gate on
+ *   `delivered !== "merged_running"`, never on truthiness of the returned run
+ *   (LOOA-342; instances: LOOA-334, LOOA-335).
+ */
+export type WakeDelivery = "new_run" | "merged_queued" | "merged_running";
+
+export type EnqueuedWakeRun = typeof heartbeatRuns.$inferSelect & {
+  coalesced: boolean;
+  delivered: WakeDelivery;
+};
+
+/**
+ * Statuses whose runs have NOT yet read their context row. `claimQueuedRun`
+ * (queued -> running) and the `scheduled_retry` promotion both re-fetch the row
+ * at start, so a context merged into a run in one of these states still renders.
+ */
+const COALESCE_RENDERING_RUN_STATUSES: readonly string[] = ["queued", "scheduled_retry"];
+
+/**
+ * Derive the delivery report from the row the merge UPDATE actually wrote.
+ *
+ * MUST be called with the `RETURNING` row of the merge, never with a status read
+ * before it (LOOA-344 F2). The merge UPDATE matches on id only, so
+ * `claimQueuedRun` — which pins its own UPDATE on `status = "queued"` — can flip
+ * the target queued -> running in the window between a pre-read and the merge.
+ * Reporting the pre-read status would then claim `merged_queued` for a prompt
+ * that was written into a process which had already read its context: a
+ * swallowed wake, audited as delivered. That is precisely the fail-open this
+ * branch exists to close.
+ *
+ * A `running` target will not re-read; a terminal target will never read
+ * anything again. Both mean the prompt lands in a column nobody looks at, so
+ * both report `merged_running` (= "not delivered, retry"). The residual
+ * mis-report flips to the safe direction: a target that finishes between the
+ * merge and the report is called undelivered, costing at most a duplicate retry.
+ */
+export function wakeDeliveryForMergedRun(mergedStatusAfterMerge: string): WakeDelivery {
+  return COALESCE_RENDERING_RUN_STATUSES.includes(mergedStatusAfterMerge)
+    ? "merged_queued"
+    : "merged_running";
+}
+
 type UsageTotals = {
   inputTokens: number;
   cachedInputTokens: number;
@@ -2456,6 +2511,55 @@ export function extractWakeCommentIds(
   return out;
 }
 
+/**
+ * Cap on the accumulated `wakeMessage` carried by a coalesced context snapshot.
+ * Accumulating without a cap would turn repeated `agents.invoke` calls against a
+ * parked run into an unbounded contextSnapshot growth vector — the overwrite
+ * semantics this replaces prevented that for free, so the cap pays for it back
+ * (LOOA-344 F1).
+ */
+const COALESCED_WAKE_MESSAGE_MAX_CHARS = 16_384;
+const COALESCED_WAKE_MESSAGE_SEPARATOR = "\n\n--- next coalesced message ---\n\n";
+const COALESCED_WAKE_MESSAGE_TRUNCATION_MARKER =
+  "[earlier coalesced wake messages truncated]\n\n";
+
+/**
+ * Accumulate `wakeMessage` across coalesced wakes instead of overwriting it.
+ *
+ * A spread-merge let a second same-scope wake REPLACE the prompt of the first
+ * while both were reported delivered: the earlier caller's message was silently
+ * suppressed and its `delivered` report retroactively falsified. Any
+ * same-company plugin holding `agents.invoke` could use that to bury another
+ * caller's parked prompt (LOOA-344 F1). Union semantics here mirror
+ * `mergeWakeCommentIds`.
+ *
+ * When the cap is hit the NEWEST message is kept intact and the oldest prefix is
+ * dropped, so a flood of messages can never push out the one the agent is about
+ * to act on.
+ */
+function mergeWakeMessages(existingRaw: unknown, incomingRaw: unknown): string | null {
+  const existing = readNonEmptyString(existingRaw);
+  const incoming = readNonEmptyString(incomingRaw);
+  if (!existing) return incoming;
+  if (!incoming) return existing;
+  // Idempotent re-wake (same message re-delivered): do not duplicate it.
+  if (existing === incoming || existing.endsWith(incoming)) return existing;
+
+  const combined = `${existing}${COALESCED_WAKE_MESSAGE_SEPARATOR}${incoming}`;
+  if (combined.length <= COALESCED_WAKE_MESSAGE_MAX_CHARS) return combined;
+
+  const budget = COALESCED_WAKE_MESSAGE_MAX_CHARS - COALESCED_WAKE_MESSAGE_TRUNCATION_MARKER.length;
+  // A single oversized incoming message: keep its tail, drop everything older.
+  if (incoming.length >= budget) {
+    return `${COALESCED_WAKE_MESSAGE_TRUNCATION_MARKER}${incoming.slice(incoming.length - budget)}`;
+  }
+  const headroom = budget - incoming.length - COALESCED_WAKE_MESSAGE_SEPARATOR.length;
+  const keptExisting = headroom > 0 ? existing.slice(Math.max(0, existing.length - headroom)) : "";
+  return keptExisting
+    ? `${COALESCED_WAKE_MESSAGE_TRUNCATION_MARKER}${keptExisting}${COALESCED_WAKE_MESSAGE_SEPARATOR}${incoming}`
+    : `${COALESCED_WAKE_MESSAGE_TRUNCATION_MARKER}${incoming}`;
+}
+
 function mergeWakeCommentIds(...values: Array<unknown>): string[] {
   const merged: string[] = [];
   const append = (value: unknown) => {
@@ -2645,6 +2749,14 @@ export function mergeCoalescedContextSnapshot(
   };
   if (existing.forceFreshSession === true || incoming.forceFreshSession === true) {
     merged.forceFreshSession = true;
+  }
+  // The spread above would let the incoming wake's prompt overwrite a prompt that
+  // is still parked on this run and has never been shown to anyone. Accumulate
+  // instead, so every coalesced wake that was reported delivered actually renders
+  // (LOOA-344 F1).
+  const mergedWakeMessage = mergeWakeMessages(existing.wakeMessage, incoming.wakeMessage);
+  if (mergedWakeMessage) {
+    merged.wakeMessage = mergedWakeMessage;
   }
   const mergedCommentIds = mergeWakeCommentIds(existing, incoming);
   if (mergedCommentIds.length > 0) {
@@ -10430,7 +10542,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     await startNextQueuedRunForAgent(promotedRun.agentId);
   }
 
-  async function enqueueWakeup(agentId: string, opts: WakeupOptions = {}) {
+  async function enqueueWakeup(agentId: string, opts: WakeupOptions = {}): Promise<EnqueuedWakeRun | null> {
     const source = opts.source ?? "on_demand";
     const triggerDetail = opts.triggerDetail ?? null;
     const contextSnapshot: Record<string, unknown> = { ...(opts.contextSnapshot ?? {}) };
@@ -10964,7 +11076,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               availableActiveExecutionRun.contextSnapshot,
               enrichedContextSnapshot,
             );
-            const mergedRun = await tx
+            const mergedRunRow = await tx
               .update(heartbeatRuns)
               .set({
                 contextSnapshot: mergedContextSnapshot,
@@ -10972,7 +11084,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               })
               .where(eq(heartbeatRuns.id, availableActiveExecutionRun.id))
               .returning()
-              .then((rows) => rows[0] ?? availableActiveExecutionRun);
+              .then((rows) => rows[0] ?? null);
+            const mergedRun = mergedRunRow ?? availableActiveExecutionRun;
+            // Report from the merge's own RETURNING row, not from the status read
+            // above (LOOA-344 F2). If the row vanished, nothing will render it.
+            const delivered: WakeDelivery = mergedRunRow
+              ? wakeDeliveryForMergedRun(mergedRunRow.status)
+              : "merged_running";
 
             await tx.insert(agentWakeupRequests).values({
               companyId: agent.companyId,
@@ -10990,7 +11108,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               finishedAt: new Date(),
             });
 
-            return { kind: "coalesced" as const, run: mergedRun };
+            return { kind: "coalesced" as const, run: mergedRun, delivered };
           }
 
           if (availableActiveExecutionRun) {
@@ -11109,7 +11227,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       if (outcome.kind === "deferred" || outcome.kind === "skipped") return null;
       if (outcome.kind === "coalesced") {
         await startNextQueuedRunForAgent(agent.id);
-        return outcome.run;
+        return { ...outcome.run, coalesced: true, delivered: outcome.delivered };
       }
 
       const newRun = outcome.run;
@@ -11126,7 +11244,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       });
 
       await startNextQueuedRunForAgent(agent.id);
-      return newRun;
+      return { ...newRun, coalesced: false, delivered: "new_run" as const };
     }
 
     const activeRuns = await db
@@ -11164,7 +11282,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         coalescedTargetRun.contextSnapshot,
         enrichedContextSnapshot,
       );
-      const mergedRun = await db
+      const mergedRunRow = await db
         .update(heartbeatRuns)
         .set({
           contextSnapshot: mergedContextSnapshot,
@@ -11172,7 +11290,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         })
         .where(eq(heartbeatRuns.id, coalescedTargetRun.id))
         .returning()
-        .then((rows) => rows[0] ?? coalescedTargetRun);
+        .then((rows) => rows[0] ?? null);
+      const mergedRun = mergedRunRow ?? coalescedTargetRun;
+      // Report from the merge's own RETURNING row, not from the status read
+      // above (LOOA-344 F2). If the row vanished, nothing will render it.
+      const delivered: WakeDelivery = mergedRunRow
+        ? wakeDeliveryForMergedRun(mergedRunRow.status)
+        : "merged_running";
 
       await db.insert(agentWakeupRequests).values({
         companyId: agent.companyId,
@@ -11189,7 +11313,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         runId: mergedRun.id,
         finishedAt: new Date(),
       });
-      return mergedRun;
+      return { ...mergedRun, coalesced: true, delivered };
     }
 
     const wakeupRequest = await db
@@ -11247,7 +11371,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
     await startNextQueuedRunForAgent(agent.id);
 
-    return newRun;
+    return { ...newRun, coalesced: false, delivered: "new_run" as const };
   }
 
   async function listProjectScopedRunIds(companyId: string, projectId: string) {

@@ -2503,7 +2503,10 @@ export function buildHostServices(
           requestedByActorId: pluginId,
         });
         if (!run) throw new Error("Agent wakeup was skipped by heartbeat policy");
-        return { runId: run.id };
+        // `delivered: "merged_running"` means the prompt was merged into a run
+        // whose process will never read it — the truthy runId is NOT a
+        // delivery receipt (LOOA-342). Forward the truth to plugin callers.
+        return { runId: run.id, coalesced: run.coalesced, delivered: run.delivered };
       },
       async managedGet(params) {
         const companyId = ensureCompanyId(params.companyId);

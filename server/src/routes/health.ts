@@ -6,6 +6,7 @@ import { heartbeatRuns, instanceUserRoles, invites } from "@paperclipai/db";
 import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
 import { readPersistedDevServerStatus, toDevServerHealthStatus, writeDevServerRestartRequest } from "../dev-server-status.js";
 import { logger } from "../middleware/logger.js";
+import type { ServingCommit } from "../serving-commit.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { serverVersion } from "../version.js";
 
@@ -35,6 +36,12 @@ export function healthRoutes(
     deploymentExposure: DeploymentExposure;
     authReady: boolean;
     companyDeletionEnabled: boolean;
+    /**
+     * The commit the serving tree is checked out at (LOOA-389). An identity
+     * trace the server can honestly prove, unlike the instance it attached to.
+     * Only exposed with full details, alongside `version`.
+     */
+    servingCommit?: ServingCommit | null;
   } = {
     deploymentMode: "local_trusted",
     deploymentExposure: "private",
@@ -43,6 +50,7 @@ export function healthRoutes(
   },
 ) {
   const router = Router();
+  const servingTree = opts.servingCommit ?? null;
 
   router.post("/dev-server/restart", async (req, res) => {
     const actorType = "actor" in req ? req.actor?.type : null;
@@ -90,7 +98,7 @@ export function healthRoutes(
     if (!db) {
       res.json(
         exposeFullDetails
-          ? { status: "ok", version: serverVersion }
+          ? { status: "ok", version: serverVersion, ...(servingTree ? { servingTree } : {}) }
           : { status: "ok", deploymentMode: opts.deploymentMode },
       );
       return;
@@ -176,6 +184,7 @@ export function healthRoutes(
       features: {
         companyDeletionEnabled: opts.companyDeletionEnabled,
       },
+      ...(servingTree ? { servingTree } : {}),
       ...(devServer ? { devServer } : {}),
     });
   });

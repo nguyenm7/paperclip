@@ -35,6 +35,12 @@ SERVING_TREE="${SERVING_TREE:-/Users/annica/paperclip-live}"
 DRY_RUN=0
 HEALTH_TIMEOUT_SECS=180
 STOP_TIMEOUT_SECS=60
+# How long to let the graceful `pnpm dev:stop` path free the port before we
+# escalate to signalling the process that actually holds it. Short on purpose:
+# dev:stop either stops the server quickly or no-ops (e.g. its registry record
+# is stale/absent), and waiting the full stop timeout for a no-op just delays
+# the swap for no gain.
+GRACEFUL_STOP_SECS=25
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -90,6 +96,32 @@ HEALTH_URL="http://127.0.0.1:${PORT}/api/health"
 # inherited PAPERCLIP_HOME would silently point it at a different database --
 # the one failure the health gate cannot see.
 unset PAPERCLIP_HOME
+
+# Identity fallback: ask the socket when the registry is silent.
+#
+# The registry is the honest answer WHILE the server maintains it -- but a failed
+# `pnpm dev:stop` can delete the serving record while the server keeps running:
+# dev:stop signals the dev-runner's registered pid, which may already have exited
+# and orphaned the server, so the kill no-ops yet the record is removed anyway
+# (this is precisely what the 2026-07-14 cutover left behind). After that,
+# live-service.mjs reports nothing serving even though the port is held, and a
+# cutover that trusted only the registry would refuse and strand us.
+#
+# So if the registry names no serving tree, ask the process actually listening
+# on the health port who it is. Resolve its git top-level (its cwd may be a
+# package subdir), which is the real serving tree -- read from the live socket,
+# not a constant.
+if [ -z "$OLD_TREE" ]; then
+  OWNER_PID="$(lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN -t 2>/dev/null | head -1)"
+  if [ -n "$OWNER_PID" ]; then
+    OWNER_CWD="$(lsof -a -p "$OWNER_PID" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+    if [ -n "$OWNER_CWD" ]; then
+      OLD_TREE="$(git -C "$OWNER_CWD" rev-parse --show-toplevel 2>/dev/null || true)"
+      [ -n "$OLD_TREE" ] && \
+        log "registry names no serving tree; resolved it from the pid holding port ${PORT} (pid ${OWNER_PID}): ${OLD_TREE}"
+    fi
+  fi
+fi
 
 if [ -z "$OLD_TREE" ]; then
   fail "no control plane is registered as serving; refusing to cut over a server that is already down"
@@ -218,18 +250,22 @@ port_is_free() {
   ! lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1
 }
 
+# The pid that actually holds the port right now -- read from the socket, never
+# assumed. The server relocates to the next port when its preferred one is busy,
+# and the service registry can be stale or, after a failed dev:stop, empty. The
+# socket is the one source that cannot lie about who is serving.
+port_listener_pid() {
+  lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN -t 2>/dev/null | head -1
+}
+
 # Wait for the port to be genuinely FREE, not merely unhealthy.
 #
-# The server does not fail when its port is taken -- it logs "Requested port is
-# busy" and quietly binds the next one. So if we start the new server while the
-# old socket is still held, we get a healthy server on 3102 that no client is
-# talking to, and a company that thinks it is down. Health going away is not the
-# signal; the socket being released is.
-stop_server() {
-  local tree="$1"
-  log "stopping server in ${tree}..."
-  ( cd "$tree" && pnpm dev:stop >/dev/null 2>&1 )
-  local deadline=$(( SECONDS + STOP_TIMEOUT_SECS ))
+# Health going away is not the signal -- a server started while the old socket
+# is still held quietly relocates to the next port, giving a "healthy" server no
+# client is talking to. The socket being released is the signal.
+wait_port_free() {
+  local budget="${1:-$STOP_TIMEOUT_SECS}"
+  local deadline=$(( SECONDS + budget ))
   while [ $SECONDS -lt $deadline ]; do
     if port_is_free; then
       # Give the postmaster a moment to checkpoint and release the data dir.
@@ -239,6 +275,61 @@ stop_server() {
     sleep 2
   done
   return 1
+}
+
+# Send $1 to the listener's whole process GROUP when we can, so the `tsx watch`
+# supervisor dies with the server child it would otherwise respawn. Fall back to
+# the single pid when there is no usable group. Never signals our own group --
+# the cutover runs detached in its own session (setsid), so refusing our own
+# group can only ever guard a future caller that forgot to detach.
+kill_target() { # $1=signal  $2=owner_pid  $3=pgid  $4=self_pgid
+  if [ -n "$3" ] && [ "$3" -gt 1 ] 2>/dev/null && [ "$3" != "$4" ]; then
+    kill -"$1" "-$3" 2>/dev/null || true
+  else
+    kill -"$1" "$2" 2>/dev/null || true
+  fi
+}
+
+stop_server() {
+  local tree="$1"
+  log "stopping server in ${tree}..."
+
+  # Graceful path: ask the dev supervisor to stop its own child and drop its
+  # registry record. Enough whenever that supervisor is still alive.
+  ( cd "$tree" && pnpm dev:stop >/dev/null 2>&1 )
+  if wait_port_free "$GRACEFUL_STOP_SECS"; then
+    return 0
+  fi
+
+  # dev:stop signals the pid in the service registry -- the dev-RUNNER's pid.
+  # That runner can exit and orphan the `tsx watch` process that actually holds
+  # the server; the kill then lands on a dead pid, no-ops, and the record is
+  # removed anyway (this is exactly how the 2026-07-14 cutover aborted). So the
+  # graceful path can leave the port held with nothing left in the registry to
+  # aim at. Fall back to the pid the socket says is listening and take down its
+  # whole process group, so the watcher cannot respawn the child we kill.
+  local owner pgid self_pgid
+  owner="$(port_listener_pid)"
+  if [ -z "$owner" ]; then
+    # Nobody is listening yet the port is not free -- let the caller time out.
+    port_is_free && return 0
+    return 1
+  fi
+  pgid="$(ps -o pgid= -p "$owner" 2>/dev/null | tr -d ' ')"
+  self_pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
+  log "port ${PORT} still held by pid ${owner} (pgid ${pgid:-none}) after dev:stop; escalating"
+
+  # SIGTERM first: the server traps it and stops embedded Postgres cleanly before
+  # exiting, so the data dir is released in order for the new server to reopen.
+  kill_target TERM "$owner" "$pgid" "$self_pgid"
+  if wait_port_free; then
+    log "old server stopped"
+    return 0
+  fi
+
+  log "SIGTERM did not free port ${PORT} within ${STOP_TIMEOUT_SECS}s; escalating to SIGKILL"
+  kill_target KILL "$owner" "$pgid" "$self_pgid"
+  wait_port_free
 }
 
 rollback() {

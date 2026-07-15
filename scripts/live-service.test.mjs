@@ -203,6 +203,14 @@ test("evaluateDrift: behind past the grace window is stale", () => {
   assert.ok(d.driftAgeMs >= GRACE_MS);
 });
 
+test("evaluateDrift: graceMs=0 means any behind tree with a known age is immediately stale", () => {
+  // The `Number(env) || default` trap: 0 is a legitimate "no grace" setting.
+  const now = 5_000_000;
+  const d = evaluateDrift({ behindBy: 1, oldestUndeployedAtMs: now - 1, now, graceMs: 0 });
+  assert.equal(d.stale, true);
+  assert.equal(d.graceMs, 0);
+});
+
 test("evaluateDrift: behind with an unknown age is not paged (stale=false)", () => {
   // We know it is behind but cannot age it -- do not cry wolf on a commit that
   // may have merged seconds ago; `behindBy` still surfaces the drift.

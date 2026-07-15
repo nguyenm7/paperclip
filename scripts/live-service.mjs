@@ -48,8 +48,17 @@ const DRIFT_BASE_REF = "origin/master";
  * switched off). Past this window the merged code is demonstrably not being
  * shipped, which is the silent failure LOOA-389 exists to make loud.
  */
-export const DEFAULT_DRIFT_GRACE_MS =
-  Number(process.env.PAPERCLIP_LIVE_DRIFT_GRACE_MS) || 30 * 60 * 1000;
+export const DEFAULT_DRIFT_GRACE_MS = (() => {
+  // Parse explicitly rather than `Number(env) || default`: a grace of 0 ("alarm
+  // on any drift, no grace") is a legitimate setting, and `0 || default` would
+  // silently discard it.
+  const raw = process.env.PAPERCLIP_LIVE_DRIFT_GRACE_MS;
+  if (raw != null && raw.trim() !== "") {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  }
+  return 30 * 60 * 1000;
+})();
 
 function git(args, cwd) {
   return execFileSync("git", args, {

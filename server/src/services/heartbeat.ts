@@ -5134,6 +5134,28 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       requestedByActorId: "heartbeat",
     });
 
+    // Invariant: this runs in the post-run finalize path, after
+    // releaseIssueExecutionAndPromote released the finished run's execution
+    // lock, so the continuation wake always gets a run that will render it
+    // (new_run, or merged_queued which renders at run start). A truthy ref
+    // alone is NOT that guarantee — merged_running means the prompt was
+    // merged into a process that will never re-read it (LOOA-342).
+    //
+    // This gate does not rescue the continuation: enqueueWakeup has already
+    // written the agent_wakeup_requests row under the attempt-scoped
+    // idempotency key, so the next pass sees idempotentWakeExists and decides
+    // `skip` (run-liveness-continuations.ts). The continuation is dropped
+    // either way — the gate's whole job is to make a violated ordering
+    // invariant fail LOUDLY here rather than leave a stamped attempt implying
+    // a continuation that no agent will ever see (LOOA-349).
+    if (continuationRun && continuationRun.delivered === "merged_running") {
+      logger.error(
+        { runId: run.id, issueId, coalescedIntoRunId: continuationRun.id },
+        "liveness continuation wake coalesced into an already-running run and will never render; the continuation is dropped — finalize ordering invariant violated",
+      );
+      return;
+    }
+
     if (continuationRun) {
       await db
         .update(heartbeatRuns)
@@ -5398,6 +5420,20 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       requestedByActorId: "heartbeat",
     });
     if (!handoffRun) return;
+    // Invariant: same finalize-path ordering as the liveness continuation
+    // above — the finished run's execution lock is already released, so the
+    // handoff wake always gets a run that will render it. If a re-ordering
+    // ever breaks that, a merged_running wake will never be seen: posting the
+    // raise-once handoff comment and the audit row below would assert a
+    // corrective run that never fires (LOOA-342). Fail loudly and skip both
+    // (LOOA-349).
+    if (handoffRun.delivered === "merged_running") {
+      logger.error(
+        { runId: run.id, issueId: issue.id, coalescedIntoRunId: handoffRun.id },
+        "successful-run handoff wake coalesced into an already-running run and will never render; skipping handoff comment and audit row — finalize ordering invariant violated",
+      );
+      return;
+    }
 
     await addSuccessfulRunHandoffCommentOnce({
       issue,

@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { eq, sql } from "drizzle-orm";
-import { agents, companies, createDb, heartbeatRuns } from "@paperclipai/db";
+import { activityLog, agents, companies, createDb, heartbeatRuns, issues } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { runningProcesses } from "../adapters/index.ts";
 import { heartbeatService, wakeDeliveryForMergedRun } from "../services/heartbeat.ts";
+import { buildHostServices } from "../services/plugin-host-services.ts";
 
 // LOOA-342 (class fix behind LOOA-334 and LOOA-335): heartbeat.wakeup used to
 // return a bare truthy run for a wake that was COALESCED into an
@@ -80,21 +81,68 @@ describeEmbeddedPostgres("wakeup reports coalescing truthfully (LOOA-342)", () =
     heartbeat = heartbeatService(db);
   }, 60_000);
 
-  afterEach(async () => {
+  /**
+   * Isolation here is by IDENTITY, not by wiping shared state, and that is
+   * load-bearing (LOOA-349 review). A wake to an agent with a free slot does
+   * not just enqueue: `wakeup` awaits `startNextQueuedRunForAgent`, which
+   * claims the queued run and fires `void executeRun(...)`. Those writes
+   * (agent_runtime_state, heartbeat_runs, the post-run finalize path) outlive
+   * the test body. A `truncate ... cascade` in afterEach takes an
+   * AccessExclusiveLock against exactly those in-flight writes: under CPU
+   * contention the two deadlock (Postgres 40P01), the truncate loses, the
+   * company row survives, and the NEXT test dies on the
+   * `companies_issue_prefix_idx` unique index — because every seeded company
+   * defaulted to issue prefix "PAP". That is a flaky tripwire, which is worse
+   * than no tripwire: it gets re-run until green and then stops being read.
+   *
+   * So: every company gets a unique issue prefix, no test truncates, and each
+   * test's assertions are scoped to its own agent/issue ids. Background
+   * executions from a previous test cannot collide with or mask the next one.
+   */
+  afterEach(() => {
     runningProcesses.clear();
-    // heartbeat_runs <-> agent_wakeup_requests reference each other, so drop the
-    // whole graph in one cascade rather than ordering deletes.
-    await db.execute(sql`truncate table companies cascade`);
   });
 
   afterAll(async () => {
     runningProcesses.clear();
+    // Let any fire-and-forget executeRun finish its writes before the database
+    // is torn down, so teardown does not race them into noisy FK errors.
+    await waitForDatabaseQuiescence();
     await tempDb?.cleanup();
   });
 
+  /** Poll until no other backend is running a query against this database. */
+  async function waitForDatabaseQuiescence(timeoutMs = 10_000) {
+    const started = performance.now();
+    let idleSamples = 0;
+    while (performance.now() - started < timeoutMs) {
+      const rows = (await db.execute(sql`
+        select count(*)::int as active
+        from pg_stat_activity
+        where datname = current_database()
+          and pid <> pg_backend_pid()
+          and state <> 'idle'
+      `)) as unknown as Array<{ active: number }>;
+      if (Number(rows[0]?.active ?? 0) === 0) {
+        idleSamples += 1;
+        if (idleSamples >= 3) return;
+      } else {
+        idleSamples = 0;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
   async function seedCompanyWithAgent(role: string) {
     const companyId = randomUUID();
-    await db.insert(companies).values({ id: companyId, name: "Test Co", status: "active" });
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Test Co",
+      status: "active",
+      // Unique per company: the default prefix is shared, and a shared prefix
+      // is what turns any leftover row into a cross-test failure.
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+    });
     const agentId = randomUUID();
     await db.insert(agents).values({ id: agentId, companyId, name: "Creator", role });
     return { companyId, agentId };
@@ -108,7 +156,7 @@ describeEmbeddedPostgres("wakeup reports coalescing truthfully (LOOA-342)", () =
    * which is the state the server is in whenever that agent happens to be
    * working.
    */
-  async function seedLiveRun(companyId: string, agentId: string) {
+  async function seedLiveRun(companyId: string, agentId: string, contextSnapshot: Record<string, unknown> = {}) {
     const runId = randomUUID();
     await db.insert(heartbeatRuns).values({
       id: runId,
@@ -116,7 +164,7 @@ describeEmbeddedPostgres("wakeup reports coalescing truthfully (LOOA-342)", () =
       agentId,
       invocationSource: "timer",
       status: "running",
-      contextSnapshot: {},
+      contextSnapshot,
       startedAt: new Date(),
     });
     runningProcesses.set(runId, {
@@ -242,8 +290,9 @@ describeEmbeddedPostgres("wakeup reports coalescing truthfully (LOOA-342)", () =
       expect(run!.id, `reason ${reason} should coalesce like any other automation wake`).toBe(liveRunId);
       expect(run!.delivered, `reason ${reason} must report the swallowed prompt truthfully`).toBe("merged_running");
 
+      // Each iteration seeds its own company + agent, so dropping the live run
+      // from the process registry is the only cleanup needed between them.
       runningProcesses.clear();
-      await db.execute(sql`truncate table companies cascade`);
     }
   }, 30_000);
 
@@ -396,4 +445,111 @@ describeEmbeddedPostgres("wakeup reports coalescing truthfully (LOOA-342)", () =
       "the report handed to the caller must match what the carrier's real status implies",
     ).toBe(run!.delivered);
   }, 30_000);
+  // LOOA-349: the plugin bridge's issue-scoped wake routes
+  // (`ctx.issues.requestWakeup` / `requestWakeups`) used to return only
+  // `{ queued: Boolean(run), runId }` — `queued: true` for a swallowed
+  // merged_running merge, indistinguishable from delivery. Any plugin that
+  // persisted a notified-marker on `queued` re-inherited the LOOA-334 bug.
+  // These tests pin the forwarded delivery report at the REAL bridge
+  // (buildHostServices over the same live heartbeat service), not a stub.
+  describe("plugin bridge requestWakeup(s) forward the delivery report (LOOA-349)", () => {
+    function bridgeServices() {
+      const eventBusStub = {
+        forPlugin() {
+          return { emit: async () => {}, subscribe: () => {} };
+        },
+      };
+      return buildHostServices(db, "plugin-record-id", "paperclip.test-plugin", eventBusStub as never);
+    }
+
+    async function seedAssignedIssue(companyId: string, agentId: string, title: string) {
+      const issueId = randomUUID();
+      await db.insert(issues).values({
+        id: issueId,
+        companyId,
+        title,
+        status: "in_progress",
+        priority: "medium",
+        assigneeAgentId: agentId,
+      });
+      return issueId;
+    }
+
+    it("requestWakeup while the assignee is mid-run on the same issue reports queued=true BUT delivered=merged_running — queued is not a delivery receipt", async () => {
+      const { companyId, agentId } = await seedCompanyWithAgent("cto");
+      const issueId = await seedAssignedIssue(companyId, agentId, "Issue with a live run");
+      const liveRunId = await seedLiveRun(companyId, agentId, { issueId });
+
+      const result = await bridgeServices().issues.requestWakeup({
+        issueId,
+        companyId,
+        reason: "some_future_plugin_sweep",
+      });
+
+      expect(
+        result,
+        "the exact wire shape plugin callers see: queued stays true for backward compatibility, but coalesced/delivered tell the truth",
+      ).toEqual({
+        queued: true,
+        runId: liveRunId,
+        coalesced: true,
+        delivered: "merged_running",
+      });
+
+      const auditRows = await db.select().from(activityLog).where(eq(activityLog.entityId, issueId));
+      const wakeupRow = auditRows.find((row) => row.action === "issue.assignment_wakeup_requested");
+      expect(wakeupRow, "the bridge writes an audit row for the wakeup request").toBeTruthy();
+      expect(
+        (wakeupRow!.details as Record<string, unknown>).delivered,
+        "the audit row must record the delivery truth, not just a truthy runId",
+      ).toBe("merged_running");
+    }, 30_000);
+
+    it("requestWakeup to an idle assignee reports coalesced=false delivered=new_run", async () => {
+      const { companyId, agentId } = await seedCompanyWithAgent("cto");
+      const issueId = await seedAssignedIssue(companyId, agentId, "Idle assignee issue");
+
+      const result = await bridgeServices().issues.requestWakeup({
+        issueId,
+        companyId,
+        reason: "some_future_plugin_sweep",
+      });
+
+      expect(result.queued).toBe(true);
+      expect(result.runId).toBeTruthy();
+      expect(result.coalesced).toBe(false);
+      expect(result.delivered).toBe("new_run");
+    }, 30_000);
+
+    it("requestWakeups reports delivery per issue: the busy issue's wake is swallowed while the idle issue's wake delivers", async () => {
+      const { companyId, agentId } = await seedCompanyWithAgent("cto");
+      const busyIssueId = await seedAssignedIssue(companyId, agentId, "Busy issue");
+      const idleIssueId = await seedAssignedIssue(companyId, agentId, "Idle issue");
+      const liveRunId = await seedLiveRun(companyId, agentId, { issueId: busyIssueId });
+
+      const results = await bridgeServices().issues.requestWakeups({
+        issueIds: [busyIssueId, idleIssueId],
+        companyId,
+        reason: "some_future_plugin_sweep",
+      });
+
+      expect(results).toHaveLength(2);
+      const busy = results.find((entry) => entry.issueId === busyIssueId);
+      const idle = results.find((entry) => entry.issueId === idleIssueId);
+      expect(
+        busy,
+        "the busy issue's wake coalesces into the live run — the batch entry must say the prompt evaporated",
+      ).toEqual({
+        issueId: busyIssueId,
+        queued: true,
+        runId: liveRunId,
+        coalesced: true,
+        delivered: "merged_running",
+      });
+      expect(idle?.queued).toBe(true);
+      expect(idle?.coalesced).toBe(false);
+      expect(idle?.delivered, "a wake scoped to a different issue must not be swallowed by the busy run").toBe("new_run");
+      expect(idle?.runId).not.toBe(liveRunId);
+    }, 30_000);
+  });
 });

@@ -11,6 +11,97 @@ import type {
   AdapterSkillSnapshot,
 } from "./types.js";
 
+export const ADAPTER_CONFIG_REJECTED_ERROR_CODE = "adapter_config_rejected";
+
+/**
+ * Error family for a provider quota / spend-limit rejection whose blocked window
+ * reopens later than MAX_DEFERRED_RETRY_LOCK_HOLD_MS. Runs carrying this family
+ * are escalated rather than retried — not because every retry is proven futile
+ * (see MAX_DEFERRED_RETRY_LOCK_HOLD_MS: that claim is unprovable), but because
+ * parking a retry until the reset would hold the issue's execution lock for the
+ * whole window (LOOA-360).
+ */
+export const PROVIDER_QUOTA_REJECTED_ERROR_FAMILY = "provider_quota_rejected";
+
+// The bounded transient-retry ladder. Defined here, rather than in the server,
+// because MAX_DEFERRED_RETRY_LOCK_HOLD_MS below is only defensible while it stays
+// inside the longest deferral this ladder already produces, and that invariant is
+// asserted against these exact numbers. Two copies would drift silently, and the
+// assertion would quietly stop binding.
+export const BOUNDED_TRANSIENT_RETRY_DELAYS_MS = [
+  2 * 60 * 1000,
+  10 * 60 * 1000,
+  30 * 60 * 1000,
+  2 * 60 * 60 * 1000,
+] as const;
+
+/** Each delay is jittered by ±this ratio, so the worst case is 1 + ratio. */
+export const BOUNDED_TRANSIENT_RETRY_JITTER_RATIO = 0.25;
+
+/**
+ * How long we are willing to leave a retry queued for a provider window that has
+ * not reopened yet.
+ *
+ * This deliberately does NOT try to predict when the last retry would fire.
+ * Retry wall time is unbounded — each attempt is scheduled only after the
+ * previous run finishes, local adapters default to no timeout, and due runs can
+ * be promoted late — so no constant can prove "every retry lands inside the
+ * block" (LOOA-367 review). Any threshold that claims to is a guess wearing a
+ * proof's clothes.
+ *
+ * What we CAN bound is our own behaviour. Scheduling a retry transfers the
+ * issue's execution lock to the queued run (heartbeat scheduleBoundedRetryForRun),
+ * and a queued holder makes comments/PATCH/release 409 on that issue (LOOA-375).
+ * So a retry parked on a five-day quota window would freeze the issue for five
+ * days — worse than the burned runs we are fixing.
+ *
+ * Hence: if the window reopens within this budget, wait for it and retry exactly
+ * at the reset (no wasted attempts, and nothing is suppressed). If it reopens
+ * later, refuse to hold the lock — release the issue and escalate instead.
+ *
+ * The budget is the longest single deferral the retry system can already produce
+ * today, so this never holds an issue lock longer than the existing ladder can.
+ * The invariant is asserted in tests against the ladder above.
+ */
+export const MAX_DEFERRED_RETRY_LOCK_HOLD_MS = 2 * 60 * 60 * 1000;
+
+/** Structured detail carried on `resultJson.providerQuotaRejection`. */
+export type ProviderQuotaRejection = {
+  model: string | null;
+  resetsAt: string | null;
+  reason: string | null;
+  overageStatus: string | null;
+  rateLimitType: string | null;
+  status: number | null;
+  message: string | null;
+};
+
+/**
+ * Deterministic pre-flight rejection: the adapter refused to start the
+ * provider process because the effective configuration can never succeed
+ * as-is. Heartbeat finalization persists this as run errorCode
+ * "adapter_config_rejected" so the failure is surfaced on the wake-source
+ * issue instead of only inside run logs.
+ */
+export class AdapterConfigRejectedError extends Error {
+  readonly adapterErrorCode = ADAPTER_CONFIG_REJECTED_ERROR_CODE;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "AdapterConfigRejectedError";
+  }
+}
+
+export function isAdapterConfigRejectedError(error: unknown): boolean {
+  if (error instanceof AdapterConfigRejectedError) return true;
+  // Duck-typed fallback: the adapter packages and the server may not share a
+  // single class instance across package boundaries.
+  return (
+    error instanceof Error &&
+    (error as { adapterErrorCode?: unknown }).adapterErrorCode === ADAPTER_CONFIG_REJECTED_ERROR_CODE
+  );
+}
+
 export interface RunProcessResult {
   exitCode: number | null;
   signal: string | null;

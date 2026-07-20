@@ -3,7 +3,7 @@ import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, lt, lte, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gt, gte, inArray, isNull, lt, lte, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
@@ -54,6 +54,12 @@ import {
 } from "@paperclipai/db";
 import { conflict, HttpError, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
+import {
+  computeServingDrift,
+  setCachedServingDrift,
+  SERVING_TREE_DRIFT_SWEEP_ENABLED,
+  SERVING_TREE_DRIFT_SWEEP_INTERVAL_MS,
+} from "../serving-drift.js";
 import { publishLiveEvent } from "./live-events.js";
 import { getRunLogStore, type RunLogHandle } from "./run-log-store.js";
 import { getServerAdapter, listAdapterModelProfiles, runningProcesses } from "../adapters/index.js";
@@ -181,6 +187,12 @@ import {
   type SessionCompactionPolicy,
 } from "@paperclipai/adapter-utils";
 import {
+  ADAPTER_CONFIG_REJECTED_ERROR_CODE,
+  BOUNDED_TRANSIENT_RETRY_DELAYS_MS,
+  BOUNDED_TRANSIENT_RETRY_JITTER_RATIO,
+  MAX_DEFERRED_RETRY_LOCK_HOLD_MS,
+  PROVIDER_QUOTA_REJECTED_ERROR_FAMILY,
+  isAdapterConfigRejectedError,
   readPaperclipSkillSyncPreference,
   writePaperclipSkillSyncPreference,
 } from "@paperclipai/adapter-utils/server-utils";
@@ -197,10 +209,7 @@ import {
 } from "./low-trust-runtime-containment.js";
 import { resolveCoreTrustPreset, type TrustPresetResolution } from "./trust-preset-resolver.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
-import {
-  PROVIDER_CLIENT_ERROR_COMMENT_MARKER,
-  surfaceProviderClientError,
-} from "./provider-client-error-escalation.js";
+import { surfaceProviderClientError } from "./provider-client-error-escalation.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -246,13 +255,13 @@ export {
   ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS,
 } from "./recovery/service.js";
 export const ACTIVE_RUN_OUTPUT_PROGRESS_FLUSH_INTERVAL_MS = 60 * 1000;
-export const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_DELAYS_MS = [
-  2 * 60 * 1000,
-  10 * 60 * 1000,
-  30 * 60 * 1000,
-  2 * 60 * 60 * 1000,
-] as const;
-const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_JITTER_RATIO = 0.25;
+// Single source of truth lives in adapter-utils, alongside
+// MAX_DEFERRED_RETRY_LOCK_HOLD_MS: the lock-hold budget is only defensible while
+// it stays within the longest deferral this ladder can already produce, and that
+// invariant is asserted against these exact numbers. A second copy here would
+// drift silently and the assertion would stop binding (LOOA-360).
+export const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_DELAYS_MS = BOUNDED_TRANSIENT_RETRY_DELAYS_MS;
+const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_JITTER_RATIO = BOUNDED_TRANSIENT_RETRY_JITTER_RATIO;
 const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_REASON = "transient_failure";
 const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_WAKE_REASON = "transient_failure_retry";
 const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_MAX_ATTEMPTS = BOUNDED_TRANSIENT_HEARTBEAT_RETRY_DELAYS_MS.length;
@@ -371,16 +380,18 @@ function mergeAdapterRecoveryMetadata(input: {
       : {}),
   };
 }
-// Wakes that must never be merged into an already-RUNNING run: the adapter was
-// spawned with its prompt and never re-reads contextSnapshot, so a merged
-// wakeMessage is silently dropped. `stale_gate_alarm` carries no issueId/taskKey,
-// so it shares the null task scope with the CEO's ordinary runs and would
-// otherwise coalesce into whatever they are already doing — burning raise-once on
-// an alarm that was never rendered. Invariant pinned by
-// stale-gate-alarm-delivery.test.ts, which asserts delivery, not this mechanism.
+// Legacy allow-list: a reason here forces a NEW follow-up run instead of
+// coalescing into an already-running one. Do NOT enroll new reasons — since
+// LOOA-342, wakeup reports coalescing truthfully (`coalesced` / `delivered` on
+// the returned run), and callers that persist notified/raise-once markers must
+// gate on `delivered !== "merged_running"` and retry undelivered wakes
+// themselves (see the gateway aging sweep, paperclip-gateway/src/aging.ts, and
+// the stale-gate detector, server/src/services/stale-gate-detector.ts).
+// `approval_approved` stays: an approval resolution must interrupt as its own
+// run — the requester is woken exactly once, so there is no retrying caller to
+// hand the truth to.
 const RUNNING_ISSUE_WAKE_REASONS_REQUIRING_FOLLOWUP = new Set([
   "approval_approved",
-  "stale_gate_alarm",
 ]);
 const SESSIONED_LOCAL_ADAPTERS = new Set([
   "claude_local",
@@ -965,6 +976,114 @@ function isModelSafetyRefusalRun(
   return run?.errorCode === MODEL_SAFETY_REFUSAL_ERROR_CODE;
 }
 
+// A hard provider quota rejection is a rate-limit block whose window does not
+// reopen inside the deferral budget. The finalize path skips the retry chain for
+// these, because readTransientRecoveryContractFromRun only honours
+// "transient_upstream" — but suppress it at the scheduler too, so a caller that
+// reaches the scheduler without the finalize gate cannot reopen the loop.
+// LOOA-360 burned 10+ consecutive zero-cost runs on one of these.
+function isProviderQuotaRejectedRun(
+  run: Pick<typeof heartbeatRuns.$inferSelect, "errorCode" | "resultJson"> | null | undefined,
+) {
+  return run ? readHeartbeatRunErrorFamily(run) === PROVIDER_QUOTA_REJECTED_ERROR_FAMILY : false;
+}
+
+function omitKeys(source: Record<string, unknown>, keys: string[]) {
+  const next = { ...source };
+  for (const key of keys) delete next[key];
+  return next;
+}
+
+/**
+ * Decide what a provider-named rate-limit block means for the retry chain.
+ *
+ * The adapter reports only the FACT — what is blocked and until when. The policy
+ * is here, because it turns on something the adapter cannot see: scheduling a
+ * retry hands the issue's execution lock to the queued run
+ * (scheduleBoundedRetryForRun below), which 409s writes to that issue until it
+ * starts.
+ *
+ * - Window reopens within MAX_DEFERRED_RETRY_LOCK_HOLD_MS → keep it transient and
+ *   let the existing retry-not-before machinery wait for the reset. The retry
+ *   fires when it can actually succeed, so nothing is suppressed and no attempt
+ *   is burned inside the window.
+ * - Window reopens later → refuse to park a retry on it. Holding an issue's
+ *   execution lock for hours or days is a worse failure than the burned runs we
+ *   are fixing, so release the issue and escalate instead.
+ *
+ * Note what this does NOT claim: it never asserts that the block outlasts every
+ * retry we might have attempted, and callers must not say so either. Retry wall
+ * time is unbounded (runs are scheduled only after their predecessor finishes,
+ * local adapters default to no timeout), so that claim is unprovable — an earlier
+ * revision of this fix tried to make it with a constant and was rightly rejected
+ * (LOOA-367 review). We stop because we refuse to hold the lock that long, not
+ * because we have proven futility.
+ */
+function readProviderQuotaBlock(
+  resultJson: Record<string, unknown> | null | undefined,
+  now: Date,
+): Record<string, unknown> | null {
+  const rejection = parseObject(resultJson?.providerRateLimitRejection);
+  const resetsAtRaw = readNonEmptyString(rejection.resetsAt);
+  if (!resetsAtRaw) return null;
+  const resetsAt = new Date(resetsAtRaw);
+  if (Number.isNaN(resetsAt.getTime())) return null;
+  return resetsAt.getTime() > now.getTime() + MAX_DEFERRED_RETRY_LOCK_HOLD_MS ? rejection : null;
+}
+
+/**
+ * The finalize-time classification: turn the adapter's reported FACT (the blocked
+ * window) into the run's recovery contract.
+ *
+ * A long window leaves the transient family and drops its retry hints, so nothing
+ * downstream can schedule against it. A short window is left exactly as the
+ * adapter reported it — still transient, still carrying its retry-not-before — so
+ * the existing machinery waits and retries at the reset.
+ *
+ * Exported because this is the load-bearing decision and it must be tested on its
+ * own inputs. Seeding an already-classified run and asserting the scheduler obeys
+ * it proves nothing about this function: it would pass with the comparison
+ * inverted (LOOA-379 review).
+ */
+export function applyProviderQuotaRejectionPolicy(
+  input: {
+    outcome: string;
+    resultJson: Record<string, unknown> | null | undefined;
+    errorFamily?: string | null;
+    retryNotBefore?: string | null;
+  },
+  now: Date,
+): {
+  resultJson: Record<string, unknown> | null;
+  errorFamily: string | null;
+  retryNotBefore: string | null;
+} {
+  const block = input.outcome === "failed" ? readProviderQuotaBlock(input.resultJson, now) : null;
+  if (!block) {
+    return {
+      resultJson: input.resultJson ?? null,
+      errorFamily: input.errorFamily ?? null,
+      retryNotBefore: input.retryNotBefore ?? null,
+    };
+  }
+  return {
+    resultJson: {
+      ...omitKeys(input.resultJson ?? {}, ["retryNotBefore", "transientRetryNotBefore"]),
+      // Stamp the family INSIDE the blob, not just on the returned field. The
+      // adapter's resultJson still says "transient_upstream", and
+      // readHeartbeatRunErrorFamily reads the blob — so a caller that persists
+      // this resultJson without folding the field in would store a run that still
+      // looks transient, and the retry loop this whole fix exists to close would
+      // reopen. Keep the return value true on its own terms.
+      errorFamily: PROVIDER_QUOTA_REJECTED_ERROR_FAMILY,
+      providerQuotaRejection: block,
+    },
+    errorFamily: PROVIDER_QUOTA_REJECTED_ERROR_FAMILY,
+    // Drop the retry hint with it: nothing should be scheduled.
+    retryNotBefore: null,
+  };
+}
+
 async function hasGitMetadata(cwd: string | null | undefined) {
   const normalized = readNonEmptyString(cwd);
   if (!normalized) return false;
@@ -1406,6 +1525,58 @@ interface WakeupOptions {
   requestedByActorType?: "user" | "agent" | "system";
   requestedByActorId?: string | null;
   contextSnapshot?: Record<string, unknown>;
+}
+
+/**
+ * How a wake was (or was not) delivered to the target agent.
+ *
+ * - `new_run`: the wake got a run of its own; the prompt renders when it starts.
+ * - `merged_queued`: coalesced into a queued/scheduled_retry run that has not
+ *   started yet — the merged wakeMessage renders at run start, so the wake is
+ *   still delivered.
+ * - `merged_running`: coalesced into an already-RUNNING run whose adapter
+ *   process was spawned with its prompt before the merge and never re-reads
+ *   the context column. **The prompt will never be seen.** Callers that
+ *   persist a notified/raise-once marker must gate on
+ *   `delivered !== "merged_running"`, never on truthiness of the returned run
+ *   (LOOA-342; instances: LOOA-334, LOOA-335).
+ */
+export type WakeDelivery = "new_run" | "merged_queued" | "merged_running";
+
+export type EnqueuedWakeRun = typeof heartbeatRuns.$inferSelect & {
+  coalesced: boolean;
+  delivered: WakeDelivery;
+};
+
+/**
+ * Statuses whose runs have NOT yet read their context row. `claimQueuedRun`
+ * (queued -> running) and the `scheduled_retry` promotion both re-fetch the row
+ * at start, so a context merged into a run in one of these states still renders.
+ */
+const COALESCE_RENDERING_RUN_STATUSES: readonly string[] = ["queued", "scheduled_retry"];
+
+/**
+ * Derive the delivery report from the row the merge UPDATE actually wrote.
+ *
+ * MUST be called with the `RETURNING` row of the merge, never with a status read
+ * before it (LOOA-344 F2). The merge UPDATE matches on id only, so
+ * `claimQueuedRun` — which pins its own UPDATE on `status = "queued"` — can flip
+ * the target queued -> running in the window between a pre-read and the merge.
+ * Reporting the pre-read status would then claim `merged_queued` for a prompt
+ * that was written into a process which had already read its context: a
+ * swallowed wake, audited as delivered. That is precisely the fail-open this
+ * branch exists to close.
+ *
+ * A `running` target will not re-read; a terminal target will never read
+ * anything again. Both mean the prompt lands in a column nobody looks at, so
+ * both report `merged_running` (= "not delivered, retry"). The residual
+ * mis-report flips to the safe direction: a target that finishes between the
+ * merge and the report is called undelivered, costing at most a duplicate retry.
+ */
+export function wakeDeliveryForMergedRun(mergedStatusAfterMerge: string): WakeDelivery {
+  return COALESCE_RENDERING_RUN_STATUSES.includes(mergedStatusAfterMerge)
+    ? "merged_queued"
+    : "merged_running";
 }
 
 type UsageTotals = {
@@ -2347,6 +2518,55 @@ export function extractWakeCommentIds(
   return out;
 }
 
+/**
+ * Cap on the accumulated `wakeMessage` carried by a coalesced context snapshot.
+ * Accumulating without a cap would turn repeated `agents.invoke` calls against a
+ * parked run into an unbounded contextSnapshot growth vector — the overwrite
+ * semantics this replaces prevented that for free, so the cap pays for it back
+ * (LOOA-344 F1).
+ */
+const COALESCED_WAKE_MESSAGE_MAX_CHARS = 16_384;
+const COALESCED_WAKE_MESSAGE_SEPARATOR = "\n\n--- next coalesced message ---\n\n";
+const COALESCED_WAKE_MESSAGE_TRUNCATION_MARKER =
+  "[earlier coalesced wake messages truncated]\n\n";
+
+/**
+ * Accumulate `wakeMessage` across coalesced wakes instead of overwriting it.
+ *
+ * A spread-merge let a second same-scope wake REPLACE the prompt of the first
+ * while both were reported delivered: the earlier caller's message was silently
+ * suppressed and its `delivered` report retroactively falsified. Any
+ * same-company plugin holding `agents.invoke` could use that to bury another
+ * caller's parked prompt (LOOA-344 F1). Union semantics here mirror
+ * `mergeWakeCommentIds`.
+ *
+ * When the cap is hit the NEWEST message is kept intact and the oldest prefix is
+ * dropped, so a flood of messages can never push out the one the agent is about
+ * to act on.
+ */
+function mergeWakeMessages(existingRaw: unknown, incomingRaw: unknown): string | null {
+  const existing = readNonEmptyString(existingRaw);
+  const incoming = readNonEmptyString(incomingRaw);
+  if (!existing) return incoming;
+  if (!incoming) return existing;
+  // Idempotent re-wake (same message re-delivered): do not duplicate it.
+  if (existing === incoming || existing.endsWith(incoming)) return existing;
+
+  const combined = `${existing}${COALESCED_WAKE_MESSAGE_SEPARATOR}${incoming}`;
+  if (combined.length <= COALESCED_WAKE_MESSAGE_MAX_CHARS) return combined;
+
+  const budget = COALESCED_WAKE_MESSAGE_MAX_CHARS - COALESCED_WAKE_MESSAGE_TRUNCATION_MARKER.length;
+  // A single oversized incoming message: keep its tail, drop everything older.
+  if (incoming.length >= budget) {
+    return `${COALESCED_WAKE_MESSAGE_TRUNCATION_MARKER}${incoming.slice(incoming.length - budget)}`;
+  }
+  const headroom = budget - incoming.length - COALESCED_WAKE_MESSAGE_SEPARATOR.length;
+  const keptExisting = headroom > 0 ? existing.slice(Math.max(0, existing.length - headroom)) : "";
+  return keptExisting
+    ? `${COALESCED_WAKE_MESSAGE_TRUNCATION_MARKER}${keptExisting}${COALESCED_WAKE_MESSAGE_SEPARATOR}${incoming}`
+    : `${COALESCED_WAKE_MESSAGE_TRUNCATION_MARKER}${incoming}`;
+}
+
 function mergeWakeCommentIds(...values: Array<unknown>): string[] {
   const merged: string[] = [];
   const append = (value: unknown) => {
@@ -2536,6 +2756,14 @@ export function mergeCoalescedContextSnapshot(
   };
   if (existing.forceFreshSession === true || incoming.forceFreshSession === true) {
     merged.forceFreshSession = true;
+  }
+  // The spread above would let the incoming wake's prompt overwrite a prompt that
+  // is still parked on this run and has never been shown to anyone. Accumulate
+  // instead, so every coalesced wake that was reported delivered actually renders
+  // (LOOA-344 F1).
+  const mergedWakeMessage = mergeWakeMessages(existing.wakeMessage, incoming.wakeMessage);
+  if (mergedWakeMessage) {
+    merged.wakeMessage = mergedWakeMessage;
   }
   const mergedCommentIds = mergeWakeCommentIds(existing, incoming);
   if (mergedCommentIds.length > 0) {
@@ -3171,6 +3399,40 @@ export interface HeartbeatServiceOptions {
   environmentRuntime?: HeartbeatEnvironmentRuntime;
 }
 
+/** Origin kind stamped on serving-tree drift issues so the sweep can find its own open issue (LOOA-412). */
+const SERVING_TREE_DRIFT_ORIGIN_KIND = "serving_tree_drift";
+const SERVING_TREE_DRIFT_ACTOR_ID = "serving-tree-drift-sweep";
+
+/** Human-actionable body for an auto-filed serving-tree drift issue. */
+function buildServingTreeDriftIssueBody(
+  drift: { head: string | null; baseHead: string | null; behindBy: number; driftAgeMs: number | null },
+  fingerprint: string,
+): string {
+  const ageMin = drift.driftAgeMs != null ? Math.floor(drift.driftAgeMs / 60_000) : null;
+  return [
+    "## Serving tree is stale — deploy needed",
+    "",
+    `The live control-plane tree is **${drift.behindBy} commit(s) behind \`master\`**` +
+      (ageMin != null ? ` (oldest undeployed ~${ageMin}m ago)` : "") +
+      ".",
+    "",
+    `- Served head: \`${drift.head ?? "unknown"}\``,
+    `- Master head: \`${drift.baseHead ?? "unknown"}\``,
+    "",
+    "Reviewed code is merged but not serving. Deploy it (FF-only of reviewed `origin/master`):",
+    "",
+    "```",
+    "pnpm live:where   # confirm the drift + which tree is live",
+    "pnpm deploy:live  # fast-forward the serving tree; tsx watch reloads",
+    "```",
+    "",
+    "Then confirm `pnpm live:where` is clean (or `/api/health` `servingTree.behindBy` is 0) and close this issue.",
+    "",
+    "> Auto-filed by the server-side drift sweep (LOOA-412). At most one such issue is open at a time; " +
+      `fingerprint \`${fingerprint}\`. The deploy runs in this issue's own run — never in the server process (LOOA-403).`,
+  ].join("\n");
+}
+
 export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) {
   const instanceSettings = instanceSettingsService(db);
   const getCurrentUserRedactionOptions = async () => ({
@@ -3205,6 +3467,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   const recovery = recoveryService(db, { enqueueWakeup });
   const productivityReviews = productivityReviewService(db, { enqueueWakeup });
   let unsafeTextProjectionPromise: Promise<boolean> | null = null;
+  // Throttle for the serving-tree drift sweep (LOOA-412): the periodic timer
+  // ticks every ~30s but a `git fetch` per tick would be wasteful, so the sweep
+  // only recomputes every SERVING_TREE_DRIFT_SWEEP_INTERVAL_MS.
+  let lastServingTreeDriftSweepAtMs = 0;
 
   async function releaseEnvironmentLeasesForRun(input: {
     runId: string;
@@ -4913,6 +5179,28 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       requestedByActorId: "heartbeat",
     });
 
+    // Invariant: this runs in the post-run finalize path, after
+    // releaseIssueExecutionAndPromote released the finished run's execution
+    // lock, so the continuation wake always gets a run that will render it
+    // (new_run, or merged_queued which renders at run start). A truthy ref
+    // alone is NOT that guarantee — merged_running means the prompt was
+    // merged into a process that will never re-read it (LOOA-342).
+    //
+    // This gate does not rescue the continuation: enqueueWakeup has already
+    // written the agent_wakeup_requests row under the attempt-scoped
+    // idempotency key, so the next pass sees idempotentWakeExists and decides
+    // `skip` (run-liveness-continuations.ts). The continuation is dropped
+    // either way — the gate's whole job is to make a violated ordering
+    // invariant fail LOUDLY here rather than leave a stamped attempt implying
+    // a continuation that no agent will ever see (LOOA-349).
+    if (continuationRun && continuationRun.delivered === "merged_running") {
+      logger.error(
+        { runId: run.id, issueId, coalescedIntoRunId: continuationRun.id },
+        "liveness continuation wake coalesced into an already-running run and will never render; the continuation is dropped — finalize ordering invariant violated",
+      );
+      return;
+    }
+
     if (continuationRun) {
       await db
         .update(heartbeatRuns)
@@ -5177,6 +5465,20 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       requestedByActorId: "heartbeat",
     });
     if (!handoffRun) return;
+    // Invariant: same finalize-path ordering as the liveness continuation
+    // above — the finished run's execution lock is already released, so the
+    // handoff wake always gets a run that will render it. If a re-ordering
+    // ever breaks that, a merged_running wake will never be seen: posting the
+    // raise-once handoff comment and the audit row below would assert a
+    // corrective run that never fires (LOOA-342). Fail loudly and skip both
+    // (LOOA-349).
+    if (handoffRun.delivered === "merged_running") {
+      logger.error(
+        { runId: run.id, issueId: issue.id, coalescedIntoRunId: handoffRun.id },
+        "successful-run handoff wake coalesced into an already-running run and will never render; skipping handoff comment and audit row — finalize ordering invariant violated",
+      );
+      return;
+    }
 
     await addSuccessfulRunHandoffCommentOnce({
       issue,
@@ -6144,6 +6446,33 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         outcome: "not_scheduled" as const,
         reason: "Model-safety refusals are deterministic for the run context; no automatic retry",
         errorCode: MODEL_SAFETY_REFUSAL_ERROR_CODE,
+        issueId: readNonEmptyString(parseObject(run.contextSnapshot).issueId),
+      };
+    }
+    if (retryReason === BOUNDED_TRANSIENT_HEARTBEAT_RETRY_REASON && isProviderQuotaRejectedRun(run)) {
+      // Same belt-and-braces as the refusal gate above: the finalize path already
+      // took this run out of the transient family because the provider's blocked
+      // window reopens later than we are willing to keep a retry queued. Queuing
+      // one here would hold the issue's execution lock for that whole window. The
+      // rejection is surfaced on the wake-source issue by
+      // maybeSurfaceProviderClientError instead (LOOA-360).
+      await appendRunEvent(run, await nextRunEventSeq(run.id), {
+        eventType: "lifecycle",
+        stream: "system",
+        level: "warn",
+        message:
+          "Transient retry suppressed: the provider quota window reopens later than Paperclip will hold the issue lock for a queued retry",
+        payload: {
+          retryReason,
+          errorCode: run.errorCode,
+          providerQuotaRejection: parseObject(run.resultJson).providerQuotaRejection ?? null,
+        },
+      });
+      return {
+        outcome: "not_scheduled" as const,
+        reason:
+          "Provider quota is blocked past the deferred-retry lock-hold budget; the issue lock was released instead of parking a retry",
+        errorCode: PROVIDER_QUOTA_REJECTED_ERROR_FAMILY,
         issueId: readNonEmptyString(parseObject(run.contextSnapshot).issueId),
       };
     }
@@ -7297,7 +7626,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     await surfaceProviderClientError(
       { run, agent },
       {
-        findExistingEscalation: (runId, companyId, issueId) =>
+        findRecentEscalation: (companyId, issueId, signatureMarker, since) =>
           db
             .select({ id: issueComments.id })
             .from(issueComments)
@@ -7305,8 +7634,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               and(
                 eq(issueComments.companyId, companyId),
                 eq(issueComments.issueId, issueId),
-                eq(issueComments.createdByRunId, runId),
-                sql`${issueComments.body} like ${`%${PROVIDER_CLIENT_ERROR_COMMENT_MARKER}%`}`,
+                gte(issueComments.createdAt, since),
+                sql`${issueComments.body} like ${`%${signatureMarker}%`}`,
               ),
             )
             .limit(1)
@@ -7685,6 +8014,150 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
   async function sweepStaleIssueLocks() {
     return recovery.sweepStaleIssueLocks();
+  }
+
+  /**
+   * Serving-tree drift sweep (LOOA-412) — the zero-cost-when-clean replacement
+   * for the polling drift-watch routine.
+   *
+   * Runs in the periodic heartbeat chain but throttles itself to
+   * SERVING_TREE_DRIFT_SWEEP_INTERVAL_MS, so a clean tree costs a cheap
+   * in-process `git rev-list` at most every ~10 min and files nothing. When the
+   * live tree is *stale* (reviewed code merged past the grace window but not
+   * deployed) it either WARN-logs (OSS default) or files a single idempotent
+   * issue for the configured agent — whose *separate* run performs `deploy:live`
+   * (the server must never deploy in-process; it would SIGTERM itself, LOOA-403).
+   *
+   * The result is always written to the drift cache so `/api/health` can expose
+   * `servingTree.behindBy` without the request path fetching.
+   */
+  async function sweepServingTreeDrift(opts: { now?: number; force?: boolean } = {}): Promise<{
+    swept: boolean;
+    available: boolean;
+    behindBy: number;
+    stale: boolean;
+    action: "none" | "log" | "issue_created" | "issue_exists" | "misconfigured" | "create_failed";
+    issueId?: string;
+  }> {
+    const idle = { swept: false, available: false, behindBy: 0, stale: false, action: "none" as const };
+    if (!SERVING_TREE_DRIFT_SWEEP_ENABLED) return idle;
+
+    const now = opts.now ?? Date.now();
+    if (!opts.force && now - lastServingTreeDriftSweepAtMs < SERVING_TREE_DRIFT_SWEEP_INTERVAL_MS) {
+      return idle;
+    }
+    lastServingTreeDriftSweepAtMs = now;
+
+    // The sweep runs inside the serving process, so process.cwd() is the live
+    // tree (the same tree serving-commit.ts reads). Fetch happens here, never on
+    // the request path.
+    const drift = await computeServingDrift(process.cwd(), { fetch: true, now });
+    setCachedServingDrift({
+      head: drift.head,
+      branch: drift.branch,
+      behindBy: drift.behindBy,
+      stale: drift.stale,
+      driftAgeMs: drift.driftAgeMs,
+      checkedAtMs: now,
+    });
+
+    if (!drift.available || !drift.stale) {
+      return { swept: true, available: drift.available, behindBy: drift.behindBy, stale: drift.stale, action: "none" };
+    }
+
+    const fingerprint = `${drift.head ?? "unknown"}..${drift.baseHead ?? "unknown"}`;
+    const experimental = await instanceSettings.getExperimental();
+    const mode = experimental.serverSideDriftSweepMode;
+    const alertAgentId = experimental.serverSideDriftAlertAgentId;
+
+    const logStale = (extra: Record<string, unknown> = {}) =>
+      logger.warn(
+        {
+          servedHead: drift.head,
+          masterHead: drift.baseHead,
+          behindBy: drift.behindBy,
+          driftAgeMs: drift.driftAgeMs,
+          graceMs: drift.graceMs,
+          ...extra,
+        },
+        "serving tree is stale: reviewed code is merged but not deployed. Deploy it with `pnpm deploy:live`.",
+      );
+
+    if (mode !== "create_issue" || !alertAgentId) {
+      logStale({ mode });
+      return { swept: true, available: true, behindBy: drift.behindBy, stale: true, action: "log" };
+    }
+
+    // create_issue mode: the alert agent's company owns the issue. A missing
+    // agent is a misconfiguration, not a reason to crash the sweep — degrade to
+    // a WARN log.
+    const alertAgent = await db
+      .select({ id: agents.id, companyId: agents.companyId })
+      .from(agents)
+      .where(eq(agents.id, alertAgentId))
+      .then((rows) => rows[0] ?? null);
+    if (!alertAgent) {
+      logStale({ mode, misconfigured: `alert agent ${alertAgentId} not found` });
+      return { swept: true, available: true, behindBy: drift.behindBy, stale: true, action: "misconfigured" };
+    }
+
+    // At most one open drift issue at a time — the "single idempotent issue" the
+    // sweep promises. Match on the origin kind (not the exact fingerprint) so a
+    // second merge landing while the first issue is still open does not stack a
+    // duplicate; originId carries the served..master fingerprint for the trail.
+    const existingOpen = await db
+      .select({ id: issues.id })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, alertAgent.companyId),
+          eq(issues.originKind, SERVING_TREE_DRIFT_ORIGIN_KIND),
+          notInArray(issues.status, ["done", "cancelled"]),
+        ),
+      )
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    if (existingOpen) {
+      return { swept: true, available: true, behindBy: drift.behindBy, stale: true, action: "issue_exists", issueId: existingOpen.id };
+    }
+
+    // A configured agent can still be unassignable (paused/terminated/pending),
+    // in which case issuesSvc.create throws. That must not swallow the stale
+    // signal: fall back to the actionable WARN log rather than a bare error.
+    let created;
+    try {
+      created = await issuesSvc.create(alertAgent.companyId, {
+        title: `Deploy live: serving tree is ${drift.behindBy} commit(s) behind master`,
+        description: buildServingTreeDriftIssueBody(drift, fingerprint),
+        status: "todo",
+        priority: "high",
+        assigneeAgentId: alertAgentId,
+        originKind: SERVING_TREE_DRIFT_ORIGIN_KIND,
+        originId: fingerprint,
+        originFingerprint: fingerprint,
+      });
+    } catch (err) {
+      logStale({ mode, createFailed: err instanceof Error ? err.message : String(err) });
+      return { swept: true, available: true, behindBy: drift.behindBy, stale: true, action: "create_failed" };
+    }
+
+    await logActivity(db, {
+      companyId: alertAgent.companyId,
+      actorType: "system",
+      actorId: SERVING_TREE_DRIFT_ACTOR_ID,
+      action: "issue.serving_tree_drift_detected",
+      entityType: "issue",
+      entityId: created.id,
+      details: {
+        servedHead: drift.head,
+        masterHead: drift.baseHead,
+        behindBy: drift.behindBy,
+        driftAgeMs: drift.driftAgeMs,
+      },
+    });
+
+    logStale({ mode, issueId: created.id, issueIdentifier: created.identifier });
+    return { swept: true, available: true, behindBy: drift.behindBy, stale: true, action: "issue_created", issueId: created.id };
   }
 
   function issueIdFromRunContext(contextSnapshot: unknown) {
@@ -9318,13 +9791,25 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             } as Record<string, unknown>)
           : null;
 
+      // A rate-limit block whose window outlives the deferral budget leaves the
+      // transient family: parking a retry on it would hold the issue's execution
+      // lock until the reset. Escalate and release instead (LOOA-360).
+      const quotaPolicy = applyProviderQuotaRejectionPolicy(
+        {
+          outcome,
+          resultJson: adapterResult.resultJson,
+          errorFamily: adapterResult.errorFamily,
+          retryNotBefore: adapterResult.retryNotBefore,
+        },
+        new Date(),
+      );
       const persistedResultJson = mergeHeartbeatRunResultJson(
         mergeRunStopMetadataForAgent(agent, outcome, {
           resultJson: mergeModelProfileRunMetadata(
             mergeAdapterRecoveryMetadata({
-              resultJson: adapterResult.resultJson ?? null,
-              errorFamily: adapterResult.errorFamily ?? null,
-              retryNotBefore: adapterResult.retryNotBefore ?? null,
+              resultJson: quotaPolicy.resultJson,
+              errorFamily: quotaPolicy.errorFamily,
+              retryNotBefore: quotaPolicy.retryNotBefore,
             }),
             modelProfileApplication,
           ),
@@ -9552,7 +10037,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         await getCurrentUserRedactionOptions(),
       );
       const workspaceValidationFailure = isWorkspaceValidationFailure(err) ? err : null;
-      const failureErrorCode = workspaceValidationFailure?.code ?? "adapter_failed";
+      const failureErrorCode =
+        workspaceValidationFailure?.code ??
+        (isAdapterConfigRejectedError(err) ? ADAPTER_CONFIG_REJECTED_ERROR_CODE : "adapter_failed");
       logger.error({ err, runId }, "heartbeat execution failed");
 
       let logSummary: { bytes: number; sha256?: string; compressed: boolean } | null = null;
@@ -10280,7 +10767,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     await startNextQueuedRunForAgent(promotedRun.agentId);
   }
 
-  async function enqueueWakeup(agentId: string, opts: WakeupOptions = {}) {
+  async function enqueueWakeup(agentId: string, opts: WakeupOptions = {}): Promise<EnqueuedWakeRun | null> {
     const source = opts.source ?? "on_demand";
     const triggerDetail = opts.triggerDetail ?? null;
     const contextSnapshot: Record<string, unknown> = { ...(opts.contextSnapshot ?? {}) };
@@ -10814,7 +11301,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               availableActiveExecutionRun.contextSnapshot,
               enrichedContextSnapshot,
             );
-            const mergedRun = await tx
+            const mergedRunRow = await tx
               .update(heartbeatRuns)
               .set({
                 contextSnapshot: mergedContextSnapshot,
@@ -10822,7 +11309,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               })
               .where(eq(heartbeatRuns.id, availableActiveExecutionRun.id))
               .returning()
-              .then((rows) => rows[0] ?? availableActiveExecutionRun);
+              .then((rows) => rows[0] ?? null);
+            const mergedRun = mergedRunRow ?? availableActiveExecutionRun;
+            // Report from the merge's own RETURNING row, not from the status read
+            // above (LOOA-344 F2). If the row vanished, nothing will render it.
+            const delivered: WakeDelivery = mergedRunRow
+              ? wakeDeliveryForMergedRun(mergedRunRow.status)
+              : "merged_running";
 
             await tx.insert(agentWakeupRequests).values({
               companyId: agent.companyId,
@@ -10840,7 +11333,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               finishedAt: new Date(),
             });
 
-            return { kind: "coalesced" as const, run: mergedRun };
+            return { kind: "coalesced" as const, run: mergedRun, delivered };
           }
 
           if (availableActiveExecutionRun) {
@@ -10959,7 +11452,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       if (outcome.kind === "deferred" || outcome.kind === "skipped") return null;
       if (outcome.kind === "coalesced") {
         await startNextQueuedRunForAgent(agent.id);
-        return outcome.run;
+        return { ...outcome.run, coalesced: true, delivered: outcome.delivered };
       }
 
       const newRun = outcome.run;
@@ -10976,7 +11469,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       });
 
       await startNextQueuedRunForAgent(agent.id);
-      return newRun;
+      return { ...newRun, coalesced: false, delivered: "new_run" as const };
     }
 
     const activeRuns = await db
@@ -11014,7 +11507,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         coalescedTargetRun.contextSnapshot,
         enrichedContextSnapshot,
       );
-      const mergedRun = await db
+      const mergedRunRow = await db
         .update(heartbeatRuns)
         .set({
           contextSnapshot: mergedContextSnapshot,
@@ -11022,7 +11515,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         })
         .where(eq(heartbeatRuns.id, coalescedTargetRun.id))
         .returning()
-        .then((rows) => rows[0] ?? coalescedTargetRun);
+        .then((rows) => rows[0] ?? null);
+      const mergedRun = mergedRunRow ?? coalescedTargetRun;
+      // Report from the merge's own RETURNING row, not from the status read
+      // above (LOOA-344 F2). If the row vanished, nothing will render it.
+      const delivered: WakeDelivery = mergedRunRow
+        ? wakeDeliveryForMergedRun(mergedRunRow.status)
+        : "merged_running";
 
       await db.insert(agentWakeupRequests).values({
         companyId: agent.companyId,
@@ -11039,7 +11538,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         runId: mergedRun.id,
         finishedAt: new Date(),
       });
-      return mergedRun;
+      return { ...mergedRun, coalesced: true, delivered };
     }
 
     const wakeupRequest = await db
@@ -11097,7 +11596,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
     await startNextQueuedRunForAgent(agent.id);
 
-    return newRun;
+    return { ...newRun, coalesced: false, delivered: "new_run" as const };
   }
 
   async function listProjectScopedRunIds(companyId: string, projectId: string) {
@@ -11648,6 +12147,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     reconcileStrandedAssignedIssues,
 
     sweepStaleIssueLocks,
+
+    sweepServingTreeDrift,
 
     buildIssueGraphLivenessAutoRecoveryPreview,
 

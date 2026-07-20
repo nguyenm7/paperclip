@@ -51,8 +51,18 @@ export interface StaleGateSweepResult {
   wakesFailed: number;
 }
 
+/**
+ * How the wake was delivered — mirrors heartbeat's `WakeDelivery` (LOOA-342).
+ * `merged_running` = the alarm coalesced into a run that was ALREADY running
+ * before the merge; that adapter process was spawned with its prompt and never
+ * re-reads contextSnapshot, so the alarm prompt is never rendered. It must be
+ * treated as UNDELIVERED so raise-once is not burned on an unseen alarm.
+ */
+type WakeDelivery = "new_run" | "merged_queued" | "merged_running";
+
 interface WakeupRunRef {
   id: string;
+  delivered: WakeDelivery;
 }
 
 export interface StaleGateDetectorDeps {
@@ -283,9 +293,17 @@ export function staleGateDetectorService(db: Db, deps: StaleGateDetectorDeps) {
         run = null;
         logger.warn({ companyId, err }, "stale-gate sweep: CEO wake threw");
       }
-      if (!run) {
-        // Skipped by heartbeat policy (paused/budget/error) or failed: do not
-        // stamp — a swallowed alarm is the failure this detector exists to end.
+      if (!run || run.delivered === "merged_running") {
+        // Not delivered this cycle, so do not stamp — a swallowed alarm audited
+        // as delivered is the exact fail-open this detector exists to end.
+        //   - `!run`: heartbeat skipped/failed the wake (paused/budget/error).
+        //   - `merged_running`: the alarm coalesced into a run that was ALREADY
+        //     running; its adapter was spawned before the merge and will never
+        //     re-read contextSnapshot, so the alarm prompt is never rendered.
+        // Leaving the cards unstamped makes the next sweep retry delivery — the
+        // same retry-on-undelivered contract the gateway aging sweep uses since
+        // LOOA-342. `merged_queued`/`new_run` are genuine delivery and fall
+        // through to stamp. Gate on `delivered`, never on truthiness of `run`.
         result.wakesFailed += 1;
         continue;
       }

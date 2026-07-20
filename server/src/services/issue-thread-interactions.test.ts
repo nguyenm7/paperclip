@@ -470,5 +470,234 @@ describe("issueThreadInteractionService", () => {
         { agentId: "agent-1" },
       )).rejects.toMatchObject({ status: 404 });
     });
+
+    // LOOA-320: manager-chain escalation — who can retract a gate when its
+    // creator can't. The creator's reportsTo ancestors are fallback
+    // principals; everyone else (peers, the creator's own reports) stays 403.
+    describe("manager-chain escalation", () => {
+      const COMPANY_AGENTS = [
+        { id: "agent-ceo", companyId: "company-1", name: "CEO", status: "active", reportsTo: null },
+        { id: "agent-manager", companyId: "company-1", name: "Manager", status: "active", reportsTo: "agent-ceo" },
+        { id: "agent-1", companyId: "company-1", name: "Creator", status: "active", reportsTo: "agent-manager" },
+        { id: "agent-peer", companyId: "company-1", name: "Peer", status: "active", reportsTo: "agent-manager" },
+        { id: "agent-report", companyId: "company-1", name: "Report", status: "active", reportsTo: "agent-1" },
+      ];
+
+      it("lets the creator's direct manager withdraw with a distinct escalation outcome", async () => {
+        const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+        const state = createFakeDb({ interactionRow: confirmationRow(), parentRows: COMPANY_AGENTS });
+        const svc = issueThreadInteractionService(state.db as never);
+
+        const { interaction, applied } = await svc.withdrawInteraction(
+          ISSUE_REF,
+          "interaction-3",
+          { reason: "Creator cannot run; retracting on its behalf" },
+          { agentId: "agent-manager" },
+        );
+
+        expect(applied).toBe(true);
+        expect(interaction.status).toBe("withdrawn");
+        expect(interaction.result).toEqual({
+          version: 1,
+          outcome: "withdrawn_by_manager",
+          reason: "Creator cannot run; retracting on its behalf",
+        });
+        expect(interaction.resolvedByAgentId).toBe("agent-manager");
+        expect(interaction.resolvedByUserId).toBeNull();
+      });
+
+      it("lets a transitive reportsTo ancestor withdraw", async () => {
+        const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+        const state = createFakeDb({ interactionRow: confirmationRow(), parentRows: COMPANY_AGENTS });
+        const svc = issueThreadInteractionService(state.db as never);
+
+        const { interaction, applied } = await svc.withdrawInteraction(
+          ISSUE_REF,
+          "interaction-3",
+          {},
+          { agentId: "agent-ceo" },
+        );
+
+        expect(applied).toBe(true);
+        expect(interaction.result).toMatchObject({ outcome: "withdrawn_by_manager" });
+        expect(interaction.resolvedByAgentId).toBe("agent-ceo");
+      });
+
+      it("records escalation in the resolved actor for kinds without an outcome field", async () => {
+        const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+        const state = createFakeDb({
+          interactionRow: confirmationRow({
+            kind: "ask_user_questions",
+            payload: {
+              version: 1,
+              questions: [{
+                id: "scope",
+                prompt: "Pick one scope",
+                selectionMode: "single",
+                options: [{ id: "phase-1", label: "Phase 1" }],
+              }],
+            },
+          }),
+          parentRows: COMPANY_AGENTS,
+        });
+        const svc = issueThreadInteractionService(state.db as never);
+
+        const { interaction, applied } = await svc.withdrawInteraction(
+          ISSUE_REF,
+          "interaction-3",
+          { reason: "Question is stranded" },
+          { agentId: "agent-manager" },
+        );
+
+        expect(applied).toBe(true);
+        expect(interaction.result).toEqual({
+          version: 1,
+          answers: [],
+          withdrawnReason: "Question is stranded",
+        });
+        expect(interaction.resolvedByAgentId).toBe("agent-manager");
+      });
+
+      it("rejects a peer that shares the creator's manager with 403", async () => {
+        const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+        const state = createFakeDb({ interactionRow: confirmationRow(), parentRows: COMPANY_AGENTS });
+        const svc = issueThreadInteractionService(state.db as never);
+
+        await expect(svc.withdrawInteraction(
+          ISSUE_REF,
+          "interaction-3",
+          {},
+          { agentId: "agent-peer" },
+        )).rejects.toMatchObject({ status: 403 });
+        expect(state.interactionUpdates).toHaveLength(0);
+      });
+
+      it("rejects the creator's own report — escalation only goes up the chain", async () => {
+        const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+        const state = createFakeDb({ interactionRow: confirmationRow(), parentRows: COMPANY_AGENTS });
+        const svc = issueThreadInteractionService(state.db as never);
+
+        await expect(svc.withdrawInteraction(
+          ISSUE_REF,
+          "interaction-3",
+          {},
+          { agentId: "agent-report" },
+        )).rejects.toMatchObject({ status: 403 });
+        expect(state.interactionUpdates).toHaveLength(0);
+      });
+
+      it("still authorizes ancestors below a reporting cycle without looping", async () => {
+        const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+        const cyclicalAgents = [
+          { id: "agent-a", companyId: "company-1", name: "A", status: "active", reportsTo: "agent-b" },
+          { id: "agent-b", companyId: "company-1", name: "B", status: "active", reportsTo: "agent-a" },
+          { id: "agent-1", companyId: "company-1", name: "Creator", status: "active", reportsTo: "agent-a" },
+        ];
+        const state = createFakeDb({ interactionRow: confirmationRow(), parentRows: cyclicalAgents });
+        const svc = issueThreadInteractionService(state.db as never);
+
+        const { interaction, applied } = await svc.withdrawInteraction(
+          ISSUE_REF,
+          "interaction-3",
+          {},
+          { agentId: "agent-a" },
+        );
+
+        expect(applied).toBe(true);
+        expect(interaction.result).toMatchObject({ outcome: "withdrawn_by_manager" });
+      });
+
+      it("never authorizes an actor whose id only appears as a synthesized missing-manager marker", async () => {
+        const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+        // The creator's reportsTo dangles at an id with no row in the company
+        // (deleted agent). The chain walk emits an ancestor entry carrying
+        // that real id with status "missing" — the status filter is the only
+        // thing between that marker and authorization, so it must hold even
+        // if an actor authenticates with exactly that id.
+        const danglingChainAgents = [
+          { id: "agent-1", companyId: "company-1", name: "Creator", status: "active", reportsTo: "agent-ghost" },
+        ];
+        const state = createFakeDb({ interactionRow: confirmationRow(), parentRows: danglingChainAgents });
+        const svc = issueThreadInteractionService(state.db as never);
+
+        await expect(svc.withdrawInteraction(
+          ISSUE_REF,
+          "interaction-3",
+          {},
+          { agentId: "agent-ghost" },
+        )).rejects.toMatchObject({ status: 403 });
+        expect(state.interactionUpdates).toHaveLength(0);
+      });
+
+      it("never authorizes a cross-company parent the creator's reportsTo points at", async () => {
+        const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+        // Same marker class, resolvable id: the parent row exists but belongs
+        // to another company, so the walk must degrade it to a missing marker
+        // instead of treating it as a real ancestor. Route-level
+        // assertCompanyAccess also blocks this actor; this encodes the
+        // service-layer half of that defense in depth.
+        const crossCompanyChainAgents = [
+          { id: "agent-1", companyId: "company-1", name: "Creator", status: "active", reportsTo: "agent-foreign" },
+          { id: "agent-foreign", companyId: "company-2", name: "Foreign", status: "active", reportsTo: null },
+        ];
+        const state = createFakeDb({ interactionRow: confirmationRow(), parentRows: crossCompanyChainAgents });
+        const svc = issueThreadInteractionService(state.db as never);
+
+        await expect(svc.withdrawInteraction(
+          ISSUE_REF,
+          "interaction-3",
+          {},
+          { agentId: "agent-foreign" },
+        )).rejects.toMatchObject({ status: 403 });
+        expect(state.interactionUpdates).toHaveLength(0);
+      });
+
+      it("never authorizes a terminated or pending_approval ancestor", async () => {
+        const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+        // middleware/auth.ts refuses credentials for both statuses today, so
+        // these actors cannot reach the service — but this authz check must
+        // hold on its own if that ever changes (LOOA-330 F1, complete
+        // mediation). The chain walk continues past a terminated ancestor,
+        // so both appear as real "ancestor" entries carrying their row
+        // status; the status filter is what keeps them out.
+        const staleAncestorAgents = [
+          { id: "agent-1", companyId: "company-1", name: "Creator", status: "active", reportsTo: "agent-terminated" },
+          { id: "agent-terminated", companyId: "company-1", name: "Terminated", status: "terminated", reportsTo: "agent-provisional" },
+          { id: "agent-provisional", companyId: "company-1", name: "Provisional", status: "pending_approval", reportsTo: null },
+        ];
+        for (const actorAgentId of ["agent-terminated", "agent-provisional"]) {
+          const state = createFakeDb({ interactionRow: confirmationRow(), parentRows: staleAncestorAgents });
+          const svc = issueThreadInteractionService(state.db as never);
+
+          await expect(svc.withdrawInteraction(
+            ISSUE_REF,
+            "interaction-3",
+            {},
+            { agentId: actorAgentId },
+          )).rejects.toMatchObject({ status: 403 });
+          expect(state.interactionUpdates).toHaveLength(0);
+        }
+      });
+
+      it("still authorizes a paused ancestor — a paused manager is still the manager", async () => {
+        const { issueThreadInteractionService } = await import("./issue-thread-interactions.js");
+        const pausedManagerAgents = [
+          { id: "agent-1", companyId: "company-1", name: "Creator", status: "active", reportsTo: "agent-paused" },
+          { id: "agent-paused", companyId: "company-1", name: "Paused", status: "paused", reportsTo: null },
+        ];
+        const state = createFakeDb({ interactionRow: confirmationRow(), parentRows: pausedManagerAgents });
+        const svc = issueThreadInteractionService(state.db as never);
+
+        const { interaction, applied } = await svc.withdrawInteraction(
+          ISSUE_REF,
+          "interaction-3",
+          {},
+          { agentId: "agent-paused" },
+        );
+
+        expect(applied).toBe(true);
+        expect(interaction.result).toMatchObject({ outcome: "withdrawn_by_manager" });
+      });
+    });
   });
 });

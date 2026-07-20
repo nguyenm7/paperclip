@@ -22,6 +22,7 @@ import {
   BOUNDED_TRANSIENT_HEARTBEAT_RETRY_DELAYS_MS,
   MAX_TURN_CONTINUATION_RETRY_REASON,
   MAX_TURN_CONTINUATION_WAKE_REASON,
+  applyProviderQuotaRejectionPolicy,
   heartbeatService,
 } from "../services/heartbeat.ts";
 
@@ -68,7 +69,7 @@ describeEmbeddedPostgres("heartbeat bounded retry scheduling", () => {
     agentId: string;
     now: Date;
     errorCode: string;
-    errorFamily?: "transient_upstream" | null;
+    errorFamily?: "transient_upstream" | "provider_quota_rejected" | null;
     retryNotBefore?: string | null;
     scheduledRetryAttempt?: number;
     resultJson?: Record<string, unknown> | null;
@@ -1444,5 +1445,205 @@ describeEmbeddedPostgres("heartbeat bounded retry scheduling", () => {
     expect((wakeupRequest?.payload as Record<string, unknown> | null)?.transientRetryNotBefore).toBe(
       retryNotBefore.toISOString(),
     );
+  });
+
+  it("schedules no retry for a quota block whose window outlives the deferral budget (LOOA-360)", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const runId = randomUUID();
+    const now = new Date(2026, 6, 14, 10, 0, 0);
+
+    await seedRetryFixture({
+      runId,
+      companyId,
+      agentId,
+      now,
+      errorCode: "claude_transient_upstream",
+      adapterType: "claude_local",
+      resultJson: {
+        // What heartbeat finalize stamps once it decides the window outlives the
+        // deferral budget: leaves the transient family, carries no retry hint.
+        errorFamily: "provider_quota_rejected",
+        providerQuotaRejection: {
+          model: "claude-fable-5",
+          resetsAt: "2026-07-19T08:00:00.000Z",
+          reason: "org_level_disabled_until",
+          overageStatus: "rejected",
+          rateLimitType: "seven_day_overage_included",
+          status: 429,
+          message: "You've hit your monthly spend limit.",
+        },
+      },
+    });
+
+    const scheduled = await heartbeat.scheduleBoundedRetry(runId, { now, random: () => 0.5 });
+
+    expect(scheduled.outcome).toBe("not_scheduled");
+    if (scheduled.outcome !== "not_scheduled") return;
+    expect(scheduled.errorCode).toBe("provider_quota_rejected");
+
+    // The decisive assertion: nothing queued. No retry run to burn a zero-token
+    // attempt, and no queued run holding this issue's execution lock for 5 days.
+    const runs = await db
+      .select({ id: heartbeatRuns.id, scheduledRetryAt: heartbeatRuns.scheduledRetryAt })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.companyId, companyId));
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.id).toBe(runId);
+    expect(runs[0]?.scheduledRetryAt ?? null).toBeNull();
+
+    const wakeups = await db
+      .select({ id: agentWakeupRequests.id })
+      .from(agentWakeupRequests)
+      .where(eq(agentWakeupRequests.agentId, agentId));
+    expect(wakeups).toHaveLength(0);
+  });
+
+  it("retries a short quota window AT the reset instead of burning attempts inside it (LOOA-360)", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const runId = randomUUID();
+    const now = new Date(2026, 6, 14, 10, 0, 0);
+    // Inside the deferral budget, so the run stays transient and simply waits.
+    const resetsAt = new Date(2026, 6, 14, 11, 30, 0);
+
+    await seedRetryFixture({
+      runId,
+      companyId,
+      agentId,
+      now,
+      errorCode: "claude_transient_upstream",
+      errorFamily: "transient_upstream",
+      adapterType: "claude_local",
+      retryNotBefore: resetsAt.toISOString(),
+    });
+
+    const scheduled = await heartbeat.scheduleBoundedRetry(runId, { now, random: () => 0.5 });
+
+    // Nothing is suppressed: the retry is scheduled, and it lands exactly when
+    // the window reopens rather than at the blind 2m first rung.
+    expect(scheduled.outcome).toBe("scheduled");
+    if (scheduled.outcome !== "scheduled") return;
+    expect(scheduled.dueAt.getTime()).toBe(resetsAt.getTime());
+  });
+
+  // LOOA-379 review: the two tests above seed a run that is ALREADY classified,
+  // so they only prove the scheduler honours the stamp — they would both still
+  // pass with the finalize-time comparison inverted. These drive the real
+  // classifier (applyProviderQuotaRejectionPolicy) on the real adapter output and
+  // feed ITS result into the real scheduler, so the decision itself is under test.
+  //
+  // `providerRateLimitRejection` is the FACT the claude-local adapter reports; it
+  // stays transient and carries a retry hint. The window length is the only thing
+  // that differs between the two cases below.
+  function claudeQuotaAdapterResult(resetsAt: Date) {
+    const resetsAtIso = resetsAt.toISOString();
+    return {
+      outcome: "failed",
+      errorFamily: "transient_upstream" as const,
+      retryNotBefore: resetsAtIso,
+      resultJson: {
+        errorFamily: "transient_upstream",
+        retryNotBefore: resetsAtIso,
+        transientRetryNotBefore: resetsAtIso,
+        providerRateLimitRejection: {
+          model: "claude-fable-5",
+          resetsAt: resetsAtIso,
+          reason: "org_level_disabled_until",
+          overageStatus: "rejected",
+          rateLimitType: "seven_day_overage_included",
+          status: 429,
+          message: "You've hit your monthly spend limit.",
+        },
+      } as Record<string, unknown>,
+    };
+  }
+
+  it("finalize reclassifies a long quota window, strips its retry hints, and schedules nothing (LOOA-360)", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const runId = randomUUID();
+    const now = new Date(2026, 6, 14, 10, 0, 0);
+    // Five days out — far past the lock-hold budget.
+    const resetsAt = new Date(2026, 6, 19, 8, 0, 0);
+
+    const classified = applyProviderQuotaRejectionPolicy(claudeQuotaAdapterResult(resetsAt), now);
+
+    // The classification itself: out of the transient family, and both retry hints
+    // gone so nothing downstream can schedule against them.
+    expect(classified.errorFamily).toBe("provider_quota_rejected");
+    expect(classified.retryNotBefore).toBeNull();
+    expect(classified.resultJson).not.toHaveProperty("retryNotBefore");
+    expect(classified.resultJson).not.toHaveProperty("transientRetryNotBefore");
+    expect(classified.resultJson?.providerQuotaRejection).toMatchObject({
+      model: "claude-fable-5",
+      resetsAt: resetsAt.toISOString(),
+      reason: "org_level_disabled_until",
+    });
+    // The blob must agree with the field. readHeartbeatRunErrorFamily reads the
+    // blob, and the adapter's copy said "transient_upstream" — if the stamp only
+    // lands on the returned field, a persisted run still looks retryable.
+    expect(classified.resultJson?.errorFamily).toBe("provider_quota_rejected");
+
+    // Persist exactly what the classifier produced — no hand-stamping — and let
+    // the real scheduler run on it.
+    await seedRetryFixture({
+      runId,
+      companyId,
+      agentId,
+      now,
+      errorCode: "claude_transient_upstream",
+      adapterType: "claude_local",
+      errorFamily: classified.errorFamily as "provider_quota_rejected",
+      retryNotBefore: classified.retryNotBefore,
+      resultJson: classified.resultJson,
+    });
+
+    const scheduled = await heartbeat.scheduleBoundedRetry(runId, { now, random: () => 0.5 });
+    expect(scheduled.outcome).toBe("not_scheduled");
+
+    // No queued run: nothing burns a zero-token attempt, and nothing holds this
+    // issue's execution lock for the five-day window.
+    const runs = await db
+      .select({ id: heartbeatRuns.id, scheduledRetryAt: heartbeatRuns.scheduledRetryAt })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.companyId, companyId));
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.scheduledRetryAt ?? null).toBeNull();
+  });
+
+  it("finalize leaves a short quota window transient, and it retries at the reset (LOOA-360)", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const runId = randomUUID();
+    const now = new Date(2026, 6, 14, 10, 0, 0);
+    // 90 minutes out — inside the lock-hold budget, so waiting is cheap and the
+    // retry can actually succeed when it fires.
+    const resetsAt = new Date(2026, 6, 14, 11, 30, 0);
+
+    const classified = applyProviderQuotaRejectionPolicy(claudeQuotaAdapterResult(resetsAt), now);
+
+    // Untouched: same family, same hint. The identical payload with only the
+    // window shortened must NOT be reclassified.
+    expect(classified.errorFamily).toBe("transient_upstream");
+    expect(classified.retryNotBefore).toBe(resetsAt.toISOString());
+    expect(classified.resultJson).not.toHaveProperty("providerQuotaRejection");
+
+    await seedRetryFixture({
+      runId,
+      companyId,
+      agentId,
+      now,
+      errorCode: "claude_transient_upstream",
+      adapterType: "claude_local",
+      errorFamily: classified.errorFamily as "transient_upstream",
+      retryNotBefore: classified.retryNotBefore,
+      resultJson: classified.resultJson,
+    });
+
+    const scheduled = await heartbeat.scheduleBoundedRetry(runId, { now, random: () => 0.5 });
+    expect(scheduled.outcome).toBe("scheduled");
+    if (scheduled.outcome !== "scheduled") return;
+    expect(scheduled.dueAt.getTime()).toBe(resetsAt.getTime());
   });
 });

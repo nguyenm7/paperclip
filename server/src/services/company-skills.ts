@@ -1913,6 +1913,20 @@ function extractMarkdownLinks(markdown: string) {
   return links;
 }
 
+// secret_reference fires at severity "warning" against all skill text, .md prose included.
+// The accessor shapes stay case-insensitive, but the ALL-CAPS constant shapes are matched
+// case-sensitively: prose that merely names "a token" or "your password" must not flag,
+// while a literal API_KEY/TOKEN/SECRET/PASSWORD or $CONSTANT reference still does (LOOA-328).
+// Both directions are pinned by __tests__/company-skills-audit-prose.test.ts.
+export const secretEnvAccessPattern = /\b(?:process\.env|printenv|\.env)\b/i;
+export const secretConstantPattern = /\b(?:\$[A-Z][A-Z0-9_]{2,}|API_KEY|TOKEN|SECRET|PASSWORD)\b/;
+
+// broken_internal_link only verifies links that could resolve to a file in the skill
+// directory. Root-absolute links are app routes (company style mandates the
+// /PREFIX/issues/… form), never inventory paths, so they are out of scope exactly like
+// external URLs, mailto, and pure anchors (LOOA-328).
+export const nonInventoryLinkPattern = /^(?:https?:|mailto:|#|\/)/i;
+
 function pushFinding(
   findings: CompanySkillAuditFinding[],
   code: string,
@@ -1984,7 +1998,6 @@ async function auditInstalledSkillBytes(skill: CompanySkill): Promise<CompanySki
   const remoteExecPattern = /\b(?:curl|wget)\b[\s\S]{0,160}\|\s*(?:sh|bash)|\b(?:bash|sh)\s+-c\b|\beval\b|\bpython\s+-c\b|\bnode\s+-e\b/i;
   const secretExfilPattern = /\b(?:cat|printenv|env|grep)\b[\s\S]{0,160}(?:\.aws\/credentials|\.ssh\/|\.npmrc|id_rsa|OPENAI_API_KEY|ANTHROPIC_API_KEY|API_KEY|TOKEN|SECRET)[\s\S]{0,160}\b(?:curl|wget|nc|netcat|scp)\b/i;
   const networkPattern = /\b(?:curl|wget|fetch|httpie|nc|netcat|scp|ssh)\b|https?:\/\//i;
-  const secretReferencePattern = /\b(?:process\.env|printenv|\$[A-Z][A-Z0-9_]{2,}|API_KEY|TOKEN|SECRET|PASSWORD|\.env)\b/i;
 
   for (const file of files) {
     if (file.sizeBytes > MAX_CATALOG_FILE_BYTES) {
@@ -2009,12 +2022,12 @@ async function auditInstalledSkillBytes(skill: CompanySkill): Promise<CompanySki
     if (networkPattern.test(text)) {
       pushFinding(findings, "network_reference", "warning", "Skill content references network-capable commands or URLs.", file.path);
     }
-    if (secretReferencePattern.test(text)) {
+    if (secretEnvAccessPattern.test(text) || secretConstantPattern.test(text)) {
       pushFinding(findings, "secret_reference", "warning", "Skill content references environment variables or secret-like values.", file.path);
     }
     if (isMarkdownPath(file.path)) {
       for (const link of extractMarkdownLinks(text)) {
-        if (/^(?:https?:|mailto:|#)/i.test(link)) continue;
+        if (nonInventoryLinkPattern.test(link)) continue;
         const linkTarget = normalizePortablePath(path.posix.join(path.posix.dirname(file.path), link.split("#")[0] ?? ""));
         if (linkTarget && !actualSet.has(linkTarget)) {
           pushFinding(findings, "broken_internal_link", "warning", `Markdown link target is missing: ${link}`, file.path);
@@ -3566,6 +3579,20 @@ export function companySkillService(db: Db) {
     };
 
     for (const project of projectRows) {
+      // A project with no workspace rows would otherwise fall through every skipped/warning
+      // path and make "the scan never looked here" indistinguishable from "nothing found"
+      // (LOOA-328). Targeted workspace scans stay quiet: absence of other rows is intentional.
+      if (project.workspaces.length === 0 && workspaceFilter.size === 0) {
+        skipped.push({
+          projectId: project.id,
+          projectName: project.name,
+          workspaceId: null,
+          workspaceName: null,
+          path: null,
+          reason: trackWarning(`Skipped ${project.name}: the project has no registered workspaces, so none of its directories were scanned.`),
+        });
+        continue;
+      }
       for (const workspace of project.workspaces) {
         if (workspaceFilter.size > 0 && !workspaceFilter.has(workspace.id)) continue;
         const workspaceCwd = asString(workspace.cwd);

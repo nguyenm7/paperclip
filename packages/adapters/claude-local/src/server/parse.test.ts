@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  BOUNDED_TRANSIENT_RETRY_DELAYS_MS,
+  BOUNDED_TRANSIENT_RETRY_JITTER_RATIO,
+  MAX_DEFERRED_RETRY_LOCK_HOLD_MS,
+} from "@paperclipai/adapter-utils/server-utils";
+import {
+  extractClaudeRateLimitRejection,
   extractClaudeRetryNotBefore,
   isClaudeSafetyRefusalError,
   isClaudeTransientUpstreamError,
@@ -387,5 +393,87 @@ describe("extractClaudeRetryNotBefore", () => {
     expect(
       extractClaudeRetryNotBefore({ errorMessage: "Overloaded. Try again later." }, new Date()),
     ).toBeNull();
+  });
+});
+
+// LOOA-360 / LOOA-367 review. The adapter reports the FACT (what is blocked and
+// until when) and makes no permanence judgement -- that policy needs the retry
+// ladder and the issue lock, which live in the server.
+describe("extractClaudeRateLimitRejection", () => {
+  function streamWithRateLimit(rateLimitInfo: Record<string, unknown>) {
+    return [
+      JSON.stringify({ type: "rate_limit_event", rate_limit_info: rateLimitInfo }),
+      JSON.stringify({
+        type: "result",
+        is_error: true,
+        api_error_status: 429,
+        terminal_reason: "api_error",
+        result: "You've hit your monthly spend limit.",
+      }),
+    ].join("\n");
+  }
+
+  // Non-vacuous on purpose: the budget is a policy constant and the ladder is an
+  // independent one, so raising the budget past the longest deferral the retry
+  // system can already produce FAILS this. The previous revision asserted
+  // `horizon > maxElapsed` where the horizon was derived as `maxElapsed + 2h` --
+  // a tautology that could never fail, which certified a guarantee we did not
+  // have (LOOA-367 review).
+  it("never parks a retry longer than the retry ladder's own worst-case deferral", () => {
+    const longestJitteredRung =
+      Math.max(...BOUNDED_TRANSIENT_RETRY_DELAYS_MS) * (1 + BOUNDED_TRANSIENT_RETRY_JITTER_RATIO);
+    expect(MAX_DEFERRED_RETRY_LOCK_HOLD_MS).toBeLessThanOrEqual(longestJitteredRung);
+  });
+
+  it("reports the blocked window from the org-disabled spend-limit stream", () => {
+    const resetsAtEpochSeconds = 1784448000; // 2026-07-19T08:00:00Z
+    expect(
+      extractClaudeRateLimitRejection({
+        parsed: { is_error: true, api_error_status: 429, result: "You've hit your monthly spend limit." },
+        stdout: streamWithRateLimit({
+          status: "rejected",
+          resetsAt: resetsAtEpochSeconds,
+          rateLimitType: "seven_day_overage_included",
+          overageStatus: "rejected",
+          overageDisabledReason: "org_level_disabled_until",
+          isUsingOverage: false,
+        }),
+        model: "claude-fable-5",
+      }),
+    ).toEqual({
+      model: "claude-fable-5",
+      resetsAt: "2026-07-19T08:00:00.000Z",
+      reason: "org_level_disabled_until",
+      overageStatus: "rejected",
+      rateLimitType: "seven_day_overage_included",
+      status: 429,
+      message: "You've hit your monthly spend limit.",
+    });
+  });
+
+  it("requires a bounded reset time -- an overage-disabled reason alone is not one", () => {
+    // Rook's repro: `overageDisabledReason` proves overage is unavailable, NOT
+    // that the included rolling quota stays blocked. With no reset time there is
+    // no window, so this stays an ordinary transient rate limit.
+    expect(
+      extractClaudeRateLimitRejection({
+        stdout: streamWithRateLimit({
+          status: "rejected",
+          rateLimitType: "five_hour",
+          overageStatus: "rejected",
+          overageDisabledReason: "user_level_disabled",
+        }),
+        model: "claude-fable-5",
+      }),
+    ).toBeNull();
+  });
+
+  it("ignores benign and absent rate-limit events", () => {
+    expect(
+      extractClaudeRateLimitRejection({
+        stdout: streamWithRateLimit({ status: "allowed", resetsAt: 1784448000, overageStatus: "allowed" }),
+      }),
+    ).toBeNull();
+    expect(extractClaudeRateLimitRejection({ stdout: "" })).toBeNull();
   });
 });

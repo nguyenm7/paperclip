@@ -22,6 +22,7 @@ export {
   issueService,
   type IssueFilters,
 } from "./issues.js";
+export { issueAssigneeSummary, listIssueAssigneeSummaries } from "./issue-assignees.js";
 export { issueThreadInteractionService, queueResolvedInteractionContinuationWakeup } from "./issue-thread-interactions.js";
 export { issueTreeControlService } from "./issue-tree-control.js";
 export { issueApprovalService } from "./issue-approvals.js";

@@ -7,6 +7,7 @@ import {
   createDb,
   instanceUserRoles,
   issueComments,
+  issueRecoveryActions,
   issues,
   principalPermissionGrants,
   projects,
@@ -131,6 +132,7 @@ describeEmbeddedPostgres("authorization service", () => {
     await db.delete(companyMemberships);
     await db.delete(instanceUserRoles);
     await db.delete(issueComments);
+    await db.delete(issueRecoveryActions);
     await db.delete(issues);
     await db.delete(agents);
     await db.delete(projects);
@@ -1067,6 +1069,133 @@ describeEmbeddedPostgres("authorization service", () => {
 
     const mutate = await authorizationService(db).decide({ actor, action: "issue:mutate", resource });
     expect(mutate.allowed).toBe(false);
+  });
+
+  it("grants issue:mutate and issue:comment to named participants of an active recovery action", async () => {
+    const company = await createCompany(db, "RecoveryParticipant");
+    const recoveryOwner = await createAgent(db, company.id);
+    const displaced = await createAgent(db, company.id);
+    const outsider = await createAgent(db, company.id);
+    const issue = await createIssue(db, company.id, { assigneeAgentId: recoveryOwner.id });
+    await db.insert(issueRecoveryActions).values({
+      companyId: company.id,
+      sourceIssueId: issue.id,
+      kind: "stranded_assigned_issue",
+      status: "active",
+      ownerType: "agent",
+      ownerAgentId: recoveryOwner.id,
+      previousOwnerAgentId: displaced.id,
+      returnOwnerAgentId: displaced.id,
+      cause: "stranded_assigned_issue",
+      fingerprint: `source_scoped_recovery:${company.id}:${issue.id}:stranded_assigned_issue`,
+      evidence: {},
+      nextAction: "Restore a live execution path or record a manual resolution.",
+      attemptCount: 1,
+    });
+
+    const actorFor = (agentId: string) => ({
+      type: "agent" as const,
+      agentId,
+      companyId: company.id,
+      source: "agent_key" as const,
+    });
+    const resource = {
+      type: "issue" as const,
+      companyId: company.id,
+      issueId: issue.id,
+      assigneeAgentId: recoveryOwner.id,
+    };
+
+    const displacedMutate = await authorizationService(db).decide({
+      actor: actorFor(displaced.id),
+      action: "issue:mutate",
+      resource,
+    });
+    expect(displacedMutate).toMatchObject({ allowed: true, reason: "allow_recovery_participant" });
+
+    const displacedComment = await authorizationService(db).decide({
+      actor: actorFor(displaced.id),
+      action: "issue:comment",
+      resource,
+    });
+    expect(displacedComment).toMatchObject({ allowed: true, reason: "allow_recovery_participant" });
+
+    const outsiderMutate = await authorizationService(db).decide({
+      actor: actorFor(outsider.id),
+      action: "issue:mutate",
+      resource,
+    });
+    expect(outsiderMutate.allowed).toBe(false);
+  });
+
+  it("keeps the recovery owner authorized after ownership returns to the displaced assignee", async () => {
+    const company = await createCompany(db, "RecoveryOwnerReturn");
+    const recoveryOwner = await createAgent(db, company.id);
+    const displaced = await createAgent(db, company.id);
+    const issue = await createIssue(db, company.id, { assigneeAgentId: displaced.id });
+    await db.insert(issueRecoveryActions).values({
+      companyId: company.id,
+      sourceIssueId: issue.id,
+      kind: "stranded_assigned_issue",
+      status: "escalated",
+      ownerType: "agent",
+      ownerAgentId: recoveryOwner.id,
+      previousOwnerAgentId: displaced.id,
+      returnOwnerAgentId: displaced.id,
+      cause: "stranded_assigned_issue",
+      fingerprint: `source_scoped_recovery:${company.id}:${issue.id}:stranded_assigned_issue`,
+      evidence: {},
+      nextAction: "Restore a live execution path or record a manual resolution.",
+      attemptCount: 2,
+    });
+
+    const decision = await authorizationService(db).decide({
+      actor: { type: "agent", agentId: recoveryOwner.id, companyId: company.id, source: "agent_key" },
+      action: "issue:mutate",
+      resource: {
+        type: "issue",
+        companyId: company.id,
+        issueId: issue.id,
+        assigneeAgentId: displaced.id,
+      },
+    });
+    expect(decision).toMatchObject({ allowed: true, reason: "allow_recovery_participant" });
+  });
+
+  it("expires the recovery-participant grant when the recovery action resolves", async () => {
+    const company = await createCompany(db, "RecoveryParticipantExpired");
+    const recoveryOwner = await createAgent(db, company.id);
+    const displaced = await createAgent(db, company.id);
+    const issue = await createIssue(db, company.id, { assigneeAgentId: recoveryOwner.id });
+    await db.insert(issueRecoveryActions).values({
+      companyId: company.id,
+      sourceIssueId: issue.id,
+      kind: "stranded_assigned_issue",
+      status: "resolved",
+      ownerType: "agent",
+      ownerAgentId: recoveryOwner.id,
+      previousOwnerAgentId: displaced.id,
+      returnOwnerAgentId: displaced.id,
+      cause: "stranded_assigned_issue",
+      fingerprint: `source_scoped_recovery:${company.id}:${issue.id}:stranded_assigned_issue`,
+      evidence: {},
+      nextAction: "Restore a live execution path or record a manual resolution.",
+      attemptCount: 1,
+      outcome: "restored",
+      resolvedAt: new Date(),
+    });
+
+    const decision = await authorizationService(db).decide({
+      actor: { type: "agent", agentId: displaced.id, companyId: company.id, source: "agent_key" },
+      action: "issue:mutate",
+      resource: {
+        type: "issue",
+        companyId: company.id,
+        issueId: issue.id,
+        assigneeAgentId: recoveryOwner.id,
+      },
+    });
+    expect(decision.allowed).toBe(false);
   });
 
   it("does not grant issue:comment to the creator of a different issue", async () => {

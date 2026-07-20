@@ -31,12 +31,16 @@ import { staleGateDetectorService } from "../services/stale-gate-detector.ts";
 // a run ref, stamps raise-once, and writes an "alarmed" audit row naming the
 // coalesced run id. The alarm is silenced forever and the ledger says it fired.
 //
-// heartbeat.ts already has the guard for this hazard —
-// RUNNING_ISSUE_WAKE_REASONS_REQUIRING_FOLLOWUP — which forces a NEW queued run
-// instead of coalescing into a live one. "stale_gate_alarm" is not on that list.
+// Since LOOA-342 the guard is no longer the per-reason follow-up allow-list
+// (RUNNING_ISSUE_WAKE_REASONS_REQUIRING_FOLLOWUP, now retired to just
+// "approval_approved"). Instead heartbeat.wakeup reports how the wake landed on
+// the returned run (`delivered`: new_run | merged_queued | merged_running), and
+// the detector must gate raise-once on `delivered !== "merged_running"` — a
+// coalesce into an already-running run is undelivered and is re-attempted on the
+// next sweep, exactly like the gateway aging sweep.
 //
 // The invariant this test pins: a sweep must never stamp raise-once unless the
-// alarm got a run that will actually render it.
+// alarm got a run that will actually render it — independent of the mechanism.
 
 const mockAdapterExecute = vi.fn(async () => ({
   ok: true,
@@ -212,17 +216,38 @@ describeEmbeddedPostgres("stale-gate alarm delivery vs. wake coalescing (LOOA-33
     }
   }, 30_000);
 
-  it("the alarm still reaches the CEO when they are mid-run (it gets a follow-up run, not a merge into the live one)", async () => {
-    const { companyId, ceoId } = await seedStaleCard();
+  it("the alarm reaches the CEO on retry once their live run ends — merged_running is undelivered, never stamped, and re-attempted next sweep", async () => {
+    const { companyId, ceoId, approvalId } = await seedStaleCard();
     const liveRunId = await seedLiveCeoRun(companyId, ceoId);
 
     const detector = makeDetector();
-    await detector.sweep();
 
-    const alarmRuns = await runsCarryingTheAlarm(ceoId, liveRunId);
+    // Sweep 1: the CEO is mid-run in the null task scope, so the alarm coalesces
+    // into that already-running run (delivered === "merged_running"). Its adapter
+    // was spawned before the merge and will never render the merged prompt, so
+    // the sweep must treat it as undelivered: no stamp, no alarm run of its own.
+    // (Counters like `flagged`/`alarmed` are sweep-global across companies that
+    // coexist for the run, so assert only facts scoped to THIS card and CEO.)
+    const first = await detector.sweep();
+    expect(first.wakesFailed).toBeGreaterThan(0);
+    const [afterFirst] = await db.select().from(approvals).where(eq(approvals.id, approvalId));
+    expect(afterFirst!.stalePremiseAlarmedAt).toBeNull();
+    expect((await runsCarryingTheAlarm(ceoId, liveRunId)).length).toBe(0);
+
+    // The CEO's run ends: it leaves runningProcesses (the same transition the
+    // afterEach models), so the alarm's null scope no longer has a live run to
+    // coalesce into.
+    runningProcesses.delete(liveRunId);
+
+    // Sweep 2: the retried wake now gets a run of its own and is delivered, so
+    // raise-once is finally stamped. Liveness holds — a mid-run CEO delays the
+    // alarm by a sweep; it never swallows it.
+    await detector.sweep();
     expect(
-      alarmRuns.length,
-      "the CEO having a live run must not swallow the alarm — the wake needs its own follow-up run",
+      (await runsCarryingTheAlarm(ceoId, liveRunId)).length,
+      "after the CEO's live run ended, the retried alarm must get its own rendering run",
     ).toBeGreaterThan(0);
+    const [afterSecond] = await db.select().from(approvals).where(eq(approvals.id, approvalId));
+    expect(afterSecond!.stalePremiseAlarmedAt).not.toBeNull();
   }, 30_000);
 });

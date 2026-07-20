@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { isAdapterConfigRejectedError } from "@paperclipai/adapter-utils/server-utils";
 import { validateCodexReasoningEffort } from "./reasoning-effort.js";
 
 const NOW = Date.parse("2026-07-13T16:30:00.000Z");
@@ -39,19 +40,26 @@ describe("validateCodexReasoningEffort", () => {
   it("fails fast when adapter model and config.toml fall-through effort are incompatible", async () => {
     const home = await makeHome('model = "gpt-5.6-sol"\nmodel_reasoning_effort = "ultra"\n');
 
-    await expect(
-      validateCodexReasoningEffort({
-        config: { model: "gpt-5.5" },
-        codexHome: home,
-        nowMs: NOW,
-      }),
-    ).rejects.toThrow(
+    const failure = await validateCodexReasoningEffort({
+      config: { model: "gpt-5.5" },
+      codexHome: home,
+      nowMs: NOW,
+    }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toMatch(
       new RegExp(
         `Invalid Codex reasoning effort "ultra" from .*config\\.toml \\(model_reasoning_effort\\) ` +
           `for model "gpt-5\\.5" from adapterConfig\\.model\\. Supported values from .*models_cache\\.json: ` +
           `low, medium, high, xhigh`,
       ),
     );
+    // The heartbeat maps this marker onto run errorCode "adapter_config_rejected"
+    // so the rejection is escalated on the wake-source issue.
+    expect(isAdapterConfigRejectedError(failure)).toBe(true);
   });
 
   it("uses trailing extra-arg overrides when resolving the effective pair", async () => {

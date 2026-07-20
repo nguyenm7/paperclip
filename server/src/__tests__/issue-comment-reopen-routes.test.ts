@@ -318,13 +318,30 @@ describe.sequential("issue comment reopen routes", () => {
     mockIssueService.getWakeableParentAfterChildCompletion.mockResolvedValue(null);
     mockIssueService.assertCheckoutOwner.mockResolvedValue({ adoptedFromRunId: null });
     mockAccessService.canUser.mockResolvedValue(false);
-    mockAccessService.decide.mockImplementation(async (input: { action?: string }) => {
-      const allowed = input.action !== "tasks:manage_active_checkouts";
+    mockAccessService.decide.mockImplementation(async (input: {
+      action?: string;
+      actor?: { type?: string; agentId?: string | null };
+      resource?: { assigneeAgentId?: string | null };
+    }) => {
+      // The real policy grants issue:comment to a non-assignee agent only via
+      // the creator or mention lane, both DB-backed and fail-closed. A blanket
+      // allow here would silently fake those grants and mask the assignee
+      // guard, so deny by default and let the grant-lane tests opt in.
+      const nonAssigneeComment =
+        input.action === "issue:comment" &&
+        input.actor?.type === "agent" &&
+        !!input.resource?.assigneeAgentId &&
+        input.resource.assigneeAgentId !== input.actor.agentId;
+      const allowed = input.action !== "tasks:manage_active_checkouts" && !nonAssigneeComment;
       return {
         allowed,
         action: input.action,
         reason: allowed ? "allow_explicit_grant" : "deny_missing_grant",
-        explanation: allowed ? "Allowed by test grant." : "Missing active checkout override.",
+        explanation: allowed
+          ? "Allowed by test grant."
+          : nonAssigneeComment
+            ? "No creator or mention grant for this issue."
+            : "Missing active checkout override.",
       };
     });
     mockAccessService.hasPermission.mockResolvedValue(false);
@@ -547,6 +564,66 @@ describe.sequential("issue comment reopen routes", () => {
 
     expect(res.status).toBe(403);
     expect(res.body.error).toBe("Agent cannot mutate another agent's issue");
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+    expect(mockIssueService.addComment).not.toHaveBeenCalled();
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+  });
+
+  // The creator/mention grants open a comment-only lane for a non-assignee
+  // agent. The comment lands, but it must stay communicative: reopening a
+  // finished issue is still the assignee's (or a human's) call.
+  it("lets a non-assignee agent with an issue:comment grant comment on a closed issue without reopening it", async () => {
+    const grantedAgentId = "33333333-3333-4333-8333-333333333333";
+    mockAccessService.decide.mockImplementation(async (input: { action?: string }) => ({
+      allowed: input.action === "issue:comment",
+      action: input.action,
+      reason: input.action === "issue:comment" ? "allow_mention_grant" : "deny_missing_grant",
+      explanation: "Allowed by test mention grant.",
+    }));
+    mockIssueService.getById.mockResolvedValue(makeIssue("done"));
+    mockIssueService.addComment.mockResolvedValue({
+      id: "comment-1",
+      issueId: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-1",
+      body: "chiming in",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      authorAgentId: grantedAgentId,
+      authorUserId: null,
+    });
+
+    const res = await request(await installActor(createApp(), agentActor(grantedAgentId)))
+      .post("/api/issues/11111111-1111-4111-8111-111111111111/comments")
+      .send({ body: "chiming in" });
+
+    expect(res.status).toBe(201);
+    expect(mockIssueService.addComment).toHaveBeenCalled();
+    // Inert: the closed issue stays closed and its assignee is not woken.
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ reason: "issue_reopened_via_comment" }),
+    );
+  });
+
+  // Second layer: even holding the comment grant, a non-assignee cannot turn
+  // the comment into a resume of someone else's finished work.
+  it("rejects explicit resume intent from a non-assignee agent that holds an issue:comment grant", async () => {
+    const grantedAgentId = "33333333-3333-4333-8333-333333333333";
+    mockAccessService.decide.mockImplementation(async (input: { action?: string }) => ({
+      allowed: input.action === "issue:comment",
+      action: input.action,
+      reason: input.action === "issue:comment" ? "allow_mention_grant" : "deny_missing_grant",
+      explanation: "Allowed by test mention grant.",
+    }));
+    mockIssueService.getById.mockResolvedValue(makeIssue("done"));
+
+    const res = await request(await installActor(createApp(), agentActor(grantedAgentId)))
+      .post("/api/issues/11111111-1111-4111-8111-111111111111/comments")
+      .send({ body: "restart someone else's work", resume: true });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("Agent cannot request follow-up for another agent's issue");
     expect(mockIssueService.update).not.toHaveBeenCalled();
     expect(mockIssueService.addComment).not.toHaveBeenCalled();
     expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();

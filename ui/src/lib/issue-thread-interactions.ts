@@ -99,6 +99,26 @@ export function getRequestConfirmationTargetHref({
   return null;
 }
 
+// A withdrawal is creator-initiated by default; LOOA-320 also lets an agent
+// in the creator's manager chain retract a card whose creator cannot run.
+// The created/resolved actor pair distinguishes the two on every kind.
+export function isManagerWithdrawnInteraction(
+  interaction: IssueThreadInteraction,
+): boolean {
+  return interaction.status === "withdrawn"
+    && Boolean(interaction.resolvedByAgentId)
+    && Boolean(interaction.createdByAgentId)
+    && interaction.resolvedByAgentId !== interaction.createdByAgentId;
+}
+
+export function describeWithdrawnInteractionActor(
+  interaction: IssueThreadInteraction,
+): string {
+  return isManagerWithdrawnInteraction(interaction)
+    ? "Withdrawn by the requesting agent's manager"
+    : "Withdrawn by the requesting agent";
+}
+
 export function buildIssueThreadInteractionSummary(
   interaction: IssueThreadInteraction,
 ) {
@@ -124,7 +144,11 @@ export function buildIssueThreadInteractionSummary(
   if (interaction.kind === "request_confirmation") {
     if (interaction.status === "accepted") return "Confirmed request";
     if (interaction.status === "rejected") return "Declined request";
-    if (interaction.status === "withdrawn") return "Confirmation withdrawn by its author";
+    if (interaction.status === "withdrawn") {
+      return isManagerWithdrawnInteraction(interaction)
+        ? "Confirmation withdrawn by its author's manager"
+        : "Confirmation withdrawn by its author";
+    }
     if (interaction.status === "expired") {
       const outcome = interaction.result?.outcome;
       if (outcome === "superseded_by_comment") return "Confirmation expired after comment";
@@ -144,7 +168,11 @@ export function buildIssueThreadInteractionSummary(
         : `Confirmed ${selectedCount} of ${optionCount} options`;
     }
     if (interaction.status === "rejected") return "Declined selection";
-    if (interaction.status === "withdrawn") return "Selection withdrawn by its author";
+    if (interaction.status === "withdrawn") {
+      return isManagerWithdrawnInteraction(interaction)
+        ? "Selection withdrawn by its author's manager"
+        : "Selection withdrawn by its author";
+    }
     if (interaction.status === "expired") {
       const outcome = interaction.result?.outcome;
       if (outcome === "superseded_by_comment") return "Selection expired after comment";

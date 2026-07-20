@@ -893,6 +893,22 @@ export async function startServer(): Promise<StartedServer> {
         .catch((err) => {
           logger.error({ err }, "periodic heartbeat recovery failed");
         });
+
+      // Serving-tree drift sweep (LOOA-412). Runs on its own so a failure here
+      // never disturbs heartbeat recovery. Self-throttled to ~10min: a clean
+      // tree costs a cheap in-process git read at most, files nothing, and warms
+      // the drift cache /api/health reads. It only ever *detects* — the deploy
+      // is performed by the filed issue's own run, never in this process.
+      void heartbeat
+        .sweepServingTreeDrift()
+        .then((result) => {
+          if (result.action === "issue_created") {
+            logger.warn({ ...result }, "serving-tree drift sweep filed a deploy issue");
+          }
+        })
+        .catch((err) => {
+          logger.error({ err }, "serving-tree drift sweep failed");
+        });
     }, config.heartbeatSchedulerIntervalMs);
 
     // LOOA-296 stale-gate detector (gate-policy Rule 9): alarm the company

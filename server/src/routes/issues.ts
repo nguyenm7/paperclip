@@ -82,7 +82,9 @@ import {
   ISSUE_LIST_DEFAULT_LIMIT,
   ISSUE_LIST_MAX_LIMIT,
   issueReferenceService,
+  issueAssigneeSummary,
   issueService,
+  listIssueAssigneeSummaries,
   clampIssueListLimit,
   documentService,
   documentAnnotationService,
@@ -1846,6 +1848,36 @@ export function issueRoutes(
     return decision.allowed;
   }
 
+  // A recovery handoff reassigns the source issue, so the participant set of
+  // the active recovery action — the recovery owner plus the previous/return
+  // owner it displaced — is the only durable record of who is allowed to
+  // repair the issue. The set is written by the recovery reconciler, never by
+  // the acting agent, and the grant it backs expires when the action resolves.
+  async function actorIsActiveRecoveryParticipant(
+    issue: { id: string; companyId: string },
+    actorAgentId: string,
+  ) {
+    // A failed recovery-store read must not fail the request (mutations stay
+    // durable even when revalidation reads break); it only means the extra
+    // participant grant is unavailable and normal ownership rules decide.
+    let action: Awaited<ReturnType<typeof recoveryActionsSvc.getActiveForIssue>>;
+    try {
+      action = await recoveryActionsSvc.getActiveForIssue(issue.companyId, issue.id);
+    } catch (err) {
+      logger.warn(
+        { err, issueId: issue.id },
+        "failed to read active recovery action during mutation authorization",
+      );
+      return false;
+    }
+    if (!action) return false;
+    return (
+      action.ownerAgentId === actorAgentId ||
+      action.previousOwnerAgentId === actorAgentId ||
+      action.returnOwnerAgentId === actorAgentId
+    );
+  }
+
   async function assertAgentIssueMutationAllowed(
     req: Request,
     res: Response,
@@ -1877,6 +1909,13 @@ export function issueRoutes(
       if (await hasActiveCheckoutManagementOverride(actorAgentId, issue.companyId, issue.assigneeAgentId)) {
         return true;
       }
+      // Recovery handoffs are additive: displaced participants keep mutate
+      // rights while the recovery action stays active, so a bad status can be
+      // corrected by whichever participant wakes first instead of stranding
+      // each of them outside the assignee boundary in turn.
+      if (await actorIsActiveRecoveryParticipant(issue, actorAgentId)) {
+        return true;
+      }
       if (issue.status === "in_progress") {
         res.status(409).json({
           error: "Issue is checked out by another agent",
@@ -1901,6 +1940,14 @@ export function issueRoutes(
       return false;
     }
     if (issue.status !== "in_progress") {
+      return true;
+    }
+    // An active recovery action certifies the reconciler found no live
+    // execution path behind this in_progress status, so the checkout lock it
+    // would assert below is already known dead. Named participants may
+    // correct the status without holding that lock — this is the self-recovery
+    // path for a bad transition the assignee set on itself outside a run.
+    if (await actorIsActiveRecoveryParticipant(issue, actorAgentId)) {
       return true;
     }
     const runId = requireAgentRunId(req, res);
@@ -2248,6 +2295,11 @@ export function issueRoutes(
       return true;
     }
     if (activeRecoveryAction.ownerAgentId === actorAgentId) return true;
+    // The previous/return owner is the assignee the handoff displaced; they
+    // must keep resolution authority so a status they set themselves stays
+    // self-recoverable after ownership moves (additive handoff, LOOA-346).
+    if (activeRecoveryAction.previousOwnerAgentId === actorAgentId) return true;
+    if (activeRecoveryAction.returnOwnerAgentId === actorAgentId) return true;
     if (
       activeRecoveryAction.ownerAgentId &&
       await hasActiveCheckoutManagementOverride(actorAgentId, issue.companyId, activeRecoveryAction.ownerAgentId)
@@ -2619,9 +2671,10 @@ export function issueRoutes(
       ? rawResult
       : await filterIssuesForActor(req, rawResult);
     const issueIds = result.map((issue) => issue.id);
-    const [handoffStates, recoveryActionByIssue] = await Promise.all([
+    const [handoffStates, recoveryActionByIssue, assigneeSummaries] = await Promise.all([
       listSuccessfulRunHandoffStates(db, companyId, issueIds),
       recoveryActionsSvc.listActiveForIssues(companyId, issueIds),
+      listIssueAssigneeSummaries(db, companyId, result),
     ]);
     const actor = getActorInfo(req);
     await Promise.all(result.map(async (issue) => {
@@ -2638,6 +2691,7 @@ export function issueRoutes(
     }));
     res.json(result.map((issue) => ({
       ...issue,
+      assignee: issueAssigneeSummary(assigneeSummaries, issue),
       successfulRunHandoff: handoffStates.get(issue.id) ?? null,
       activeRecoveryAction: recoveryActionByIssue.get(issue.id) ?? null,
     })));
@@ -2948,6 +3002,7 @@ export function issueRoutes(
       successfulRunHandoffStates,
       scheduledRetry,
       activeRecoveryAction,
+      assigneeSummaries,
     ] = await Promise.all([
       resolveIssueProjectAndGoal(issue),
       svc.getAncestors(issue.id),
@@ -2960,6 +3015,7 @@ export function issueRoutes(
       listSuccessfulRunHandoffStates(db, issue.companyId, [issue.id]),
       svc.getCurrentScheduledRetry(issue.id),
       recoveryActionsSvc.getActiveForIssue(issue.companyId, issue.id),
+      listIssueAssigneeSummaries(db, issue.companyId, [issue]),
     ]);
     const recoveryActionsByRelationIssue = await relationRecoveryActionMap(
       recoveryActionsSvc,
@@ -2985,6 +3041,7 @@ export function issueRoutes(
     const workProducts = await workProductsSvc.listForIssue(issue.id);
     res.json({
       ...issue,
+      assignee: issueAssigneeSummary(assigneeSummaries, issue),
       goalId: goal?.id ?? issue.goalId,
       ancestors,
       ...(blockerAttention ? { blockerAttention } : {}),
@@ -6450,10 +6507,13 @@ export function issueRoutes(
     },
   );
 
-  // Creator-agent retraction of the agent's own issue-thread card — parity
-  // with POST /approvals/:id/withdraw (LOOA-294). Board members keep
+  // Agent retraction of an issue-thread card — parity with
+  // POST /approvals/:id/withdraw (LOOA-294). Board members keep
   // accept/reject/cancel; agents get exactly one remedy for a card the world
-  // invalidated, and only for cards they created themselves.
+  // invalidated: the creator by default, or an agent in the creator's
+  // reportsTo manager chain when the creator cannot run (LOOA-320 — a
+  // pending gate must always have at least one live principal that can
+  // retract it).
   router.post(
     "/issues/:id/interactions/:interactionId/withdraw",
     validate(withdrawIssueThreadInteractionSchema),
@@ -6494,16 +6554,25 @@ export function issueRoutes(
             interactionId: interaction.id,
             interactionKind: interaction.kind,
             interactionStatus: interaction.status,
+            // LOOA-320 audit trail: a manager-chain escalation must be
+            // distinguishable from the creator's own retraction, with the
+            // escalating actor on record (actorId above) alongside the
+            // creator whose card was retracted.
+            withdrawnVia: interaction.createdByAgentId === req.actor.agentId
+              ? "creator"
+              : "manager_chain",
+            creatorAgentId: interaction.createdByAgentId ?? null,
             withdrawnReason: typeof req.body.reason === "string" && req.body.reason.trim()
               ? req.body.reason.trim()
               : null,
           },
         });
 
-        // The creator initiated the retraction, so waking them about it would
-        // fabricate a board-decision wake (they are already in a live run).
-        // Only a *different* assignee still parked on this gate needs the
-        // standard continuation wake to avoid stranding in in_review.
+        // The withdrawing agent initiated the retraction, so waking them
+        // about it would fabricate a board-decision wake (they are already in
+        // a live run). Only a *different* assignee still parked on this gate
+        // needs the standard continuation wake to avoid stranding in
+        // in_review — including the creator, when a manager escalated.
         if (issue.assigneeAgentId && issue.assigneeAgentId !== req.actor.agentId) {
           queueResolvedInteractionContinuationWakeup({
             heartbeat,

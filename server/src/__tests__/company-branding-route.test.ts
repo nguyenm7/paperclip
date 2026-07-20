@@ -206,7 +206,8 @@ describe("PATCH /api/companies/:companyId/branding", () => {
       });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toBe("Validation error");
+    expect(res.body.error).toContain("status");
+    expect(res.body.details.unknownFields).toEqual(["status"]);
     expect(mockCompanyService.update).not.toHaveBeenCalled();
   });
 });

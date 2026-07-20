@@ -1918,11 +1918,23 @@ export function buildHostServices(
             identifier: issue.identifier,
             assigneeAgentId: issue.assigneeAgentId,
             runId: run?.id ?? null,
+            delivered: run?.delivered ?? null,
             reason: params.reason ?? "plugin_issue_wakeup_requested",
             contextSource,
           },
         });
-        return { queued: Boolean(run), runId: run?.id ?? null };
+        // `queued: true` is NOT a delivery receipt: a coalesce into an
+        // already-running run returns that truthy run, but its process was
+        // spawned with its prompt before the merge and never re-reads the
+        // context column (LOOA-342). Forward the delivery report so plugin
+        // callers can gate notified/raise-once markers on
+        // `delivered !== "merged_running"`, like the sibling `agents.invoke`.
+        return {
+          queued: Boolean(run),
+          runId: run?.id ?? null,
+          coalesced: run?.coalesced ?? null,
+          delivered: run?.delivered ?? null,
+        };
       },
       async requestWakeups(params) {
         const companyId = ensureCompanyId(params.companyId);
@@ -1986,11 +1998,21 @@ export function buildHostServices(
               identifier: issue.identifier,
               assigneeAgentId: issue.assigneeAgentId,
               runId: run?.id ?? null,
+              delivered: run?.delivered ?? null,
               reason: params.reason ?? "plugin_issue_wakeup_requested",
               contextSource,
             },
           });
-          results.push({ issueId: issue.id, queued: Boolean(run), runId: run?.id ?? null });
+          // Same delivery-report forwarding as `requestWakeup` above:
+          // `queued: Boolean(run)` alone conflates merged_running with
+          // delivery (LOOA-342).
+          results.push({
+            issueId: issue.id,
+            queued: Boolean(run),
+            runId: run?.id ?? null,
+            coalesced: run?.coalesced ?? null,
+            delivered: run?.delivered ?? null,
+          });
         }
         return results;
       },
@@ -2503,7 +2525,10 @@ export function buildHostServices(
           requestedByActorId: pluginId,
         });
         if (!run) throw new Error("Agent wakeup was skipped by heartbeat policy");
-        return { runId: run.id };
+        // `delivered: "merged_running"` means the prompt was merged into a run
+        // whose process will never read it — the truthy runId is NOT a
+        // delivery receipt (LOOA-342). Forward the truth to plugin callers.
+        return { runId: run.id, coalesced: run.coalesced, delivered: run.delivered };
       },
       async managedGet(params) {
         const companyId = ensureCompanyId(params.companyId);

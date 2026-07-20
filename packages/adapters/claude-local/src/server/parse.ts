@@ -449,6 +449,107 @@ export function isClaudeSafetyRefusalError(input: {
   return CLAUDE_SAFETY_REFUSAL_RE.test(haystack);
 }
 
+// A 429 is normally a throttle. But the Claude stream also reports *quota*
+// rejections as 429s, and those name the window they are blocked for:
+// `rate_limit_info.status: "rejected"` with a `resetsAt`. Every attempt before
+// that reset fails before a single token is spent — LOOA-360 burned 10+
+// consecutive zero-cost runs on exactly that.
+//
+// This function reports the FACT and nothing more: what is blocked and until
+// when. It deliberately makes no judgement about whether the block should stop
+// the retry chain, because that turns on how long the server is willing to hold
+// an issue's execution lock for a queued retry — policy the adapter cannot see
+// (LOOA-367 review).
+
+export type ClaudeRateLimitRejection = {
+  model: string | null;
+  /** Always present: a rejection without a bounded reset time is not reported. */
+  resetsAt: string;
+  reason: string | null;
+  overageStatus: string | null;
+  rateLimitType: string | null;
+  status: number | null;
+  message: string | null;
+};
+
+/** Last `rate_limit_event` whose info reports an actual rejection, if any. */
+function readRejectedRateLimitInfo(stdout: string): Record<string, unknown> | null {
+  let latest: Record<string, unknown> | null = null;
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line.includes("rate_limit_event")) continue;
+    const event = parseJson(line);
+    if (!event || asString(event.type, "") !== "rate_limit_event") continue;
+    const info = parseObject(event.rate_limit_info);
+    if (asString(info.status, "").trim().toLowerCase() !== "rejected") continue;
+    latest = info;
+  }
+  return latest;
+}
+
+/** `resetsAt` arrives as unix seconds; tolerate millis and ISO strings too. */
+function readRateLimitResetsAt(info: Record<string, unknown>): Date | null {
+  const raw = info.resetsAt ?? info.resets_at;
+  const fromEpoch = (value: number) => {
+    // Unix seconds until the value is large enough to only make sense as millis.
+    const parsed = new Date(value < 1e12 ? value * 1_000 : value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+  if (typeof raw === "number" && Number.isFinite(raw)) return fromEpoch(raw);
+  if (typeof raw === "string" && raw.trim()) {
+    const numeric = Number(raw.trim());
+    if (Number.isFinite(numeric)) return fromEpoch(numeric);
+    const parsed = new Date(raw.trim());
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  return null;
+}
+
+/**
+ * Report a rate-limit rejection that names the window it is blocked for.
+ *
+ * Callers MUST only invoke this for runs that already classified as
+ * transient-upstream, which keeps this a strict refinement of the transient
+ * branch: it can only ever make an existing retry smarter or escalate it. It
+ * can never invent a new failure class.
+ *
+ * A bounded `resetsAt` is required. In particular an `overageDisabledReason` is
+ * NOT accepted as a substitute: it proves overage is unavailable, not that the
+ * included rolling quota stays blocked, so a rejection with no reset time keeps
+ * its ordinary backoff (LOOA-365 review).
+ */
+export function extractClaudeRateLimitRejection(input: {
+  parsed?: Record<string, unknown> | null;
+  stdout?: string | null;
+  stderr?: string | null;
+  errorMessage?: string | null;
+  model?: string | null;
+}): ClaudeRateLimitRejection | null {
+  const info = readRejectedRateLimitInfo(input.stdout ?? "");
+  if (!info) return null;
+
+  const resetsAt = readRateLimitResetsAt(info);
+  if (!resetsAt) return null;
+
+  const parsed = input.parsed ?? null;
+  const status = parsed ? asNumber(parsed.api_error_status, 0) || null : null;
+  const message =
+    (parsed ? asString(parsed.result, "").trim() : "") ||
+    (input.errorMessage ?? "").trim() ||
+    null;
+
+  return {
+    model: (input.model ?? "").trim() || null,
+    resetsAt: resetsAt.toISOString(),
+    reason:
+      asString(info.overageDisabledReason ?? info.overage_disabled_reason, "").trim() || null,
+    overageStatus: asString(info.overageStatus ?? info.overage_status, "").trim() || null,
+    rateLimitType: asString(info.rateLimitType ?? info.rate_limit_type, "").trim() || null,
+    status,
+    message: message ? message.slice(0, 2_000) : null,
+  };
+}
+
 export function isClaudeTransientUpstreamError(input: {
   parsed?: Record<string, unknown> | null;
   stdout?: string | null;

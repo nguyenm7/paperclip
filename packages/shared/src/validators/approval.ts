@@ -6,7 +6,11 @@ export const createApprovalSchema = z.object({
   type: z.enum(APPROVAL_TYPES),
   requestedByAgentId: z.string().uuid().optional().nullable(),
   payload: z.record(z.string(), z.unknown()),
-  issueIds: z.array(z.string().uuid()).optional(),
+  // LOOA-396 F4 (defense in depth): kill the amplifier at the source. Without a
+  // cap, one approval can link every done/cancelled issue in the company, which
+  // the stale-gate detector then fans into a single CEO prompt. 100 is far above
+  // any legitimate linkage; the detector is independently self-bounding too.
+  issueIds: z.array(z.string().uuid()).max(100).optional(),
 });
 
 export type CreateApproval = z.infer<typeof createApprovalSchema>;

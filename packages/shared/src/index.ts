@@ -1133,6 +1133,8 @@ export {
   resubmitApprovalSchema,
   addApprovalCommentSchema,
   withdrawApprovalSchema,
+  setPremiseExemptSchema,
+  type SetPremiseExempt,
   type CreateApproval,
   type UpsertBudgetPolicy,
   type ResolveBudgetIncident,

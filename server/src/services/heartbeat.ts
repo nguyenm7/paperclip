@@ -385,7 +385,8 @@ function mergeAdapterRecoveryMetadata(input: {
 // LOOA-342, wakeup reports coalescing truthfully (`coalesced` / `delivered` on
 // the returned run), and callers that persist notified/raise-once markers must
 // gate on `delivered !== "merged_running"` and retry undelivered wakes
-// themselves (see the gateway aging sweep, paperclip-gateway/src/aging.ts).
+// themselves (see the gateway aging sweep, paperclip-gateway/src/aging.ts, and
+// the stale-gate detector, server/src/services/stale-gate-detector.ts).
 // `approval_approved` stays: an approval resolution must interrupt as its own
 // run — the requester is woken exactly once, so there is no retrying caller to
 // hand the truth to.

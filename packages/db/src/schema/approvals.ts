@@ -23,6 +23,15 @@ export const approvals = pgTable(
     // separate from decided_by_* — a withdrawal is not a board decision.
     withdrawnByAgentId: uuid("withdrawn_by_agent_id").references(() => agents.id),
     withdrawnAt: timestamp("withdrawn_at", { withTimezone: true }),
+    // Stale-gate detector (LOOA-296). premise_exempt_* marks a card that is
+    // deliberately pending on a dead source issue (record-keeping) so the
+    // detector never alarms on it. stale_premise_alarmed_at is the raise-once
+    // stamp: set after a successful alarm, never cleared by the sweep.
+    premiseExemptAt: timestamp("premise_exempt_at", { withTimezone: true }),
+    premiseExemptReason: text("premise_exempt_reason"),
+    premiseExemptByAgentId: uuid("premise_exempt_by_agent_id").references(() => agents.id),
+    premiseExemptByUserId: text("premise_exempt_by_user_id"),
+    stalePremiseAlarmedAt: timestamp("stale_premise_alarmed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

@@ -6,6 +6,7 @@ import {
   requestApprovalRevisionSchema,
   resolveApprovalSchema,
   resubmitApprovalSchema,
+  setPremiseExemptSchema,
   withdrawApprovalSchema,
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
@@ -18,12 +19,18 @@ import {
   logActivity,
   secretService,
 } from "../services/index.js";
+// Imported directly (not via the services index) so the many test suites that
+// mock ../services/index.js with a partial factory keep working; these are
+// only exercised by the premise-exempt routes.
+import { agentService } from "../services/agents.js";
+import { staleGateDetectorService } from "../services/stale-gate-detector.js";
 import {
   assertApprovalDecisionActor,
   assertCompanyAccess,
   getActorInfo,
 } from "./authz.js";
 import { forbidden } from "../errors.js";
+import { assertPremiseExemptActor } from "./premise-exempt-authz.js";
 import { redactEventPayload } from "../redaction.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
@@ -52,6 +59,9 @@ export function approvalRoutes(
   });
   const issueApprovalsSvc = issueApprovalService(db);
   const secretsSvc = secretService(db);
+  const staleGates = staleGateDetectorService(db, {
+    wakeup: (agentId, opts) => heartbeat.wakeup(agentId, opts),
+  });
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
 
   async function requireApprovalAccess(req: Request, id: string) {
@@ -406,6 +416,78 @@ export function approvalRoutes(
     }
 
     res.json(redactApprovalPayload(approval));
+  });
+
+  // LOOA-296 stale-gate detector: premise-exempt marker. A card deliberately
+  // left pending on a done/cancelled source issue (record-keeping) is marked
+  // exempt so the detector never alarms the CEO about it. Exempting silences
+  // an alarm, so it carries decision-grade authz: the card's creator agent,
+  // the company's CEO agent (the alarm's recipient), or an authenticated
+  // board identity. Clearing the mark re-arms the card.
+  router.post(
+    "/approvals/:id/premise-exempt",
+    validate(setPremiseExemptSchema),
+    async (req, res) => {
+      const id = req.params.id as string;
+      const existing = await requireApprovalAccess(req, id);
+      if (!existing) {
+        res.status(404).json({ error: "Approval not found" });
+        return;
+      }
+      const actor = await assertPremiseExemptActor(
+        req,
+        { companyId: existing.companyId, createdByAgentId: existing.requestedByAgentId ?? null },
+        (lookupId) => agentService(db).getById(lookupId),
+      );
+      const reason =
+        typeof req.body.reason === "string" && req.body.reason.trim() ? req.body.reason.trim() : null;
+      const updated = await staleGates.setApprovalPremiseExempt(id, reason, actor);
+      if (!updated) {
+        res.status(404).json({ error: "Approval not found" });
+        return;
+      }
+      await logActivity(db, {
+        companyId: existing.companyId,
+        actorType: actor.agentId ? "agent" : "user",
+        actorId: actor.agentId ?? actor.userId ?? "board",
+        agentId: actor.agentId,
+        action: "approval.premise_exempt_set",
+        entityType: "approval",
+        entityId: id,
+        details: { type: existing.type, reason },
+      });
+      res.json(redactApprovalPayload(updated));
+    },
+  );
+
+  router.delete("/approvals/:id/premise-exempt", async (req, res) => {
+    const id = req.params.id as string;
+    const existing = await requireApprovalAccess(req, id);
+    if (!existing) {
+      res.status(404).json({ error: "Approval not found" });
+      return;
+    }
+    const actor = await assertPremiseExemptActor(
+      req,
+      { companyId: existing.companyId, createdByAgentId: existing.requestedByAgentId ?? null },
+      (lookupId) => agentService(db).getById(lookupId),
+    );
+    const updated = await staleGates.clearApprovalPremiseExempt(id);
+    if (!updated) {
+      res.status(404).json({ error: "Approval not found" });
+      return;
+    }
+    await logActivity(db, {
+      companyId: existing.companyId,
+      actorType: actor.agentId ? "agent" : "user",
+      actorId: actor.agentId ?? actor.userId ?? "board",
+      agentId: actor.agentId,
+      action: "approval.premise_exempt_cleared",
+      entityType: "approval",
+      entityId: id,
+      details: { type: existing.type },
+    });
+    res.json(redactApprovalPayload(updated));
   });
 
   router.post(

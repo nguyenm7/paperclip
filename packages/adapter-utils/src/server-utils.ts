@@ -1401,10 +1401,45 @@ async function resolveSpawnTarget(
   return { command: executable, args };
 }
 
+/**
+ * Standard executable directories that a login shell would have on PATH but a
+ * daemon-spawned process often does not. Used to backfill a non-empty but
+ * minimal inherited PATH so adapter CLIs installed in Homebrew / per-user
+ * locations still resolve.
+ */
+function standardBinDirs(): string[] {
+  const platformDefaults = defaultPathForPlatform()
+    .split(process.platform === "win32" ? ";" : ":")
+    .filter(Boolean);
+  if (process.platform === "win32") return platformDefaults;
+  // Native installers (e.g. the Claude CLI) symlink into ~/.local/bin, which is
+  // not part of defaultPathForPlatform() and is absent from a minimal daemon PATH.
+  const home = os.homedir();
+  return home ? [...platformDefaults, path.join(home, ".local", "bin")] : platformDefaults;
+}
+
 export function ensurePathInEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  if (typeof env.PATH === "string" && env.PATH.length > 0) return env;
-  if (typeof env.Path === "string" && env.Path.length > 0) return env;
-  return { ...env, PATH: defaultPathForPlatform() };
+  const delimiter = process.platform === "win32" ? ";" : ":";
+  const currentPath =
+    typeof env.PATH === "string" && env.PATH.length > 0
+      ? env.PATH
+      : typeof env.Path === "string" && env.Path.length > 0
+        ? env.Path
+        : "";
+  if (currentPath.length === 0) {
+    return { ...env, PATH: defaultPathForPlatform() };
+  }
+  // A non-empty PATH is not necessarily a usable one: a server spawned by
+  // launchd/cron inherits a minimal PATH (e.g. /usr/bin:/bin:/usr/sbin:/sbin)
+  // that omits Homebrew and per-user install dirs, so adapter CLIs installed
+  // there fail to resolve ("Command not found in PATH: claude", LOOA-526).
+  // Append any missing standard bin dirs at lowest priority so explicit PATH
+  // entries keep precedence.
+  const existing = new Set(currentPath.split(delimiter).filter(Boolean));
+  const additions = standardBinDirs().filter((dir) => !existing.has(dir));
+  if (additions.length === 0) return env;
+  const key = typeof env.PATH === "string" && env.PATH.length > 0 ? "PATH" : "Path";
+  return { ...env, [key]: [currentPath, ...additions].join(delimiter) };
 }
 
 export async function ensureAbsoluteDirectory(

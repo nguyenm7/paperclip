@@ -9,6 +9,8 @@ import {
   buildPersistentSkillSnapshot,
   buildRuntimeMountedSkillSnapshot,
   buildInvocationEnvForLogs,
+  defaultPathForPlatform,
+  ensurePathInEnv,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   materializePaperclipSkillCopy,
   refreshPaperclipWorkspaceEnvForExecution,
@@ -1160,4 +1162,45 @@ describe("appendWithByteCap", () => {
     expect(Buffer.from(output, "utf8").toString("utf8")).toBe(output);
     expect(Buffer.byteLength(output, "utf8")).toBeLessThanOrEqual(7);
   });
+});
+
+describe("ensurePathInEnv", () => {
+  const delimiter = process.platform === "win32" ? ";" : ":";
+
+  it("substitutes the platform default when PATH is empty/absent", () => {
+    expect(ensurePathInEnv({}).PATH).toBe(defaultPathForPlatform());
+    expect(ensurePathInEnv({ PATH: "" }).PATH).toBe(defaultPathForPlatform());
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "backfills standard bin dirs missing from a minimal daemon PATH (LOOA-526)",
+    () => {
+      // The minimal PATH a launchd/cron-spawned server inherits — omits Homebrew
+      // and ~/.local/bin, where the Claude CLI is installed. This is what made the
+      // Scout weekly sweep fail with `Command not found in PATH: claude`.
+      const minimal = "/usr/bin:/bin:/usr/sbin:/sbin";
+      const result = ensurePathInEnv({ PATH: minimal }).PATH ?? "";
+      const dirs = result.split(delimiter);
+
+      // Original entries preserved and kept at highest priority.
+      expect(result.startsWith(minimal)).toBe(true);
+      // Homebrew + per-user install dirs are now resolvable.
+      expect(dirs).toContain("/opt/homebrew/bin");
+      expect(dirs).toContain("/usr/local/bin");
+      expect(dirs).toContain(path.join(os.homedir(), ".local", "bin"));
+      // Backfill must not introduce duplicate PATH entries.
+      expect(new Set(dirs).size).toBe(dirs.length);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not duplicate standard bin dirs that are already present",
+    () => {
+      const rich = `/opt/homebrew/bin${delimiter}/usr/local/bin${delimiter}/usr/bin${delimiter}/bin`;
+      const dirs = (ensurePathInEnv({ PATH: rich }).PATH ?? "").split(delimiter);
+      expect(dirs.filter((d) => d === "/opt/homebrew/bin")).toHaveLength(1);
+      expect(dirs.filter((d) => d === "/usr/local/bin")).toHaveLength(1);
+      expect(new Set(dirs).size).toBe(dirs.length);
+    },
+  );
 });

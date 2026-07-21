@@ -5233,7 +5233,7 @@ describeEmbeddedPostgres("issueService.assertCheckoutOwner stale checkout adopti
   });
 
   async function seedOwnershipIssue(params: {
-    checkoutStatus: "running" | "failed" | "timed_out";
+    checkoutStatus: "running" | "queued" | "failed" | "timed_out";
     actorRunStatus?: "running" | "failed" | "timed_out" | "succeeded";
     assigneeMatchesActor?: boolean;
   }) {
@@ -5285,7 +5285,13 @@ describeEmbeddedPostgres("issueService.assertCheckoutOwner stale checkout adopti
         agentId: assigneeAgentId,
         status: params.checkoutStatus,
         invocationSource: "manual",
-        finishedAt: params.checkoutStatus === "running" ? null : new Date(),
+        // A `running` holder has started (startedAt set); a never-started
+        // `queued` holder has not. Terminal holders never started here either.
+        startedAt: params.checkoutStatus === "running" ? new Date() : null,
+        finishedAt:
+          params.checkoutStatus === "running" || params.checkoutStatus === "queued"
+            ? null
+            : new Date(),
       },
       {
         id: actorRunId,
@@ -5423,6 +5429,93 @@ describeEmbeddedPostgres("issueService.assertCheckoutOwner stale checkout adopti
       checkoutRunId: seeded.actorRunId,
       executionRunId: seeded.actorRunId,
     });
+  });
+
+  // LOOA-375: a never-started `queued` run must not permanently pin an issue.
+  // The assignee can adopt/release past it, and the orphan is cancelled so it
+  // can never fire against a since-reassigned issue. The paired running-holder
+  // cases pin the invariant that this is NOT weakened into a no-op.
+  it("lets the assignee adopt past a never-started queued checkout holder and cancels the orphan", async () => {
+    const seeded = await seedOwnershipIssue({ checkoutStatus: "queued" });
+
+    const ownership = await svc.assertCheckoutOwner(
+      seeded.issueId,
+      seeded.actorAgentId,
+      seeded.actorRunId,
+    );
+
+    expect(ownership.checkoutRunId).toBe(seeded.actorRunId);
+    expect(ownership.executionRunId).toBe(seeded.actorRunId);
+    expect(ownership.adoptedFromRunId).toBeNull();
+
+    const holder = await db
+      .select({ status: heartbeatRuns.status })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, seeded.staleRunId))
+      .then((rows) => rows[0]);
+    expect(holder?.status).toBe("cancelled");
+  });
+
+  it("does not reap or bypass a running (started) checkout holder", async () => {
+    const seeded = await seedOwnershipIssue({ checkoutStatus: "running" });
+
+    await expect(
+      svc.assertCheckoutOwner(seeded.issueId, seeded.actorAgentId, seeded.actorRunId),
+    ).rejects.toMatchObject({ status: 409 });
+
+    const holder = await db
+      .select({ status: heartbeatRuns.status })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, seeded.staleRunId))
+      .then((rows) => rows[0]);
+    expect(holder?.status).toBe("running");
+  });
+
+  it("lets the assignee release an issue pinned by a never-started queued holder and cancels the orphan", async () => {
+    const seeded = await seedOwnershipIssue({ checkoutStatus: "queued" });
+
+    const released = await svc.release(
+      seeded.issueId,
+      seeded.assigneeAgentId,
+      seeded.actorRunId,
+    );
+    expect(released).not.toBeNull();
+
+    const row = await db
+      .select({
+        status: issues.status,
+        assigneeAgentId: issues.assigneeAgentId,
+        checkoutRunId: issues.checkoutRunId,
+        executionRunId: issues.executionRunId,
+      })
+      .from(issues)
+      .where(eq(issues.id, seeded.issueId))
+      .then((rows) => rows[0]);
+    expect(row?.assigneeAgentId).toBeNull();
+    expect(row?.checkoutRunId).toBeNull();
+    expect(row?.executionRunId).toBeNull();
+
+    const holder = await db
+      .select({ status: heartbeatRuns.status })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, seeded.staleRunId))
+      .then((rows) => rows[0]);
+    expect(holder?.status).toBe("cancelled");
+  });
+
+  it("still blocks releasing past a running checkout holder", async () => {
+    const seeded = await seedOwnershipIssue({ checkoutStatus: "running" });
+
+    await expect(
+      svc.release(seeded.issueId, seeded.assigneeAgentId, seeded.actorRunId),
+    ).rejects.toMatchObject({ status: 409 });
+
+    const holder = await db
+      .select({ status: heartbeatRuns.status })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, seeded.staleRunId))
+      .then((rows) => rows[0]);
+    expect(holder?.status).toBe("running");
   });
 
 });

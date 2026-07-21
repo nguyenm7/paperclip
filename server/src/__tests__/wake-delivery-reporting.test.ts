@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { eq, sql } from "drizzle-orm";
-import { activityLog, agents, companies, createDb, heartbeatRuns, issues } from "@paperclipai/db";
+import { and, eq, sql } from "drizzle-orm";
+import { activityLog, agentWakeupRequests, agents, companies, createDb, heartbeatRuns, issues } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -462,6 +462,129 @@ describeEmbeddedPostgres("wakeup reports coalescing truthfully (LOOA-342)", () =
       carriers.length,
       "a flood past the cap must spill into fresh queued runs, not a single evicting buffer",
     ).toBeGreaterThan(1);
+  }, 60_000);
+
+  // ---------------------------------------------------------------------------
+  // LOOA-378 branch 1 — the DEFERRED issue-execution carrier must REFUSE too
+  // (LOOA-572 review).
+  //
+  // When the assignee already has a LIVE execution run, a same-issue follow-up
+  // wake cannot coalesce onto it (the process already read its context) — it is
+  // parked as a `deferred_issue_execution` wakeup request and promoted to its own
+  // run when the live run finalizes. The first LOOA-378 fix gated the ACTIVE-run
+  // merge but left the DEFERRED-carrier merge calling
+  // mergeCoalescedContextSnapshot unconditionally, so a sustained issue-scoped
+  // flood evicted the oldest parked prompt from the deferred buffer before
+  // promotion — the exact eviction, one level down.
+  //
+  // The prompts on this branch live on
+  // agentWakeupRequests.payload._paperclipWakeContext, which the null-scope test
+  // above never inspects. This test drives branch 1 directly and asserts the same
+  // invariant: nothing parked is evicted.
+  // ---------------------------------------------------------------------------
+
+  it("flooding the DEFERRED issue-execution carrier past the cap spills into fresh deferred rows instead of evicting — every parked prompt survives to promotion (LOOA-378 branch 1)", async () => {
+    const { companyId, agentId } = await seedCompanyWithAgent("cto");
+    const issueId = randomUUID();
+
+    // A live execution run on the issue, already carrying a large wakeMessage so
+    // every incoming same-issue wake overflows the 16KB cap when measured against
+    // it — forcing the refuse-into-active path down onto the deferred carrier
+    // rather than coalescing onto the running process (which would report
+    // merged_running). Registering the process makes it a real live run.
+    const liveRunId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: liveRunId,
+      companyId,
+      agentId,
+      invocationSource: "automation",
+      status: "running",
+      contextSnapshot: { issueId, wakeMessage: `ACTIVE: ${"x".repeat(15_000)}` },
+      startedAt: new Date(),
+    });
+    runningProcesses.set(liveRunId, {
+      child: { pid: 4321 } as never,
+      graceSec: 5,
+      processGroupId: null,
+    });
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Issue with a live execution run",
+      status: "in_progress",
+      priority: "medium",
+      assigneeAgentId: agentId,
+      executionRunId: liveRunId,
+    });
+
+    // Flood the issue with distinct ~2KB same-issue wakes. Each overflows the cap
+    // against the 15KB live run, so each is parked as a deferred issue-execution
+    // wake. wakeup returns null for the deferred outcome.
+    const markers: string[] = [];
+    for (let i = 0; i < 24; i += 1) {
+      const marker = `DEFERRED-${String(i).padStart(2, "0")}`;
+      markers.push(marker);
+      const run = await heartbeat.wakeup(agentId, {
+        source: "automation",
+        triggerDetail: "system",
+        reason: "some_future_plugin_sweep",
+        payload: { issueId, prompt: `${marker}: gate needs attention. ${"x".repeat(2_000)}` },
+        requestedByActorType: "system",
+        requestedByActorId: "plugin:paperclip-gateway",
+      });
+      expect(
+        run,
+        `${marker} must be parked (deferred) on the issue-execution carrier, not coalesced onto the live run`,
+      ).toBeNull();
+    }
+
+    // The parked prompts live on agentWakeupRequests.payload._paperclipWakeContext.
+    const deferredRows = await db
+      .select()
+      .from(agentWakeupRequests)
+      .where(
+        and(
+          eq(agentWakeupRequests.agentId, agentId),
+          eq(agentWakeupRequests.status, "deferred_issue_execution"),
+        ),
+      );
+
+    const wakeMessageOfDeferred = (row: (typeof deferredRows)[number]) => {
+      const payload = (row.payload ?? {}) as Record<string, unknown>;
+      const ctx = (payload["_paperclipWakeContext"] ?? {}) as Record<string, unknown>;
+      return String(ctx.wakeMessage ?? "");
+    };
+
+    // Every deferred carrier stays within the cap ...
+    for (const row of deferredRows) {
+      expect(
+        wakeMessageOfDeferred(row).length,
+        "each deferred carrier's accumulated wakeMessage must stay within the cap",
+      ).toBeLessThanOrEqual(16_384);
+    }
+
+    const allDeferred = deferredRows.map(wakeMessageOfDeferred).join("\n");
+
+    // ... nothing parked is evicted: no truncation marker, every prompt survives.
+    expect(
+      allDeferred,
+      "refusing to coalesce on overflow means the deferred buffer never evicts — the truncation marker must never appear",
+    ).not.toContain("truncated");
+    for (const marker of markers) {
+      expect(
+        allDeferred,
+        `${marker} was parked (deferred) — its prompt must survive on some deferred carrier, not be evicted at the cap`,
+      ).toContain(marker);
+    }
+
+    // The flood must have spilled into more than one deferred row rather than
+    // piling onto (and overflowing) a single evicting buffer.
+    expect(
+      deferredRows.length,
+      "a flood past the cap must spill into fresh deferred rows, not a single evicting buffer",
+    ).toBeGreaterThan(1);
+
+    runningProcesses.clear();
   }, 60_000);
 
   // ---------------------------------------------------------------------------

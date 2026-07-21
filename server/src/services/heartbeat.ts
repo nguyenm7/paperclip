@@ -11397,9 +11397,29 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               .limit(1)
               .then((rows) => rows[0] ?? null);
 
-            if (existingDeferred) {
-              const existingDeferredPayload = parseObject(existingDeferred.payload);
-              const existingDeferredContext = parseObject(existingDeferredPayload[DEFERRED_WAKE_CONTEXT_KEY]);
+            const existingDeferredPayload = existingDeferred
+              ? parseObject(existingDeferred.payload)
+              : null;
+            const existingDeferredContext = existingDeferredPayload
+              ? parseObject(existingDeferredPayload[DEFERRED_WAKE_CONTEXT_KEY])
+              : null;
+
+            // LOOA-378 (branch-1 deferred carrier, LOOA-572 review): only merge
+            // into the existing deferred row while the append stays within the
+            // wakeMessage cap. mergeCoalescedContextSnapshot -> mergeWakeMessages
+            // EVICTS the oldest prefix on overflow — the very silent drop the
+            // active-run refuse above closes, resurrected one level down on the
+            // parked deferred carrier. A sustained issue-scoped flood would
+            // otherwise push a wake already reported `deferred` out of the buffer
+            // before it is promoted. On overflow, fall through to insert a SEPARATE
+            // deferred row; finalization promotes deferred_issue_execution rows
+            // FIFO, one per execution, so every parked prompt still renders.
+            if (
+              existingDeferred
+              && existingDeferredPayload
+              && existingDeferredContext
+              && !coalescingWouldEvictWakeMessage(existingDeferredContext, enrichedContextSnapshot)
+            ) {
               const mergedDeferredContext = mergeCoalescedContextSnapshot(
                 existingDeferredContext,
                 enrichedContextSnapshot,

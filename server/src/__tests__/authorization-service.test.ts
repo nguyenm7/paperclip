@@ -210,6 +210,104 @@ describeEmbeddedPostgres("authorization service", () => {
     expect(decision.grant?.permissionKey).toBe("agents:create");
   });
 
+  it("prefers an explicit narrow grant for agent configuration updates", async () => {
+    const company = await createCompany(db, "NarrowAgentConfigUpdate");
+    const actorAgent = await createAgent(db, company.id);
+    const targetAgent = await createAgent(db, company.id);
+    await db.insert(companyMemberships).values({
+      companyId: company.id,
+      principalType: "agent",
+      principalId: actorAgent.id,
+      status: "active",
+      membershipRole: "member",
+    });
+    await db.insert(principalPermissionGrants).values([
+      {
+        companyId: company.id,
+        principalType: "agent",
+        principalId: actorAgent.id,
+        permissionKey: "agent_config:update",
+        grantedByUserId: null,
+      },
+      {
+        companyId: company.id,
+        principalType: "agent",
+        principalId: actorAgent.id,
+        permissionKey: "agents:create",
+        grantedByUserId: null,
+      },
+    ]);
+
+    const decision = await authorizationService(db).decide({
+      actor: { type: "agent", agentId: actorAgent.id, companyId: company.id, source: "agent_key" },
+      action: "agent_config:update",
+      resource: { type: "agent", companyId: company.id, agentId: targetAgent.id },
+    });
+
+    expect(decision).toMatchObject({
+      allowed: true,
+      reason: "allow_explicit_grant",
+      grant: { permissionKey: "agent_config:update" },
+    });
+  });
+
+  it("falls back to agents:create for agent configuration updates", async () => {
+    const company = await createCompany(db, "BroadAgentConfigUpdate");
+    const actorAgent = await createAgent(db, company.id);
+    const targetAgent = await createAgent(db, company.id);
+    await db.insert(companyMemberships).values({
+      companyId: company.id,
+      principalType: "agent",
+      principalId: actorAgent.id,
+      status: "active",
+      membershipRole: "member",
+    });
+    await db.insert(principalPermissionGrants).values({
+      companyId: company.id,
+      principalType: "agent",
+      principalId: actorAgent.id,
+      permissionKey: "agents:create",
+      grantedByUserId: null,
+    });
+
+    const decision = await authorizationService(db).decide({
+      actor: { type: "agent", agentId: actorAgent.id, companyId: company.id, source: "agent_key" },
+      action: "agent_config:update",
+      resource: { type: "agent", companyId: company.id, agentId: targetAgent.id },
+    });
+
+    expect(decision).toMatchObject({
+      allowed: true,
+      reason: "allow_explicit_grant",
+      grant: { permissionKey: "agents:create" },
+    });
+  });
+
+  it("denies agent configuration updates without either grant", async () => {
+    const company = await createCompany(db, "DeniedAgentConfigUpdate");
+    const actorAgent = await createAgent(db, company.id);
+    const targetAgent = await createAgent(db, company.id);
+    await db.insert(companyMemberships).values({
+      companyId: company.id,
+      principalType: "agent",
+      principalId: actorAgent.id,
+      status: "active",
+      membershipRole: "member",
+    });
+
+    const decision = await authorizationService(db).decide({
+      actor: { type: "agent", agentId: actorAgent.id, companyId: company.id, source: "agent_key" },
+      action: "agent_config:update",
+      resource: { type: "agent", companyId: company.id, agentId: targetAgent.id },
+    });
+
+    expect(decision).toMatchObject({
+      allowed: false,
+      reason: "deny_missing_grant",
+    });
+    expect(decision.explanation).toContain("agents:create");
+  });
+
   it("denies cross-company agent decisions before grant evaluation", async () => {
     const sourceCompany = await createCompany(db, "Source");
     const targetCompany = await createCompany(db, "Target");

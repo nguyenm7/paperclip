@@ -105,6 +105,13 @@ import { listInvalidOrgChainDescendantIds } from "../services/agent-invokability
 
 const RUN_LOG_DEFAULT_LIMIT_BYTES = 256_000;
 const RUN_LOG_MAX_LIMIT_BYTES = 1024 * 1024;
+const NARROW_AGENT_CONFIG_UPDATE_KEYS = new Set([
+  "model",
+  "modelReasoningEffort",
+  "effort",
+  "mode",
+  "variant",
+]);
 
 function readRunLogLimitBytes(value: unknown) {
   const parsed = Number(value ?? RUN_LOG_DEFAULT_LIMIT_BYTES);
@@ -827,7 +834,7 @@ export function agentRoutes(
       action: "agent_config:update",
       resource: { type: "agent", companyId: targetAgent.companyId, agentId: targetAgent.id },
     });
-    if (decision.allowed) return;
+    if (decision.allowed) return decision;
     throw forbidden(decision.explanation);
   }
 
@@ -1329,9 +1336,50 @@ export function agentRoutes(
     );
   }
 
-  function summarizeAgentUpdateDetails(patch: Record<string, unknown>) {
+  function assertNarrowAgentConfigUpdatePatch(
+    patch: Record<string, unknown>,
+    decision: Awaited<ReturnType<typeof assertCanUpdateAgent>>,
+  ) {
+    if (decision.grant?.permissionKey !== "agent_config:update") return;
+
+    const offendingTopLevelKeys = Object.keys(patch)
+      .filter((key) => key !== "adapterConfig" && key !== "replaceAdapterConfig")
+      .sort();
+    if (offendingTopLevelKeys.length > 0) {
+      throw forbidden(
+        `Permission agent_config:update only allows adapterConfig updates; offending top-level key(s): ${offendingTopLevelKeys.join(", ")}`,
+      );
+    }
+    if (!hasOwn(patch, "adapterConfig")) {
+      throw forbidden("Permission agent_config:update requires adapterConfig as the only mutable top-level key");
+    }
+    if (patch.replaceAdapterConfig === true) {
+      throw forbidden("Permission agent_config:update is merge-only; offending key: replaceAdapterConfig");
+    }
+
+    const adapterConfig = asRecord(patch.adapterConfig);
+    if (!adapterConfig) {
+      throw forbidden("Permission agent_config:update requires adapterConfig to be an object");
+    }
+    const offendingAdapterConfigKeys = Object.keys(adapterConfig)
+      .filter((key) => !NARROW_AGENT_CONFIG_UPDATE_KEYS.has(key))
+      .sort();
+    if (offendingAdapterConfigKeys.length > 0) {
+      throw forbidden(
+        `Permission agent_config:update does not allow adapterConfig key(s): ${offendingAdapterConfigKeys.join(", ")}`,
+      );
+    }
+  }
+
+  function summarizeAgentUpdateDetails(
+    patch: Record<string, unknown>,
+    decision: Awaited<ReturnType<typeof assertCanUpdateAgent>>,
+  ) {
     const changedTopLevelKeys = Object.keys(patch).sort();
-    const details: Record<string, unknown> = { changedTopLevelKeys };
+    const details: Record<string, unknown> = {
+      changedTopLevelKeys,
+      authorizingGrantKey: decision.grant?.permissionKey ?? null,
+    };
 
     const adapterConfigPatch = asRecord(patch.adapterConfig);
     if (adapterConfigPatch) {
@@ -2476,7 +2524,8 @@ export function agentRoutes(
       await assertBoardCanManageAgentsForCompany(req, existing.companyId);
     }
 
-    const agent = await svc.updatePermissions(id, req.body);
+    const { grants = [], ...permissionsPatch } = req.body;
+    const agent = await svc.updatePermissions(id, permissionsPatch);
     if (!agent) {
       res.status(404).json({ error: "Agent not found" });
       return;
@@ -2493,6 +2542,16 @@ export function agentRoutes(
       effectiveCanAssignTasks,
       req.actor.type === "board" ? (req.actor.userId ?? null) : null,
     );
+    for (const grant of grants) {
+      await access.setPrincipalPermission(
+        agent.companyId,
+        "agent",
+        agent.id,
+        grant.permissionKey,
+        grant.enabled,
+        req.actor.type === "board" ? (req.actor.userId ?? null) : null,
+      );
+    }
 
     const actor = getActorInfo(req);
     await logActivity(db, {
@@ -2508,6 +2567,7 @@ export function agentRoutes(
         canCreateAgents: agent.permissions?.canCreateAgents ?? false,
         canAssignTasks: effectiveCanAssignTasks,
         trustPreset: agent.permissions?.trustPreset ?? "standard",
+        grants,
       },
     });
 
@@ -2763,7 +2823,8 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanUpdateAgent(req, existing);
+    const authorizationDecision = await assertCanUpdateAgent(req, existing);
+    assertNarrowAgentConfigUpdatePatch(req.body as Record<string, unknown>, authorizationDecision);
 
     if (hasOwn(req.body as object, "permissions")) {
       res.status(422).json({ error: "Use /api/agents/:id/permissions for permission changes" });
@@ -2905,7 +2966,7 @@ export function agentRoutes(
       action: "agent.updated",
       entityType: "agent",
       entityId: agent.id,
-      details: summarizeAgentUpdateDetails(patchData),
+      details: summarizeAgentUpdateDetails(patchData, authorizationDecision),
     });
 
     res.json(agent);

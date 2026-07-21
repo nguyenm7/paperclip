@@ -505,6 +505,189 @@ describe.sequential("agent permission routes", () => {
     expect(res.status).toBe(403);
   });
 
+  it.each([
+    ["model", "gpt-5.5"],
+    ["modelReasoningEffort", "high"],
+    ["effort", "high"],
+    ["mode", "auto"],
+    ["variant", "fast"],
+  ])("allows narrow agent_config:update repairs for adapterConfig.%s", async (key, value) => {
+    mockAgentService.getById.mockResolvedValue({
+      ...baseAgent,
+      adapterConfig: { promptTemplate: "preserve this persona" },
+    });
+    mockAccessService.decide.mockResolvedValue({
+      allowed: true,
+      reason: "allow_explicit_grant",
+      explanation: "Allowed by explicit grant agent_config:update.",
+      grant: {
+        principalType: "agent",
+        principalId: agentId,
+        permissionKey: "agent_config:update",
+        scope: null,
+      },
+    });
+
+    const app = await createApp({
+      type: "agent",
+      agentId,
+      companyId,
+      source: "agent_key",
+      runId: "run-1",
+    });
+
+    const patch = {
+      adapterConfig: { [key]: value },
+      ...(key === "model" ? { replaceAdapterConfig: false } : {}),
+    };
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .patch(`/api/agents/${agentId}`)
+      .send(patch));
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockAgentService.update).toHaveBeenCalledWith(
+      agentId,
+      expect.objectContaining({
+        adapterConfig: expect.objectContaining({
+          promptTemplate: "preserve this persona",
+          [key]: value,
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(mockLogActivity).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: "agent.updated",
+      details: expect.objectContaining({ authorizingGrantKey: "agent_config:update" }),
+    }));
+  });
+
+  it.each([
+    "instructionsRootPath",
+    "dangerouslyBypassApprovalsAndSandbox",
+    "command",
+  ])("rejects narrow agent_config:update repairs for adapterConfig.%s", async (key) => {
+    mockAccessService.decide.mockResolvedValue({
+      allowed: true,
+      reason: "allow_explicit_grant",
+      explanation: "Allowed by explicit grant agent_config:update.",
+      grant: {
+        principalType: "agent",
+        principalId: agentId,
+        permissionKey: "agent_config:update",
+        scope: null,
+      },
+    });
+    const app = await createApp({
+      type: "agent",
+      agentId,
+      companyId,
+      source: "agent_key",
+      runId: "run-1",
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .patch(`/api/agents/${agentId}`)
+      .send({ adapterConfig: { [key]: "forbidden" } }));
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain(key);
+    expect(mockAgentService.update).not.toHaveBeenCalled();
+    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  it("rejects top-level fields under the narrow agent_config:update grant", async () => {
+    mockAccessService.decide.mockResolvedValue({
+      allowed: true,
+      reason: "allow_explicit_grant",
+      explanation: "Allowed by explicit grant agent_config:update.",
+      grant: {
+        principalType: "agent",
+        principalId: agentId,
+        permissionKey: "agent_config:update",
+        scope: null,
+      },
+    });
+    const app = await createApp({
+      type: "agent",
+      agentId,
+      companyId,
+      source: "agent_key",
+      runId: "run-1",
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .patch(`/api/agents/${agentId}`)
+      .send({ adapterConfig: { model: "gpt-5.5" }, title: "Escalated" }));
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain("title");
+    expect(mockAgentService.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects wholesale adapter config replacement under the narrow grant", async () => {
+    mockAccessService.decide.mockResolvedValue({
+      allowed: true,
+      reason: "allow_explicit_grant",
+      explanation: "Allowed by explicit grant agent_config:update.",
+      grant: {
+        principalType: "agent",
+        principalId: agentId,
+        permissionKey: "agent_config:update",
+        scope: null,
+      },
+    });
+    const app = await createApp({
+      type: "agent",
+      agentId,
+      companyId,
+      source: "agent_key",
+      runId: "run-1",
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .patch(`/api/agents/${agentId}`)
+      .send({ adapterConfig: { model: "gpt-5.5" }, replaceAdapterConfig: true }));
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain("replaceAdapterConfig");
+    expect(mockAgentService.update).not.toHaveBeenCalled();
+  });
+
+  it("preserves broader agent updates when agents:create authorizes the request", async () => {
+    mockAccessService.decide.mockResolvedValue({
+      allowed: true,
+      reason: "allow_explicit_grant",
+      explanation: "Allowed by explicit grant agents:create.",
+      grant: {
+        principalType: "agent",
+        principalId: agentId,
+        permissionKey: "agents:create",
+        scope: null,
+      },
+    });
+    const app = await createApp({
+      type: "agent",
+      agentId,
+      companyId,
+      source: "agent_key",
+      runId: "run-1",
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .patch(`/api/agents/${agentId}`)
+      .send({ title: "Still broadly editable" }));
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockAgentService.update).toHaveBeenCalledWith(
+      agentId,
+      expect.objectContaining({ title: "Still broadly editable" }),
+      expect.anything(),
+    );
+    expect(mockLogActivity).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      details: expect.objectContaining({ authorizingGrantKey: "agents:create" }),
+    }));
+  });
+
   it("blocks api key creation for authenticated company members without agent admin permission", async () => {
     mockAccessService.canUser.mockResolvedValue(false);
 
@@ -1529,6 +1712,66 @@ describe.sequential("agent permission routes", () => {
     );
     expect(res.body.access.canAssignTasks).toBe(true);
     expect(res.body.access.taskAssignSource).toBe("agent_creator");
+  });
+
+  it("updates explicit principal grants through the agent permissions route", async () => {
+    const app = await createApp({
+      type: "board",
+      userId: "board-user",
+      source: "local_implicit",
+      isInstanceAdmin: true,
+      companyIds: [companyId],
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .patch(`/api/agents/${agentId}/permissions`)
+      .send({
+        canCreateAgents: false,
+        canAssignTasks: false,
+        grants: [{ permissionKey: "agent_config:update", enabled: true }],
+      }));
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockAgentService.updatePermissions).toHaveBeenCalledWith(
+      agentId,
+      expect.not.objectContaining({ grants: expect.anything() }),
+    );
+    expect(mockAccessService.setPrincipalPermission).toHaveBeenCalledWith(
+      companyId,
+      "agent",
+      agentId,
+      "agent_config:update",
+      true,
+      "board-user",
+    );
+    expect(mockLogActivity).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: "agent.permissions_updated",
+      details: expect.objectContaining({
+        grants: [{ permissionKey: "agent_config:update", enabled: true }],
+      }),
+    }));
+  });
+
+  it("rejects unknown permission grant keys", async () => {
+    const app = await createApp({
+      type: "board",
+      userId: "board-user",
+      source: "local_implicit",
+      isInstanceAdmin: true,
+      companyIds: [companyId],
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .patch(`/api/agents/${agentId}/permissions`)
+      .send({
+        canCreateAgents: false,
+        canAssignTasks: false,
+        grants: [{ permissionKey: "agents:god_mode", enabled: true }],
+      }));
+
+    expect(res.status).toBe(400);
+    expect(mockAgentService.updatePermissions).not.toHaveBeenCalled();
+    expect(mockAccessService.setPrincipalPermission).not.toHaveBeenCalled();
   });
 
   it("exposes a dedicated agent route for the inbox mine view", async () => {

@@ -112,7 +112,8 @@ function companyIdForResource(resource: AuthorizationResource) {
 }
 
 function permissionForAction(action: AuthorizationAction): PermissionKey | null {
-  if (action === "agent_config:read" || action === "agent_config:update") return "agents:create";
+  if (action === "agent_config:read") return "agents:create";
+  if (action === "agent_config:update") return "agent_config:update";
   if (
     action === "agent:read" ||
     action === "agent:wake" ||
@@ -953,6 +954,31 @@ export function authorizationService(db: Db) {
       return broadDecision;
     }
 
+    async function decideWithAgentConfigUpdateGrants(
+      principalType: PrincipalType,
+      principalId: string,
+    ): Promise<AuthorizationDecision> {
+      const narrowDecision = await decidePrincipalGrant({
+        companyId,
+        principalType,
+        principalId,
+        action: input.action,
+        permissionKey: "agent_config:update",
+        scope: input.scope,
+      });
+      if (narrowDecision.allowed || narrowDecision.reason === "deny_missing_membership") {
+        return narrowDecision;
+      }
+      return decidePrincipalGrant({
+        companyId,
+        principalType,
+        principalId,
+        action: input.action,
+        permissionKey: "agents:create",
+        scope: input.scope,
+      });
+    }
+
     async function denyForAssignmentPolicyIfNeeded(
       policyEffect: AssignmentPolicyEffect,
     ): Promise<AuthorizationDecision | null> {
@@ -1111,6 +1137,9 @@ export function authorizationService(db: Db) {
         const policyEffect = taskAssignmentPolicyEffect ?? await assignmentPolicyEffect(input.resource);
         if (policyEffect.kind === "restricted") return denyRestrictedAssignmentPolicy(policyEffect);
         return grantDecision;
+      }
+      if (input.action === "agent_config:update") {
+        return decideWithAgentConfigUpdateGrants("user", input.actor.userId);
       }
       return decidePrincipalGrant({
         companyId,
@@ -1299,7 +1328,13 @@ export function authorizationService(db: Db) {
       });
     }
 
-    if (permissionKey) {
+    let agentConfigUpdateGrantDecision: AuthorizationDecision | null = null;
+    if (input.action === "agent_config:update") {
+      agentConfigUpdateGrantDecision = await decideWithAgentConfigUpdateGrants("agent", actorAgentId);
+      if (agentConfigUpdateGrantDecision.allowed) return agentConfigUpdateGrantDecision;
+    }
+
+    if (permissionKey && input.action !== "agent_config:update") {
       const grantDecision = await decidePrincipalGrant({
         companyId,
         principalType: "agent",
@@ -1337,6 +1372,8 @@ export function authorizationService(db: Db) {
         explanation: "Allowed because the actor manages the issue assignee in the reporting chain.",
       });
     }
+
+    if (agentConfigUpdateGrantDecision) return agentConfigUpdateGrantDecision;
 
     return deny({
       action: input.action,

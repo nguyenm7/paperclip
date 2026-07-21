@@ -45,6 +45,7 @@ const mockAgentService = vi.hoisted(() => ({
   create: vi.fn(),
   activatePendingApproval: vi.fn(),
   update: vi.fn(),
+  rollbackConfigRevision: vi.fn(),
   updatePermissions: vi.fn(),
   getChainOfCommand: vi.fn(),
   resolveByReference: vi.fn(),
@@ -300,6 +301,7 @@ describe.sequential("agent permission routes", () => {
     mockAgentService.create.mockReset();
     mockAgentService.activatePendingApproval.mockReset();
     mockAgentService.update.mockReset();
+    mockAgentService.rollbackConfigRevision.mockReset();
     mockAgentService.updatePermissions.mockReset();
     mockAgentService.getChainOfCommand.mockReset();
     mockAgentService.resolveByReference.mockReset();
@@ -343,6 +345,7 @@ describe.sequential("agent permission routes", () => {
       activated: false,
     });
     mockAgentService.update.mockResolvedValue(baseAgent);
+    mockAgentService.rollbackConfigRevision.mockResolvedValue(baseAgent);
     mockAgentService.updatePermissions.mockResolvedValue(baseAgent);
     mockAccessService.canUser.mockResolvedValue(true);
     mockAccessService.decide.mockImplementation(async (input: { action?: string }) => {
@@ -686,6 +689,65 @@ describe.sequential("agent permission routes", () => {
     expect(mockLogActivity).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       details: expect.objectContaining({ authorizingGrantKey: "agents:create" }),
     }));
+  });
+
+  it("rejects config rollback by default under the narrow agent_config:update grant", async () => {
+    mockAccessService.decide.mockResolvedValue({
+      allowed: true,
+      reason: "allow_explicit_grant",
+      explanation: "Allowed by explicit grant agent_config:update.",
+      grant: {
+        principalType: "agent",
+        principalId: agentId,
+        permissionKey: "agent_config:update",
+        scope: null,
+      },
+    });
+    const app = await createApp({
+      type: "agent",
+      agentId,
+      companyId,
+      source: "agent_key",
+      runId: "run-1",
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post(`/api/agents/${agentId}/config-revisions/revision-1/rollback`));
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain("requires agents:create");
+    expect(mockAgentService.rollbackConfigRevision).not.toHaveBeenCalled();
+  });
+
+  it("preserves config rollback when agents:create authorizes the request", async () => {
+    mockAccessService.decide.mockResolvedValue({
+      allowed: true,
+      reason: "allow_explicit_grant",
+      explanation: "Allowed by explicit grant agents:create.",
+      grant: {
+        principalType: "agent",
+        principalId: agentId,
+        permissionKey: "agents:create",
+        scope: null,
+      },
+    });
+    const app = await createApp({
+      type: "agent",
+      agentId,
+      companyId,
+      source: "agent_key",
+      runId: "run-1",
+    });
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post(`/api/agents/${agentId}/config-revisions/revision-1/rollback`));
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockAgentService.rollbackConfigRevision).toHaveBeenCalledWith(
+      agentId,
+      "revision-1",
+      { agentId, userId: null },
+    );
   });
 
   it("blocks api key creation for authenticated company members without agent admin permission", async () => {

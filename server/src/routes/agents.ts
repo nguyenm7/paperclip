@@ -827,15 +827,22 @@ export function agentRoutes(
     };
   }
 
-  async function assertCanUpdateAgent(req: Request, targetAgent: { id: string; companyId: string }) {
+  async function assertCanUpdateAgent(
+    req: Request,
+    targetAgent: { id: string; companyId: string },
+    options: { allowNarrowGrant?: boolean } = {},
+  ) {
     assertCompanyAccess(req, targetAgent.companyId);
     const decision = await access.decide({
       actor: req.actor,
       action: "agent_config:update",
       resource: { type: "agent", companyId: targetAgent.companyId, agentId: targetAgent.id },
     });
-    if (decision.allowed) return decision;
-    throw forbidden(decision.explanation);
+    if (!decision.allowed) throw forbidden(decision.explanation);
+    if (decision.grant?.permissionKey === "agent_config:update" && !options.allowNarrowGrant) {
+      throw forbidden("Permission agent_config:update does not authorize this operation; requires agents:create");
+    }
+    return decision;
   }
 
   async function assertCanReadAgent(req: Request, targetAgent: { companyId: string }) {
@@ -2823,7 +2830,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    const authorizationDecision = await assertCanUpdateAgent(req, existing);
+    const authorizationDecision = await assertCanUpdateAgent(req, existing, { allowNarrowGrant: true });
     assertNarrowAgentConfigUpdatePatch(req.body as Record<string, unknown>, authorizationDecision);
 
     if (hasOwn(req.body as object, "permissions")) {

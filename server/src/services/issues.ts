@@ -4029,7 +4029,23 @@ export function issueService(db: Db) {
           .from(heartbeatRuns)
           .where(eq(heartbeatRuns.id, actorRunId))
           .then((rows) => rows[0]?.issueId ?? null);
-        if (actorScope !== issueId) return [];
+        if (actorScope !== issueId) {
+          // Observability (LOOA-566): the guard is suppressing a reap for a
+          // cross-scope actor. This is EXPECTED for legitimate same-agent
+          // drive-bys, but it ALSO fires if a future X-takeover run is created
+          // outside the wake pipeline (no contextSnapshot.issueId stamp) - in
+          // which case a genuine LOOA-375 queued-holder lockout has silently
+          // resurfaced: the preserved holder stays "queued", so the caller's
+          // ownership check will 409 (fail-closed availability, not security).
+          // info-level so the resurfaced-lockout path leaves a greppable signal
+          // without crying wolf on every routine drive-by. No control-flow
+          // change: the early `return []` below is the pre-LOOA-566 behavior.
+          logger.info(
+            { issueId, actorRunId, actorScope, suppressedHolderIds: holderIds },
+            "reap scope-guard suppressed never-started queued holder reap for cross-scope actor (LOOA-554/LOOA-566)",
+          );
+          return [];
+        }
       }
 
       const reaped: string[] = [];

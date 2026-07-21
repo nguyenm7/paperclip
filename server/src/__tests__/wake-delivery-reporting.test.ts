@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { eq, sql } from "drizzle-orm";
-import { activityLog, agents, companies, createDb, heartbeatRuns, issues } from "@paperclipai/db";
+import { and, eq, sql } from "drizzle-orm";
+import { activityLog, agentWakeupRequests, agents, companies, createDb, heartbeatRuns, issues } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -367,28 +367,224 @@ describeEmbeddedPostgres("wakeup reports coalescing truthfully (LOOA-342)", () =
     expect(wakeMessage.match(/Gate ALPHA/g)?.length ?? 0).toBe(1);
   }, 30_000);
 
-  it("accumulated wakeMessages are capped, keeping the NEWEST intact — repeated invokes cannot grow the context snapshot without bound (LOOA-344 F1)", async () => {
+  // ---------------------------------------------------------------------------
+  // LOOA-378 — the cap must REFUSE, not EVICT.
+  //
+  // LOOA-344 F1's cap kept the buffer bounded by dropping the OLDEST prefix on
+  // overflow. But eviction is a silent drop wearing a nice name: a wake that
+  // coalesced onto a parked carrier and was truthfully reported `merged_queued`
+  // could have its prompt pushed out of the 16KB buffer by a later flood before
+  // the carrier ever started — retroactively falsifying its delivery report.
+  // That is the F1 clobber resurrected at the truncation boundary.
+  //
+  // The fix makes the invariant total: on overflow we do NOT coalesce. The
+  // incoming wake gets a fresh run of its own, so the buffer only ever grows
+  // within its cap and no message reported delivered is ever evicted.
+  //
+  // This test asserts the invariant, not the mechanism — it re-fires for both
+  // the clobber (F1) and the eviction (F2 of that class) rather than pinning the
+  // truncation behaviour it replaces.
+  // ---------------------------------------------------------------------------
+
+  it("flooding a parked carrier past the cap queues fresh runs instead of evicting — every wake reported delivered still renders somewhere (LOOA-378)", async () => {
     const { companyId, agentId } = await seedCompanyWithAgent("cto");
-    const queuedRunId = await seedQueuedRun(companyId, agentId);
+    await seedQueuedRun(companyId, agentId);
+    // Keep every parked carrier from draining into `running` mid-flood: the
+    // eviction bug lives on an UN-STARTED carrier, so the scenario must stay
+    // deterministic. Cap the agent at one concurrent run and occupy that slot
+    // with a live run in a DIFFERENT task scope (so it is never a coalesce
+    // target for these null-scope invokes). `startNextQueuedRunForAgent` then
+    // sees zero free slots and never claims a queued carrier — otherwise a
+    // started carrier would honestly report `merged_running` (a different,
+    // pre-existing "not delivered, retry" case) and race its own executeRun.
+    await db
+      .update(agents)
+      .set({ runtimeConfig: { heartbeat: { maxConcurrentRuns: 1 } } })
+      .where(eq(agents.id, agentId));
+    await seedLiveRun(companyId, agentId, { issueId: randomUUID() });
 
-    // Flood the parked carrier the way a hostile/looping plugin would.
-    for (let i = 0; i < 12; i += 1) {
-      await invokeAsPluginBridge(agentId, "some_future_sweep_alarm", `FILLER-${i} ${"x".repeat(2_000)}`);
+    // Flood a single parked carrier the way a looping/hostile plugin would:
+    // enough ~2KB messages to blow well past the 16KB cap several times over.
+    // Each carries a unique, findable marker.
+    const reported: Array<{ marker: string; delivered: string }> = [];
+    for (let i = 0; i < 40; i += 1) {
+      const marker = `MSG-${String(i).padStart(3, "0")}`;
+      const run = await invokeAsPluginBridge(
+        agentId,
+        "some_future_sweep_alarm",
+        `${marker}: gate needs attention. ${"x".repeat(2_000)}`,
+      );
+      expect(run, `invoke ${marker} must return a carrier`).toBeTruthy();
+      // Every wake here lands on a carrier that has not started: it either
+      // coalesced onto a parked run (merged_queued) or, when coalescing would
+      // have overflowed the cap, got a fresh queued run of its own (new_run).
+      // Both are genuine delivery — the prompt renders at run start.
+      expect(
+        run!.delivered,
+        `${marker} must be reported delivered on a not-yet-started carrier`,
+      ).toMatch(/^(merged_queued|new_run)$/);
+      reported.push({ marker, delivered: run!.delivered });
     }
-    await invokeAsPluginBridge(agentId, "some_future_sweep_alarm", "NEWEST: the message the agent must act on.");
 
-    const [carrier] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, queuedRunId));
-    const wakeMessage = String((carrier!.contextSnapshot as Record<string, unknown> | null)?.wakeMessage ?? "");
+    const allRuns = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
+    const wakeMessageOf = (run: (typeof allRuns)[number]) =>
+      String((run.contextSnapshot as Record<string, unknown> | null)?.wakeMessage ?? "");
+    // The occupying live run is a different scope and carries no flood marker.
+    const carriers = allRuns.filter((run) => wakeMessageOf(run).includes("MSG-"));
 
+    // The original LOOA-344 F1 concern still holds: no single contextSnapshot may
+    // grow without bound. Refusing the coalesce keeps every carrier within the cap.
+    for (const carrier of carriers) {
+      expect(
+        wakeMessageOf(carrier).length,
+        "each carrier's accumulated wakeMessage must stay within the cap",
+      ).toBeLessThanOrEqual(16_384);
+    }
+
+    // The LOOA-378 invariant: nothing reported delivered is ever evicted. Because
+    // we refuse instead of drop, no truncation happens and every message reported
+    // delivered is present on some carrier that will render it.
+    const allWakeMessages = carriers.map(wakeMessageOf).join("\n");
     expect(
-      wakeMessage.length,
-      "unbounded accumulation would turn repeated agents.invoke calls into a contextSnapshot growth vector",
-    ).toBeLessThanOrEqual(16_384);
+      allWakeMessages,
+      "refusing to coalesce on overflow means nothing is evicted — the truncation marker must never appear",
+    ).not.toContain("truncated");
+    for (const { marker } of reported) {
+      expect(
+        allWakeMessages,
+        `${marker} was reported delivered — its prompt must survive on some carrier, not be evicted at the cap`,
+      ).toContain(marker);
+    }
+
+    // The flood must have spilled into fresh queued runs rather than piling onto
+    // (and overflowing) the single seeded carrier.
     expect(
-      wakeMessage,
-      "truncation must drop the OLDEST prefix — a flood must never push out the newest message",
-    ).toContain("NEWEST: the message the agent must act on.");
-    expect(wakeMessage).toContain("truncated");
+      carriers.length,
+      "a flood past the cap must spill into fresh queued runs, not a single evicting buffer",
+    ).toBeGreaterThan(1);
+  }, 60_000);
+
+  // ---------------------------------------------------------------------------
+  // LOOA-378 branch 1 — the DEFERRED issue-execution carrier must REFUSE too
+  // (LOOA-572 review).
+  //
+  // When the assignee already has a LIVE execution run, a same-issue follow-up
+  // wake cannot coalesce onto it (the process already read its context) — it is
+  // parked as a `deferred_issue_execution` wakeup request and promoted to its own
+  // run when the live run finalizes. The first LOOA-378 fix gated the ACTIVE-run
+  // merge but left the DEFERRED-carrier merge calling
+  // mergeCoalescedContextSnapshot unconditionally, so a sustained issue-scoped
+  // flood evicted the oldest parked prompt from the deferred buffer before
+  // promotion — the exact eviction, one level down.
+  //
+  // The prompts on this branch live on
+  // agentWakeupRequests.payload._paperclipWakeContext, which the null-scope test
+  // above never inspects. This test drives branch 1 directly and asserts the same
+  // invariant: nothing parked is evicted.
+  // ---------------------------------------------------------------------------
+
+  it("flooding the DEFERRED issue-execution carrier past the cap spills into fresh deferred rows instead of evicting — every parked prompt survives to promotion (LOOA-378 branch 1)", async () => {
+    const { companyId, agentId } = await seedCompanyWithAgent("cto");
+    const issueId = randomUUID();
+
+    // A live execution run on the issue, already carrying a large wakeMessage so
+    // every incoming same-issue wake overflows the 16KB cap when measured against
+    // it — forcing the refuse-into-active path down onto the deferred carrier
+    // rather than coalescing onto the running process (which would report
+    // merged_running). Registering the process makes it a real live run.
+    const liveRunId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: liveRunId,
+      companyId,
+      agentId,
+      invocationSource: "automation",
+      status: "running",
+      contextSnapshot: { issueId, wakeMessage: `ACTIVE: ${"x".repeat(15_000)}` },
+      startedAt: new Date(),
+    });
+    runningProcesses.set(liveRunId, {
+      child: { pid: 4321 } as never,
+      graceSec: 5,
+      processGroupId: null,
+    });
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Issue with a live execution run",
+      status: "in_progress",
+      priority: "medium",
+      assigneeAgentId: agentId,
+      executionRunId: liveRunId,
+    });
+
+    // Flood the issue with distinct ~2KB same-issue wakes. Each overflows the cap
+    // against the 15KB live run, so each is parked as a deferred issue-execution
+    // wake. wakeup returns null for the deferred outcome.
+    const markers: string[] = [];
+    for (let i = 0; i < 24; i += 1) {
+      const marker = `DEFERRED-${String(i).padStart(2, "0")}`;
+      markers.push(marker);
+      const run = await heartbeat.wakeup(agentId, {
+        source: "automation",
+        triggerDetail: "system",
+        reason: "some_future_plugin_sweep",
+        payload: { issueId, prompt: `${marker}: gate needs attention. ${"x".repeat(2_000)}` },
+        requestedByActorType: "system",
+        requestedByActorId: "plugin:paperclip-gateway",
+      });
+      expect(
+        run,
+        `${marker} must be parked (deferred) on the issue-execution carrier, not coalesced onto the live run`,
+      ).toBeNull();
+    }
+
+    // The parked prompts live on agentWakeupRequests.payload._paperclipWakeContext.
+    const deferredRows = await db
+      .select()
+      .from(agentWakeupRequests)
+      .where(
+        and(
+          eq(agentWakeupRequests.agentId, agentId),
+          eq(agentWakeupRequests.status, "deferred_issue_execution"),
+        ),
+      );
+
+    const wakeMessageOfDeferred = (row: (typeof deferredRows)[number]) => {
+      const payload = (row.payload ?? {}) as Record<string, unknown>;
+      const ctx = (payload["_paperclipWakeContext"] ?? {}) as Record<string, unknown>;
+      return String(ctx.wakeMessage ?? "");
+    };
+
+    // Every deferred carrier stays within the cap ...
+    for (const row of deferredRows) {
+      expect(
+        wakeMessageOfDeferred(row).length,
+        "each deferred carrier's accumulated wakeMessage must stay within the cap",
+      ).toBeLessThanOrEqual(16_384);
+    }
+
+    const allDeferred = deferredRows.map(wakeMessageOfDeferred).join("\n");
+
+    // ... nothing parked is evicted: no truncation marker, every prompt survives.
+    expect(
+      allDeferred,
+      "refusing to coalesce on overflow means the deferred buffer never evicts — the truncation marker must never appear",
+    ).not.toContain("truncated");
+    for (const marker of markers) {
+      expect(
+        allDeferred,
+        `${marker} was parked (deferred) — its prompt must survive on some deferred carrier, not be evicted at the cap`,
+      ).toContain(marker);
+    }
+
+    // The flood must have spilled into more than one deferred row rather than
+    // piling onto (and overflowing) a single evicting buffer.
+    expect(
+      deferredRows.length,
+      "a flood past the cap must spill into fresh deferred rows, not a single evicting buffer",
+    ).toBeGreaterThan(1);
+
+    runningProcesses.clear();
   }, 60_000);
 
   // ---------------------------------------------------------------------------

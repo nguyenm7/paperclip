@@ -2567,6 +2567,37 @@ function mergeWakeMessages(existingRaw: unknown, incomingRaw: unknown): string |
     : `${COALESCED_WAKE_MESSAGE_TRUNCATION_MARKER}${incoming}`;
 }
 
+/**
+ * Would coalescing `incoming` onto `existing` overflow the wakeMessage cap and
+ * force `mergeWakeMessages` to EVICT already-accumulated text?
+ *
+ * Eviction is a silent drop wearing a nice name. A wake that coalesced onto a
+ * parked carrier was truthfully reported `merged_queued` (its prompt renders
+ * when the carrier starts) — but a later flood can push that prompt out of the
+ * 16KB buffer before the carrier ever runs, retroactively falsifying the
+ * `delivered` report. That is the original LOOA-344 F1 clobber resurrected at
+ * the truncation boundary (LOOA-378). Callers use this predicate to REFUSE the
+ * coalesce on overflow and give the incoming wake a run of its own, so the
+ * buffer only ever grows within its cap and no reported-delivered message is
+ * ever evicted. Backpressure is honest; eviction lies.
+ *
+ * Mirrors the overflow branch of `mergeWakeMessages` exactly: a no-op (either
+ * side empty) or an idempotent re-wake never grows the buffer and so never
+ * evicts — only a cross-message append that exceeds the cap does.
+ */
+function coalescingWouldEvictWakeMessage(
+  existingSnapshotRaw: unknown,
+  incomingSnapshotRaw: unknown,
+): boolean {
+  const existing = readNonEmptyString(parseObject(existingSnapshotRaw).wakeMessage);
+  const incoming = readNonEmptyString(parseObject(incomingSnapshotRaw).wakeMessage);
+  if (!existing || !incoming) return false;
+  if (existing === incoming || existing.endsWith(incoming)) return false;
+  const combinedLength =
+    existing.length + COALESCED_WAKE_MESSAGE_SEPARATOR.length + incoming.length;
+  return combinedLength > COALESCED_WAKE_MESSAGE_MAX_CHARS;
+}
+
 function mergeWakeCommentIds(...values: Array<unknown>): string[] {
   const merged: string[] = [];
   const append = (value: unknown) => {
@@ -11296,6 +11327,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             && !shouldDeferFollowupWake
             && !shouldQueueFollowupForRunningWake
             && availableActiveExecutionRun
+            // LOOA-378: refuse to coalesce when the merge would overflow the
+            // wakeMessage cap and evict text already reported delivered on this
+            // carrier. Fall through to the defer path so the incoming wake fires
+            // as its own run instead of being silently dropped at the cap.
+            && !coalescingWouldEvictWakeMessage(
+              availableActiveExecutionRun.contextSnapshot,
+              enrichedContextSnapshot,
+            )
           ) {
             const mergedContextSnapshot = mergeCoalescedContextSnapshot(
               availableActiveExecutionRun.contextSnapshot,
@@ -11358,9 +11397,29 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               .limit(1)
               .then((rows) => rows[0] ?? null);
 
-            if (existingDeferred) {
-              const existingDeferredPayload = parseObject(existingDeferred.payload);
-              const existingDeferredContext = parseObject(existingDeferredPayload[DEFERRED_WAKE_CONTEXT_KEY]);
+            const existingDeferredPayload = existingDeferred
+              ? parseObject(existingDeferred.payload)
+              : null;
+            const existingDeferredContext = existingDeferredPayload
+              ? parseObject(existingDeferredPayload[DEFERRED_WAKE_CONTEXT_KEY])
+              : null;
+
+            // LOOA-378 (branch-1 deferred carrier, LOOA-572 review): only merge
+            // into the existing deferred row while the append stays within the
+            // wakeMessage cap. mergeCoalescedContextSnapshot -> mergeWakeMessages
+            // EVICTS the oldest prefix on overflow — the very silent drop the
+            // active-run refuse above closes, resurrected one level down on the
+            // parked deferred carrier. A sustained issue-scoped flood would
+            // otherwise push a wake already reported `deferred` out of the buffer
+            // before it is promoted. On overflow, fall through to insert a SEPARATE
+            // deferred row; finalization promotes deferred_issue_execution rows
+            // FIFO, one per execution, so every parked prompt still renders.
+            if (
+              existingDeferred
+              && existingDeferredPayload
+              && existingDeferredContext
+              && !coalescingWouldEvictWakeMessage(existingDeferredContext, enrichedContextSnapshot)
+            ) {
               const mergedDeferredContext = mergeCoalescedContextSnapshot(
                 existingDeferredContext,
                 enrichedContextSnapshot,
@@ -11502,7 +11561,17 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       liveRunExecutions,
     );
 
-    if (coalescedTargetRun) {
+    // LOOA-378: refuse to coalesce when the merge would overflow the wakeMessage
+    // cap and evict text already reported delivered on this parked carrier. Fall
+    // through to queue a fresh run so the incoming wake renders on its own rather
+    // than being silently dropped at the cap.
+    if (
+      coalescedTargetRun
+      && !coalescingWouldEvictWakeMessage(
+        coalescedTargetRun.contextSnapshot,
+        enrichedContextSnapshot,
+      )
+    ) {
       const mergedContextSnapshot = mergeCoalescedContextSnapshot(
         coalescedTargetRun.contextSnapshot,
         enrichedContextSnapshot,

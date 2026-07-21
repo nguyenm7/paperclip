@@ -137,13 +137,17 @@ function registerModuleMocks() {
   }));
 }
 
-// Minimal db stub for the two guard queries: the heartbeatRuns context lookup
-// resolves through .where().then(), the agentWakeupRequests dedupe lookup
-// resolves through .where().limit(1).then().
+// Minimal db stub for the guard queries: the heartbeatRuns context lookup
+// resolves through .where().then(), the agentWakeupRequests ledger probes
+// resolve through .where().limit(1).then(). Up to two ledger probes run per
+// request (dedupe pre-check, then the post-null deferred-row re-probe), so
+// `existingWakeRows` is a queue of row sets consumed one per probe; a drained
+// queue serves an empty ledger.
 function createGuardDb(input: {
   runContextSnapshot: Record<string, unknown>;
-  existingWakeRows?: unknown[];
+  existingWakeRows?: unknown[][];
 }) {
+  const wakeRowQueue = [...(input.existingWakeRows ?? [])];
   return {
     select: vi.fn(() => ({
       from: vi.fn(() => ({
@@ -157,7 +161,7 @@ function createGuardDb(input: {
             }]),
           limit: vi.fn(() => ({
             then: async (resolve: (rows: unknown[]) => unknown) =>
-              resolve(input.existingWakeRows ?? []),
+              resolve(wakeRowQueue.shift() ?? []),
           })),
         })),
       })),
@@ -285,7 +289,7 @@ describe("status-only recovery deliverable write escalation (LOOA-175)", () => {
   it("does not enqueue a second wake for the same source run", async () => {
     const app = await createApp(createGuardDb({
       runContextSnapshot: statusOnlyRunContext,
-      existingWakeRows: [{ id: "wake-1", status: "queued" }],
+      existingWakeRows: [[{ id: "wake-1", status: "queued" }]],
     }));
 
     const res = await request(app)
@@ -295,6 +299,48 @@ describe("status-only recovery deliverable write escalation (LOOA-175)", () => {
     expect(res.status).toBe(403);
     expect(res.body.details.escalation.outcome).toBe("already_scheduled");
     expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+  });
+
+  it("reports scheduled when the wake is deferred behind the live source run — null return, parked ledger row (LOOA-347)", async () => {
+    // The production path: the denied source run is still running, so
+    // enqueueWakeup parks the escalation as deferred_issue_execution and
+    // returns null. The parked row is the delivery receipt.
+    mockHeartbeatService.wakeup.mockResolvedValue(null);
+    const app = await createApp(createGuardDb({
+      runContextSnapshot: statusOnlyRunContext,
+      existingWakeRows: [[], [{ id: "wake-1", status: "deferred_issue_execution" }]],
+    }));
+
+    const res = await request(app)
+      .put(`/api/issues/${issueId}/documents/findings`)
+      .send({ format: "markdown", body: "# Findings" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.details.escalation.outcome).toBe("scheduled");
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: "issue.deliverable_write_escalation_scheduled" }),
+    );
+  });
+
+  it("does not claim scheduled — and does not log it — when the wake merged into the running source run (LOOA-334 class)", async () => {
+    mockHeartbeatService.wakeup.mockResolvedValue({
+      id: "run-1",
+      coalesced: true,
+      delivered: "merged_running",
+    });
+    const app = await createApp(createGuardDb({ runContextSnapshot: statusOnlyRunContext }));
+
+    const res = await request(app)
+      .put(`/api/issues/${issueId}/documents/findings`)
+      .send({ format: "markdown", body: "# Findings" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.details.escalation.outcome).toBe("failed");
+    expect(mockLogActivity).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: "issue.deliverable_write_escalation_scheduled" }),
+    );
   });
 
   it("still fails closed with 403 when scheduling the escalation wake fails", async () => {

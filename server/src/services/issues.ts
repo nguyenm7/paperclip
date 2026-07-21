@@ -3964,6 +3964,90 @@ export function issueService(db: Db) {
     });
   }
 
+  // A `queued` heartbeat run that never started (startedAt IS NULL) holds no
+  // process and no in-flight work. When such a run is orphaned by a dead wake
+  // (e.g. a spend-limit / adapter failure that killed the spawning heartbeat)
+  // it still pins its issue's checkout/execution lock — and because /release,
+  // PATCH, and comments all route through assertCheckoutOwner while the direct
+  // cancel route is board-only, the assignee has NO lever to clear it (LOOA-375).
+  //
+  // Reap it: cancel the never-started queued holder so it becomes terminal. The
+  // existing terminal-lock machinery (clearExecutionRunIfTerminal /
+  // clearCheckoutRunIfTerminal / adoptStaleCheckoutRun) then clears or adopts
+  // the lock, and the run can never fire afterwards — claimQueuedRun and
+  // resumeQueuedRuns both CAS on status = "queued", which a cancelled row no
+  // longer matches, so this also closes the clobber gap where a late-firing
+  // orphan would otherwise run against a since-reassigned issue.
+  //
+  // This deliberately leaves a `running` holder alone (status !== "queued",
+  // startedAt is set): a live run has a process whose work a concurrent write
+  // could clobber, so it must keep blocking. The caller's own run (actorRunId)
+  // is never reaped.
+  async function reapNeverStartedQueuedLockHolders(
+    issueId: string,
+    actorRunId: string | null,
+  ): Promise<string[]> {
+    return db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select ${issues.id} from ${issues} where ${issues.id} = ${issueId} for update`,
+      );
+      const issue = await tx
+        .select({ checkoutRunId: issues.checkoutRunId, executionRunId: issues.executionRunId })
+        .from(issues)
+        .where(eq(issues.id, issueId))
+        .then((rows) => rows[0] ?? null);
+      if (!issue) return [];
+
+      const holderIds = Array.from(
+        new Set(
+          [issue.checkoutRunId, issue.executionRunId].filter(
+            (value): value is string => Boolean(value),
+          ),
+        ),
+      ).filter((runId) => runId !== actorRunId);
+      if (holderIds.length === 0) return [];
+
+      const reaped: string[] = [];
+      const now = new Date();
+      for (const runId of holderIds) {
+        await tx.execute(
+          sql`select ${heartbeatRuns.id} from ${heartbeatRuns} where ${heartbeatRuns.id} = ${runId} for update`,
+        );
+        const run = await tx
+          .select({ status: heartbeatRuns.status, startedAt: heartbeatRuns.startedAt })
+          .from(heartbeatRuns)
+          .where(eq(heartbeatRuns.id, runId))
+          .then((rows) => rows[0] ?? null);
+        if (!run || run.status !== "queued" || run.startedAt !== null) continue;
+
+        const cancelled = await tx
+          .update(heartbeatRuns)
+          .set({
+            status: "cancelled",
+            finishedAt: now,
+            errorCode: "issue_lock_reaped_never_started",
+            error:
+              "Cancelled: never-started queued run reaped because it pinned its issue's checkout lock and the issue was released/reassigned (LOOA-375).",
+            updatedAt: now,
+          })
+          // CAS on status = "queued": if the run was concurrently claimed
+          // (queued -> running) between the read and here, do not cancel it.
+          .where(and(eq(heartbeatRuns.id, runId), eq(heartbeatRuns.status, "queued")))
+          .returning({ id: heartbeatRuns.id })
+          .then((rows) => rows[0] ?? null);
+        if (cancelled) reaped.push(cancelled.id);
+      }
+
+      if (reaped.length > 0) {
+        logger.info(
+          { issueId, reapedRunIds: reaped, actorRunId },
+          "reaped never-started queued run(s) pinning issue checkout lock",
+        );
+      }
+      return reaped;
+    });
+  }
+
   return {
     clearExecutionRunIfTerminal,
     clearCheckoutRunIfTerminal,
@@ -5744,6 +5828,10 @@ export function issueService(db: Db) {
     },
 
     assertCheckoutOwner: async (id: string, actorAgentId: string, actorRunId: string | null) => {
+      // Cancel any never-started queued run pinning the lock so the terminal
+      // clears below can free it for the assignee (LOOA-375). A `running`
+      // holder is left intact and still blocks.
+      await reapNeverStartedQueuedLockHolders(id, actorRunId);
       await clearExecutionRunIfTerminal(id);
       await clearCheckoutRunIfTerminal(id);
       const loadCurrent = () =>
@@ -5887,8 +5975,14 @@ export function issueService(db: Db) {
       });
     },
 
-    release: async (id: string, actorAgentId?: string, actorRunId?: string | null) =>
-      db.transaction(async (tx) => {
+    release: async (id: string, actorAgentId?: string, actorRunId?: string | null) => {
+      // Free a never-started queued holder before the ownership check below, so
+      // the assignee can release an issue an orphaned queued run has pinned
+      // (LOOA-375). Cancelling it makes it terminal, so the checkout-owner check
+      // sees a stale holder and allows the release. A `running` holder is left
+      // intact and still throws "Only checkout run can release issue".
+      await reapNeverStartedQueuedLockHolders(id, actorRunId ?? null);
+      return db.transaction(async (tx) => {
         await tx.execute(
           sql`select ${issues.id} from ${issues} where ${issues.id} = ${id} for update`,
         );
@@ -5954,7 +6048,8 @@ export function issueService(db: Db) {
         if (!updated) return null;
         const [enriched] = await withIssueLabels(tx, [updated]);
         return enriched;
-      }),
+      });
+    },
 
     adminForceRelease: async (id: string, options: { clearAssignee?: boolean } = {}) =>
       db.transaction(async (tx) => {

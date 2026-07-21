@@ -85,6 +85,7 @@ export interface Config {
   feedbackExportBackendToken: string | undefined;
   heartbeatSchedulerEnabled: boolean;
   heartbeatSchedulerIntervalMs: number;
+  staleGateSweepIntervalMs: number;
   companyDeletionEnabled: boolean;
   telemetryEnabled: boolean;
 }
@@ -331,6 +332,8 @@ export function loadConfig(): Config {
     feedbackExportBackendToken,
     heartbeatSchedulerEnabled: process.env.HEARTBEAT_SCHEDULER_ENABLED !== "false",
     heartbeatSchedulerIntervalMs: Math.max(10000, Number(process.env.HEARTBEAT_SCHEDULER_INTERVAL_MS) || 30000),
+    // LOOA-296 stale-gate detector cadence; floor of 1 minute, default hourly.
+    staleGateSweepIntervalMs: Math.max(60000, Number(process.env.STALE_GATE_SWEEP_INTERVAL_MS) || 3600000),
     companyDeletionEnabled,
     telemetryEnabled: fileConfig?.telemetry?.enabled ?? true,
   };

@@ -5,6 +5,7 @@ import {
   activityLog,
   agents,
   companies,
+  costEvents,
   createDb,
   heartbeatRuns,
   issueComments,
@@ -120,11 +121,16 @@ describeEmbeddedPostgres("productivity review service", () => {
     count: number;
     now: Date;
     withRunComments?: boolean;
+    intervalMs?: number;
+    offsetMs?: number;
+    runOverrides?: Partial<typeof heartbeatRuns.$inferInsert>;
   }) {
+    const intervalMs = input.intervalMs ?? 60_000;
+    const offsetMs = input.offsetMs ?? 0;
     const runs: Array<typeof heartbeatRuns.$inferInsert> = [];
     for (let index = 0; index < input.count; index += 1) {
       const runId = randomUUID();
-      const createdAt = new Date(input.now.getTime() - index * 60_000);
+      const createdAt = new Date(input.now.getTime() - offsetMs - index * intervalMs);
       runs.push({
         id: runId,
         companyId: input.companyId,
@@ -139,6 +145,7 @@ describeEmbeddedPostgres("productivity review service", () => {
         nextAction: "Continue processing the next batch.",
         createdAt,
         updatedAt: createdAt,
+        ...input.runOverrides,
       });
     }
     await db.insert(heartbeatRuns).values(runs);
@@ -208,6 +215,224 @@ describeEmbeddedPostgres("productivity review service", () => {
     expect(reviews[0]?.description).toContain("No-comment completed-run streak: 10");
 
     expect(await listRefreshComments(reviews[0]!.id)).toHaveLength(0);
+  });
+
+  it("does not count dependency-cancelled runs toward the no-comment streak", async () => {
+    const now = new Date("2026-04-28T12:00:00.000Z");
+    const seeded = await seedAssignedIssue();
+    await insertRuns({
+      companyId: seeded.companyId,
+      agentId: seeded.coderId,
+      issueId: seeded.issueId,
+      count: DEFAULT_PRODUCTIVITY_REVIEW_NO_COMMENT_STREAK_RUNS,
+      now,
+      intervalMs: 60 * 60 * 1000,
+      runOverrides: {
+        status: "cancelled",
+        errorCode: "issue_dependencies_blocked",
+        startedAt: null,
+        finishedAt: null,
+        livenessState: null,
+        nextAction: null,
+      },
+    });
+
+    const result = await productivityReviewService(db).reconcileProductivityReviews({
+      now,
+      companyId: seeded.companyId,
+    });
+
+    expect(result.created).toBe(0);
+    expect(await listProductivityReviews(seeded.companyId)).toHaveLength(0);
+  });
+
+  it("still fires the no-comment streak for live runs interleaved with dependency-cancelled runs", async () => {
+    const now = new Date("2026-04-28T12:00:00.000Z");
+    const seeded = await seedAssignedIssue();
+    await insertRuns({
+      companyId: seeded.companyId,
+      agentId: seeded.coderId,
+      issueId: seeded.issueId,
+      count: DEFAULT_PRODUCTIVITY_REVIEW_NO_COMMENT_STREAK_RUNS,
+      now,
+      intervalMs: 2 * 60 * 60 * 1000,
+    });
+    await insertRuns({
+      companyId: seeded.companyId,
+      agentId: seeded.coderId,
+      issueId: seeded.issueId,
+      count: DEFAULT_PRODUCTIVITY_REVIEW_NO_COMMENT_STREAK_RUNS,
+      now,
+      intervalMs: 2 * 60 * 60 * 1000,
+      offsetMs: 60 * 60 * 1000,
+      runOverrides: {
+        status: "cancelled",
+        errorCode: "issue_dependencies_blocked",
+        startedAt: null,
+        finishedAt: null,
+        livenessState: null,
+        nextAction: null,
+      },
+    });
+
+    const result = await productivityReviewService(db).reconcileProductivityReviews({
+      now,
+      companyId: seeded.companyId,
+    });
+
+    expect(result.created).toBe(1);
+    const [review] = await listProductivityReviews(seeded.companyId);
+    expect(review?.description).toContain("Primary trigger: `no_comment_streak`");
+    expect(review?.description).toContain("No-comment completed-run streak: 10");
+    expect(review?.description).toContain("Never-live runs exempted from streak: 10");
+  });
+
+  it("does not count transient-upstream run deaths toward the no-comment streak", async () => {
+    const now = new Date("2026-04-28T12:00:00.000Z");
+    const seeded = await seedAssignedIssue();
+    await insertRuns({
+      companyId: seeded.companyId,
+      agentId: seeded.coderId,
+      issueId: seeded.issueId,
+      count: 5,
+      now,
+      intervalMs: 60 * 60 * 1000,
+      runOverrides: {
+        status: "failed",
+        errorCode: "claude_transient_upstream",
+      },
+    });
+    await insertRuns({
+      companyId: seeded.companyId,
+      agentId: seeded.coderId,
+      issueId: seeded.issueId,
+      count: 5,
+      now,
+      intervalMs: 60 * 60 * 1000,
+      offsetMs: 30 * 60 * 1000,
+      runOverrides: {
+        status: "failed",
+        resultJson: { errorFamily: "transient_upstream" },
+      },
+    });
+
+    const result = await productivityReviewService(db).reconcileProductivityReviews({
+      now,
+      companyId: seeded.companyId,
+    });
+
+    expect(result.created).toBe(0);
+    expect(await listProductivityReviews(seeded.companyId)).toHaveLength(0);
+  });
+
+  it("does not count adapter auth-required run deaths toward the no-comment streak", async () => {
+    const now = new Date("2026-04-28T12:00:00.000Z");
+    const seeded = await seedAssignedIssue();
+    await insertRuns({
+      companyId: seeded.companyId,
+      agentId: seeded.coderId,
+      issueId: seeded.issueId,
+      count: DEFAULT_PRODUCTIVITY_REVIEW_NO_COMMENT_STREAK_RUNS,
+      now,
+      intervalMs: 60 * 60 * 1000,
+      runOverrides: {
+        status: "failed",
+        errorCode: "claude_auth_required",
+        livenessState: null,
+        nextAction: null,
+      },
+    });
+
+    const result = await productivityReviewService(db).reconcileProductivityReviews({
+      now,
+      companyId: seeded.companyId,
+    });
+
+    expect(result.created).toBe(0);
+    expect(await listProductivityReviews(seeded.companyId)).toHaveLength(0);
+  });
+
+  it("does not count zero-usage failed runs with unrecognized error codes toward the no-comment streak", async () => {
+    const now = new Date("2026-04-28T12:00:00.000Z");
+    const seeded = await seedAssignedIssue();
+    await insertRuns({
+      companyId: seeded.companyId,
+      agentId: seeded.coderId,
+      issueId: seeded.issueId,
+      count: DEFAULT_PRODUCTIVITY_REVIEW_NO_COMMENT_STREAK_RUNS,
+      now,
+      intervalMs: 60 * 60 * 1000,
+      runOverrides: {
+        status: "failed",
+        errorCode: "some_future_adapter_error",
+        livenessState: null,
+        nextAction: null,
+      },
+    });
+
+    const result = await productivityReviewService(db).reconcileProductivityReviews({
+      now,
+      companyId: seeded.companyId,
+    });
+
+    expect(result.created).toBe(0);
+    expect(await listProductivityReviews(seeded.companyId)).toHaveLength(0);
+  });
+
+  it("still counts failed runs that recorded token usage or cost events toward the no-comment streak", async () => {
+    const now = new Date("2026-04-28T12:00:00.000Z");
+    const seeded = await seedAssignedIssue();
+    await insertRuns({
+      companyId: seeded.companyId,
+      agentId: seeded.coderId,
+      issueId: seeded.issueId,
+      count: 5,
+      now,
+      intervalMs: 2 * 60 * 60 * 1000,
+      runOverrides: {
+        status: "failed",
+        errorCode: "tool_crash",
+        usageJson: { inputTokens: 1200, cachedInputTokens: 0, outputTokens: 340 },
+      },
+    });
+    const costOnlyRuns = await insertRuns({
+      companyId: seeded.companyId,
+      agentId: seeded.coderId,
+      issueId: seeded.issueId,
+      count: 5,
+      now,
+      intervalMs: 2 * 60 * 60 * 1000,
+      offsetMs: 60 * 60 * 1000,
+      runOverrides: {
+        status: "failed",
+        errorCode: "tool_crash",
+      },
+    });
+    await db.insert(costEvents).values(
+      costOnlyRuns.map((run) => ({
+        companyId: seeded.companyId,
+        agentId: seeded.coderId,
+        issueId: seeded.issueId,
+        heartbeatRunId: run.id,
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+        inputTokens: 900,
+        cachedInputTokens: 0,
+        outputTokens: 120,
+        costCents: 4,
+        occurredAt: run.createdAt as Date,
+      })),
+    );
+
+    const result = await productivityReviewService(db).reconcileProductivityReviews({
+      now,
+      companyId: seeded.companyId,
+    });
+
+    expect(result.created).toBe(1);
+    const [review] = await listProductivityReviews(seeded.companyId);
+    expect(review?.description).toContain("Primary trigger: `no_comment_streak`");
+    expect(review?.description).toContain("No-comment completed-run streak: 10");
   });
 
   it("refreshes open productivity reviews only once per interval and caps refresh comments", async () => {

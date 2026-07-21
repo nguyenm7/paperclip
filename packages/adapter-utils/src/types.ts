@@ -64,7 +64,13 @@ export interface AdapterRuntimeServiceReport {
   healthStatus?: "unknown" | "healthy" | "unhealthy";
 }
 
-export type AdapterExecutionErrorFamily = "transient_upstream";
+// `transient_upstream` is retried on the bounded backoff ladder.
+// `provider_quota_rejected` is a quota/spend-limit rejection whose named window
+// reopens later than Paperclip will keep a retry queued — a queued retry holds
+// the issue's execution lock until it runs — so it must NOT enter the retry
+// chain. The server assigns this family; the adapter only reports the window
+// (LOOA-360).
+export type AdapterExecutionErrorFamily = "transient_upstream" | "provider_quota_rejected";
 
 export interface AdapterExecutionResult {
   exitCode: number | null;

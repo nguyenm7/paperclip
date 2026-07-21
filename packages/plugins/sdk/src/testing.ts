@@ -1633,7 +1633,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
         }
         const unresolved = issueRelationSummary(issueId).blockedBy.filter((blocker) => blocker.status !== "done");
         if (unresolved.length > 0) throw new Error("Issue is blocked by unresolved blockers");
-        return { queued: true, runId: randomUUID() };
+        return { queued: true, runId: randomUUID(), coalesced: false, delivered: "new_run" as const };
       },
       async requestWakeups(issueIds, companyId) {
         requireCapability(manifest, capabilitySet, "issues.wakeup");
@@ -1647,7 +1647,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
           }
           const unresolved = issueRelationSummary(issueId).blockedBy.filter((blocker) => blocker.status !== "done");
           if (unresolved.length > 0) throw new Error("Issue is blocked by unresolved blockers");
-          results.push({ issueId, queued: true, runId: randomUUID() });
+          results.push({ issueId, queued: true, runId: randomUUID(), coalesced: false, delivered: "new_run" as const });
         }
         return results;
       },
@@ -1987,7 +1987,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
         ) {
           throw new Error(`Agent is not invokable in its current state: ${agent!.status}`);
         }
-        return { runId: randomUUID() };
+        return { runId: randomUUID(), coalesced: false, delivered: "new_run" as const };
       },
       managed: {
         async get(agentKey, companyId) {

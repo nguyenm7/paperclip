@@ -30,6 +30,12 @@ export const issueThreadInteractions = pgTable(
     resolvedByUserId: text("resolved_by_user_id"),
     payload: jsonb("payload").$type<IssueThreadInteractionPayload>().notNull(),
     result: jsonb("result").$type<IssueThreadInteractionResult>(),
+    // Stale-gate detector (LOOA-296) — same semantics as approvals.premise_exempt_*.
+    premiseExemptAt: timestamp("premise_exempt_at", { withTimezone: true }),
+    premiseExemptReason: text("premise_exempt_reason"),
+    premiseExemptByAgentId: uuid("premise_exempt_by_agent_id").references(() => agents.id),
+    premiseExemptByUserId: text("premise_exempt_by_user_id"),
+    stalePremiseAlarmedAt: timestamp("stale_premise_alarmed_at", { withTimezone: true }),
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

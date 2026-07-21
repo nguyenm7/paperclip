@@ -50,6 +50,7 @@ import {
   parseClaudeStreamJson,
   describeClaudeFailure,
   detectClaudeLoginRequired,
+  extractClaudeRateLimitRejection,
   extractClaudeRetryNotBefore,
   isClaudeMaxTurnsResult,
   isClaudeSafetyRefusalError,
@@ -858,7 +859,25 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           stderr: proc.stderr,
           errorMessage: fallbackErrorMessage,
         });
-      const transientRetryNotBefore = transientUpstream
+      // Strict refinement of transientUpstream: report the blocked window when
+      // the provider names one, so the server can retry AT the reset instead of
+      // burning attempts inside it. Whether the window is too long to wait on is
+      // the server's call — it depends on the issue lock a queued retry would
+      // hold (LOOA-360).
+      const rateLimitRejection = transientUpstream
+        ? extractClaudeRateLimitRejection({
+            parsed: null,
+            stdout: proc.stdout,
+            stderr: proc.stderr,
+            errorMessage: fallbackErrorMessage,
+            model,
+          })
+        : null;
+      // A structured `resetsAt` is authoritative over the scraped "resets at 3pm"
+      // wording, so prefer it as the retry-not-before hint.
+      const transientRetryNotBefore = rateLimitRejection
+        ? new Date(rateLimitRejection.resetsAt)
+        : transientUpstream
         ? extractClaudeRetryNotBefore({
             parsed: null,
             stdout: proc.stdout,
@@ -886,6 +905,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           stdout: proc.stdout,
           stderr: proc.stderr,
           ...(transientUpstream ? { errorFamily: "transient_upstream" } : {}),
+          ...(rateLimitRejection ? { providerRateLimitRejection: rateLimitRejection } : {}),
           ...(transientRetryNotBefore
             ? { retryNotBefore: transientRetryNotBefore.toISOString() }
             : {}),
@@ -965,7 +985,25 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         stderr: proc.stderr,
         errorMessage,
       });
-    const transientRetryNotBefore = transientUpstream
+    // Strict refinement of transientUpstream: report the blocked window when the
+    // provider names one, so the server can retry AT the reset instead of
+    // burning attempts inside it. Whether the window is too long to wait on is
+    // the server's call — it depends on the issue lock a queued retry would hold
+    // (LOOA-360).
+    const rateLimitRejection = transientUpstream
+      ? extractClaudeRateLimitRejection({
+          parsed,
+          stdout: proc.stdout,
+          stderr: proc.stderr,
+          errorMessage,
+          model: parsedStream.model || asString(parsed.model, model),
+        })
+      : null;
+    // A structured `resetsAt` is authoritative over the scraped "resets at 3pm"
+    // wording, so prefer it as the retry-not-before hint.
+    const transientRetryNotBefore = rateLimitRejection
+      ? new Date(rateLimitRejection.resetsAt)
+      : transientUpstream
       ? extractClaudeRetryNotBefore({
           parsed,
           stdout: proc.stdout,
@@ -989,6 +1027,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ...(failed && clearSessionForMaxTurns ? { stopReason: "max_turns_exhausted" } : {}),
       ...(failed && poisonedPreviousMessageId ? { stopReason: "claude_poisoned_previous_message_id" } : {}),
       ...(transientUpstream ? { errorFamily: "transient_upstream" } : {}),
+      ...(rateLimitRejection ? { providerRateLimitRejection: rateLimitRejection } : {}),
       ...(transientRetryNotBefore ? { retryNotBefore: transientRetryNotBefore.toISOString() } : {}),
       ...(transientRetryNotBefore ? { transientRetryNotBefore: transientRetryNotBefore.toISOString() } : {}),
     };

@@ -9,13 +9,17 @@ import {
 
 const deniedMutation = { method: "PUT", path: "/api/issues/issue-1/documents/findings" };
 
-function createDb(existingWakeRows: unknown[]) {
+// Each element is the row set served to the next wake-ledger probe; once the
+// queue drains, further probes see an empty ledger. Two probes can run per
+// schedule call: the dedup pre-check and the post-null deferred-row re-probe.
+function createDb(...wakeRowResponses: unknown[][]) {
+  const responseQueue = [...wakeRowResponses];
   return {
     select: vi.fn(() => ({
       from: vi.fn(() => ({
         where: vi.fn(() => ({
           limit: vi.fn(() => ({
-            then: async (resolve: (rows: unknown[]) => unknown) => resolve(existingWakeRows),
+            then: async (resolve: (rows: unknown[]) => unknown) => resolve(responseQueue.shift() ?? []),
           })),
         })),
       })),
@@ -49,6 +53,10 @@ describe("deliverable write escalation", () => {
     }
     expect(wake.payload.instruction).toContain("PUT /api/issues/issue-1/documents/findings");
     expect(wake.contextSnapshot.wakeReason).toBe(DELIVERABLE_WRITE_ESCALATION_REASON);
+    // The source run is live when this wake fires (it is the run making the
+    // denied request); forceFreshSession is what keeps the wake from
+    // coalescing into it and evaporating (LOOA-347).
+    expect(wake.contextSnapshot.forceFreshSession).toBe(true);
   });
 
   it("schedules exactly one wake for the denied write", async () => {
@@ -116,5 +124,61 @@ describe("deliverable write escalation", () => {
       },
     );
     expect(failed.outcome).toBe("failed");
+  });
+
+  it("maps a deferred wake to scheduled: null return plus a ledger row parked for promotion", async () => {
+    // While the denied source run is still live, enqueueWakeup defers the wake
+    // (forceFreshSession) and returns null — the deferred_issue_execution row
+    // is the delivery receipt, promoted to a real run when the source run exits.
+    const enqueueWakeup = vi.fn(async () => null);
+
+    const result = await scheduleDeliverableWriteEscalation(
+      createDb([], [{ id: "wake-1", status: "deferred_issue_execution" }]),
+      enqueueWakeup,
+      {
+        companyId: "company-1",
+        issueId: "issue-1",
+        agentId: "agent-1",
+        sourceRunId: "run-1",
+        deniedMutation,
+      },
+    );
+
+    expect(result.outcome).toBe("scheduled");
+    expect(enqueueWakeup).toHaveBeenCalledTimes(1);
+  });
+
+  it("never reports a wake that merged into an already-running process as scheduled", async () => {
+    // LOOA-334 class: a truthy run ref with delivered=merged_running means the
+    // prompt landed in a process that will never render it.
+    const result = await scheduleDeliverableWriteEscalation(
+      createDb([]),
+      vi.fn(async () => ({ id: "run-live", coalesced: true, delivered: "merged_running" })),
+      {
+        companyId: "company-1",
+        issueId: "issue-1",
+        agentId: "agent-1",
+        sourceRunId: "run-1",
+        deniedMutation,
+      },
+    );
+
+    expect(result.outcome).toBe("failed");
+  });
+
+  it("treats merged_queued as scheduled — a queued run renders the merged wakeMessage when it starts", async () => {
+    const result = await scheduleDeliverableWriteEscalation(
+      createDb([]),
+      vi.fn(async () => ({ id: "run-queued", coalesced: true, delivered: "merged_queued" })),
+      {
+        companyId: "company-1",
+        issueId: "issue-1",
+        agentId: "agent-1",
+        sourceRunId: "run-1",
+        deniedMutation,
+      },
+    );
+
+    expect(result.outcome).toBe("scheduled");
   });
 });

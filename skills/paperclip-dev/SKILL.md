@@ -47,15 +47,62 @@ If schema changes landed, also run `pnpm db:generate && pnpm db:migrate`.
 
 ## Worktrees
 
+> 🚨 **Never develop in the primary checkout. All development happens in a worktree.**
+>
+> The server runs under `tsx watch`, so the working files of whatever tree it
+> runs from are the deployed bytes: **every save is a deploy**, and a
+> half-written file is a half-deployed server. On 2026-07-14 an uncommitted
+> in-progress feature hot-reloaded mid-edit and returned `500` from every issues
+> route company-wide (LOOA-371).
+>
+> **The server no longer runs from the primary checkout.** It runs from a
+> dedicated serving checkout — `/Users/annica/paperclip-live` — that no agent
+> ever enters (LOOA-382). The primary checkout is the *integration* tree: where
+> `master` lives, where worktrees branch from, and where merges land. It must
+> still be clean and on `master`, but editing it can no longer take production
+> down.
+>
+> Ask, don't assume, which tree is live: `pnpm live:where` reports it from the
+> serving process itself. `pnpm check:live-tree` checks that tree's health.
+>
+> **The deploy contract, in full:**
+>
+> ```bash
+> # 1. develop in a worktree, get it reviewed, merge to master (integration tree)
+> git merge --no-ff paperclip-<ticket>
+>
+> # 2. ship it — fast-forwards the serving tree; tsx watch picks it up
+> pnpm deploy:live
+> ```
+>
+> Merging to `master` is no longer the deploy. **`pnpm deploy:live` is the
+> deploy.** The serving tree only ever fast-forwards, so it is by construction
+> always at a committed, reviewed `master` — there is no state it can reach that
+> `master` was not in.
+>
+> A `pre-commit` hook refuses any commit that *authors* new work in a main
+> worktree (it still allows *integrating* — merge, revert, cherry-pick). If you
+> hit that block, you are in the wrong tree; your changes are preserved, move
+> them to a worktree. Install the hooks with `pnpm hooks:install`.
+
 Paperclip worktrees combine git worktrees with isolated Paperclip instances — each gets its own database, server port, and environment seeded from the primary instance.
 
 > **MANDATORY:** Before creating or managing worktrees, you MUST read the "Worktree-local Instances" and "Worktree CLI Reference" sections in `doc/DEVELOPING.md`. That is the canonical reference for all worktree commands, their options, seed modes, and environment variables.
 
 ### When to Use Worktrees
 
+**Always, for any code change.** A worktree is not a special-case tool for
+heavyweight work — it is the only place development happens, because the
+primary checkout is live. Reach for one whenever you are:
+
+- Making *any* edit to Paperclip's source, however small
 - Starting a feature branch that needs its own Paperclip environment
 - Running parallel agent work without cross-contaminating the primary instance
 - Testing Paperclip changes in isolation before merging
+
+A plain `git worktree add ../paperclip-<ticket> -b paperclip-<ticket>` is enough
+when you only need to edit code and merge. Use the `worktree:make` CLI below
+when the change also needs its own database and running server.
 
 ### Command Overview
 

@@ -1260,6 +1260,127 @@ describe("claude execute", () => {
     }
   });
 
+  // LOOA-360: the org-disabled spend-limit 429. Reproduces the real incident
+  // stream — the adapter's job here is only to surface the window the provider
+  // named; whether that window is too long to park a retry on is the server's.
+  async function runQuotaRejectionExecute(input: {
+    label: string;
+    rateLimitInfo: Record<string, unknown>;
+  }) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), `paperclip-claude-exec-${input.label}-`));
+    const workspace = path.join(root, "workspace");
+    const commandPath = path.join(root, "claude");
+    await fs.mkdir(workspace, { recursive: true });
+    // The model is carried on the stream's init event, which is where the
+    // adapter resolves it from on a real run.
+    const initLine = JSON.stringify({
+      type: "system",
+      subtype: "init",
+      session_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      model: "claude-fable-5",
+    });
+    const rateLimitEventLine = JSON.stringify({
+      type: "rate_limit_event",
+      rate_limit_info: input.rateLimitInfo,
+    });
+    const resultLine = JSON.stringify({
+      type: "result",
+      subtype: "error",
+      session_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      is_error: true,
+      api_error_status: 429,
+      terminal_reason: "api_error",
+      result:
+        "You've hit your monthly spend limit. Contact your organization admin to raise it, " +
+        "or switch models to continue this chat.",
+    });
+    await writeTextFailingClaudeCommand(commandPath, {
+      stdout: `${initLine}\n${rateLimitEventLine}\n${resultLine}\n`,
+      exitCode: 1,
+    });
+
+    const previousHome = process.env.HOME;
+    process.env.HOME = root;
+    try {
+      return await execute({
+        runId: `run-claude-${input.label}`,
+        agent: {
+          id: "agent-1",
+          companyId: "company-1",
+          name: "Claude Coder",
+          adapterType: "claude_local",
+          adapterConfig: { model: "claude-fable-5" },
+        },
+        runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+        config: {
+          command: commandPath,
+          cwd: workspace,
+          promptTemplate: "Follow the paperclip heartbeat.",
+        },
+        context: {},
+        authToken: "run-jwt-token",
+        onLog: async () => {},
+      });
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it("reports the blocked window on an org-disabled spend-limit 429 and defers the retry to the reset (LOOA-360)", async () => {
+    const resetsAtEpochSeconds = Math.floor(Date.now() / 1_000) + 5 * 24 * 60 * 60;
+    const result = await runQuotaRejectionExecute({
+      label: "quota-org-disabled",
+      rateLimitInfo: {
+        status: "rejected",
+        resetsAt: resetsAtEpochSeconds,
+        rateLimitType: "seven_day_overage_included",
+        overageStatus: "rejected",
+        overageDisabledReason: "org_level_disabled_until",
+        isUsingOverage: false,
+      },
+    });
+
+    const resetsAtIso = new Date(resetsAtEpochSeconds * 1_000).toISOString();
+    expect(result.exitCode).toBe(1);
+    // The adapter reports the fact and stays transient; the SERVER decides what
+    // the window means, because that turns on the issue lock a queued retry holds.
+    expect(result.errorCode).toBe("claude_transient_upstream");
+    expect(result.errorFamily).toBe("transient_upstream");
+    expect(result.resultJson?.providerRateLimitRejection).toMatchObject({
+      model: "claude-fable-5",
+      resetsAt: resetsAtIso,
+      reason: "org_level_disabled_until",
+      overageStatus: "rejected",
+      rateLimitType: "seven_day_overage_included",
+      status: 429,
+    });
+    // The structured reset is authoritative: never retry before the window reopens.
+    expect(result.retryNotBefore).toBe(resetsAtIso);
+  });
+
+  it("prefers the structured reset over the scraped wording for a short rolling window (LOOA-360)", async () => {
+    const resetsAtEpochSeconds = Math.floor(Date.now() / 1_000) + 30 * 60;
+    const result = await runQuotaRejectionExecute({
+      label: "quota-transient",
+      rateLimitInfo: {
+        status: "rejected",
+        resetsAt: resetsAtEpochSeconds,
+        rateLimitType: "five_hour",
+        overageStatus: "allowed",
+        isUsingOverage: false,
+      },
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.errorCode).toBe("claude_transient_upstream");
+    expect(result.errorFamily).toBe("transient_upstream");
+    // Retried, but at the reset rather than blindly at the 2m first rung -- so no
+    // attempt is burned inside the window and nothing is suppressed.
+    expect(result.retryNotBefore).toBe(new Date(resetsAtEpochSeconds * 1_000).toISOString());
+  });
+
   it("auto-rotates session on previous_message_id 400 (synthetic-msg poisoning) and succeeds on retry", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-exec-poisoned-msgid-"));
     const { workspace, commandPath, capturePath, statePath, restore } = await setupExecuteEnv(root, {

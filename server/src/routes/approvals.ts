@@ -456,6 +456,22 @@ export function approvalRoutes(
         entityId: id,
         details: { type: existing.type, reason },
       });
+      // LOOA-366: a grant is audit-logged but was previously silent. Surface it
+      // to the CEO the same way the stale-gate alarm is surfaced. Best-effort:
+      // the mark already persisted, so the notice never fails the request, and
+      // it self-skips when the CEO is the one exempting.
+      const payloadTitle =
+        existing.payload && typeof (existing.payload as Record<string, unknown>).title === "string"
+          ? ((existing.payload as Record<string, unknown>).title as string)
+          : null;
+      await staleGates.notifyPremiseExemptGranted({
+        companyId: existing.companyId,
+        cardKind: "approval",
+        cardId: id,
+        cardTitle: payloadTitle,
+        reason,
+        actor,
+      });
       res.json(redactApprovalPayload(updated));
     },
   );

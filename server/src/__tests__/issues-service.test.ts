@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { asc, eq } from "drizzle-orm";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import {
   activityLog,
@@ -30,6 +30,7 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { instanceSettingsService } from "../services/instance-settings.ts";
+import { logger } from "../middleware/logger.ts";
 import {
   clampIssueListLimit,
   deriveIssueCommentRunLogAttribution,
@@ -5585,6 +5586,77 @@ describeEmbeddedPostgres("issueService.assertCheckoutOwner stale checkout adopti
       .where(eq(heartbeatRuns.id, seeded.staleRunId))
       .then((rows) => rows[0]);
     expect(holder?.status).toBe("cancelled");
+  });
+
+  // LOOA-566: the scope guard must leave a greppable signal when it suppresses a
+  // reap for a cross-scope actor (the silent LOOA-375 re-open path), and must NOT
+  // fire on the normal same-scope / null-actor reap paths. Pure observability —
+  // the reap DECISION is already pinned by the LOOA-554 tests above; these assert
+  // only the log fires on exactly the suppression branch. We match the distinctive
+  // message substring because the reap-SUCCESS path also uses logger.info.
+  function suppressionLogPayloads(spy: ReturnType<typeof vi.spyOn>) {
+    return (spy.mock.calls as unknown as Array<[Record<string, unknown>, unknown]>)
+      .filter(([, msg]) => typeof msg === "string" && msg.includes("scope-guard suppressed"))
+      .map(([payload]) => payload);
+  }
+
+  it("logs the LOOA-566 suppression exactly once for a cross-scope actor, with the guard fields", async () => {
+    const foreignScope = randomUUID();
+    const seeded = await seedOwnershipIssue({
+      checkoutStatus: "queued",
+      actorContextIssueId: foreignScope, // actor run scoped to a different issue
+    });
+    const infoSpy = vi.spyOn(logger, "info").mockImplementation(() => {});
+    try {
+      await expect(
+        svc.assertCheckoutOwner(seeded.issueId, seeded.actorAgentId, seeded.actorRunId),
+      ).rejects.toMatchObject({ status: 409 });
+
+      const payloads = suppressionLogPayloads(infoSpy);
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]).toMatchObject({
+        issueId: seeded.issueId,
+        actorRunId: seeded.actorRunId,
+        actorScope: foreignScope,
+        suppressedHolderIds: [seeded.staleRunId],
+      });
+      // The logged scope is the actor's foreign scope, never this issue.
+      expect(payloads[0].actorScope).not.toBe(seeded.issueId);
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  it("does not log the LOOA-566 suppression on the normal same-scope reap path", async () => {
+    const seeded = await seedOwnershipIssue({ checkoutStatus: "queued" }); // actor scoped to THIS issue
+    const infoSpy = vi.spyOn(logger, "info").mockImplementation(() => {});
+    try {
+      const ownership = await svc.assertCheckoutOwner(
+        seeded.issueId,
+        seeded.actorAgentId,
+        seeded.actorRunId,
+      );
+      // Sanity: the same-scope reap genuinely happened (adopted), so this is the
+      // reap path — not a no-op that would vacuously skip the suppression log.
+      expect(ownership.checkoutRunId).toBe(seeded.actorRunId);
+
+      expect(suppressionLogPayloads(infoSpy)).toHaveLength(0);
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  it("does not log the LOOA-566 suppression on a board/system (null-actor) reap path", async () => {
+    const seeded = await seedOwnershipIssue({ checkoutStatus: "queued" });
+    const infoSpy = vi.spyOn(logger, "info").mockImplementation(() => {});
+    try {
+      const released = await svc.release(seeded.issueId, undefined, null);
+      expect(released).not.toBeNull();
+
+      expect(suppressionLogPayloads(infoSpy)).toHaveLength(0);
+    } finally {
+      infoSpy.mockRestore();
+    }
   });
 
 });

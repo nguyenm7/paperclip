@@ -448,7 +448,7 @@ describeEmbeddedPostgres("companySkillService.list", () => {
         description: null,
         markdown: "# Other Skill",
         sourceType: "local_path",
-        sourceLocator: null,
+        sourceLocator: skillDir,
         trustLevel: "markdown_only",
         compatibility: "compatible",
         fileInventory: [{ path: "SKILL.md", kind: "skill" }],
@@ -474,6 +474,54 @@ describeEmbeddedPostgres("companySkillService.list", () => {
     await expect(svc.resolveRequestedSkillEntries(companyId, [
       { key: "other-skill", versionId: version.id },
     ])).rejects.toMatchObject({ status: 422 });
+  });
+
+  it("rejects unresolved desired skills with canonical alternatives", async () => {
+    const companyId = randomUUID();
+    const skillId = randomUUID();
+    const skillDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-resolvable-skill-"));
+    cleanupDirs.add(skillDir);
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Editorial Brain\n", "utf8");
+    const skillKey = `company/${companyId}/editorial-brain`;
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(companySkills).values({
+      id: skillId,
+      companyId,
+      key: skillKey,
+      slug: "editorial-brain",
+      name: "Editorial Brain",
+      description: null,
+      markdown: "# Editorial Brain",
+      sourceType: "local_path",
+      sourceLocator: skillDir,
+      trustLevel: "markdown_only",
+      compatibility: "compatible",
+      fileInventory: [{ path: "SKILL.md", kind: "skill" }],
+    });
+
+    await expect(svc.resolveRequestedSkillKeys(companyId, [
+      "editorial-brain",
+    ])).resolves.toEqual([skillKey]);
+
+    await expect(svc.resolveRequestedSkillEntries(companyId, [
+      "missing-brain",
+    ])).rejects.toMatchObject({
+      status: 400,
+      message: expect.stringContaining("missing-brain"),
+      details: {
+        unknownFields: ["missing-brain"],
+        acceptedFields: expect.arrayContaining([skillKey]),
+        unknownSkills: ["missing-brain"],
+        ambiguousSkills: [],
+        availableSkills: expect.arrayContaining([skillKey]),
+      },
+    });
   });
 
   it("preserves missing local-path skills that active agents still desire", async () => {

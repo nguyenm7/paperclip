@@ -735,6 +735,16 @@ describe.sequential("agent skill routes", () => {
       });
 
     expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(mockAgentService.create).toHaveBeenCalledWith(
+      "company-1",
+      expect.objectContaining({
+        adapterConfig: expect.objectContaining({
+          paperclipSkillSync: {
+            desiredSkills: ["paperclipai/paperclip/paperclip"],
+          },
+        }),
+      }),
+    );
     expect(mockApprovalService.create).toHaveBeenCalledWith(
       "company-1",
       expect.objectContaining({
@@ -746,6 +756,54 @@ describe.sequential("agent skill routes", () => {
         }),
       }),
     );
+  });
+
+  it("rejects an unresolvable desired skill before creating a hire", async () => {
+    const app = await createApp(createDb(true));
+    const { badRequest } = await vi.importActual<typeof import("../errors.js")>("../errors.js");
+    mockCompanySkillService.resolveRequestedSkillEntries.mockRejectedValueOnce(badRequest(
+      "Invalid desiredSkills selection (unknown references: missing-brain).",
+      {
+        unknownFields: ["missing-brain"],
+        acceptedFields: ["paperclipai/paperclip/paperclip"],
+      },
+    ));
+
+    const res = await request(app)
+      .post("/api/companies/company-1/agent-hires")
+      .send({
+        name: "QA Agent",
+        role: "engineer",
+        adapterType: "claude_local",
+        desiredSkills: ["missing-brain"],
+        adapterConfig: {},
+      });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(400);
+    expect(res.body.error).toContain("missing-brain");
+    expect(res.body.details).toEqual({
+      unknownFields: ["missing-brain"],
+      acceptedFields: ["paperclipai/paperclip/paperclip"],
+    });
+    expect(mockAgentService.create).not.toHaveBeenCalled();
+    expect(mockApprovalService.create).not.toHaveBeenCalled();
+    expect(mockAgentInstructionsService.materializeManagedBundle).not.toHaveBeenCalled();
+  });
+
+  it("rejects a whitespace-only desired skill instead of normalizing it away", async () => {
+    const res = await request(await createApp(createDb(true)))
+      .post("/api/companies/company-1/agent-hires")
+      .send({
+        name: "QA Agent",
+        role: "engineer",
+        adapterType: "claude_local",
+        desiredSkills: ["   "],
+        adapterConfig: {},
+      });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(400);
+    expect(mockCompanySkillService.resolveRequestedSkillEntries).not.toHaveBeenCalled();
+    expect(mockAgentService.create).not.toHaveBeenCalled();
   });
 
   it("preserves hire source issues, icons, desired skills, and approval payload details", async () => {

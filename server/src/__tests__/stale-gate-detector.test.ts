@@ -353,4 +353,126 @@ describeEmbeddedPostgres("stale-gate detector (LOOA-296)", () => {
     expect(alarmRows).toHaveLength(1);
     expect((alarmRows[0]!.details as any).cardId).toBe(approvalId);
   });
+
+  // LOOA-396 F4 (follow-up to LOOA-334): sanitizeUntrusted bounds each ITEM, not
+  // the aggregate PROMPT. Two dimensions were unbounded — dead sources per card
+  // and cards per company — and the source is attacker-amplified (one approval
+  // can join every done/cancelled issue in the company). An oversized prompt
+  // that trips the provider's request-size limit is a 0-token rejected run whose
+  // truthy run ref would still stamp raise-once (F1's fail-open by another road).
+  //
+  // The fix must bound the card count by REFUSING the write (defer unrendered
+  // cards UNSTAMPED so the next sweep raises them), never by evicting them — a
+  // card carries the raise-once promise. Dead sources may be evicted ("(+K
+  // more)") because a source does not. This test pins BOTH caps AND the
+  // refuse-not-evict invariant, so it re-fires if the cap is ever turned into a
+  // silent eviction.
+  it("bounds the CEO alarm by REFUSING the write: caps rendered cards + dead sources, defers the remainder UNSTAMPED, re-alarms next sweep (LOOA-396 F4)", async () => {
+    const { companyId, creatorId } = await seedCompany();
+
+    // The amplifier: ONE approval joined to N=200 done issues. detect() returns
+    // approval flags before interaction flags, so this card is deterministically
+    // first in the batch (index 0) and is always rendered.
+    const bigApprovalId = randomUUID();
+    await db.insert(approvals).values({
+      id: bigApprovalId,
+      companyId,
+      type: "request_board_approval",
+      requestedByAgentId: creatorId,
+      status: "pending",
+      payload: { title: "Link-bomb approval" },
+    });
+    const N = 200;
+    const doneSourceRows = Array.from({ length: N }, (_, i) => ({
+      id: randomUUID(),
+      companyId,
+      title: `Done source ${i}`,
+      status: "done",
+      identifier: `LOOA-DS${i}`,
+    }));
+    await db.insert(issues).values(doneSourceRows);
+    await db
+      .insert(issueApprovals)
+      .values(doneSourceRows.map((r) => ({ companyId, issueId: r.id, approvalId: bigApprovalId })));
+
+    // M=80 further stale cards, each on its own done issue. Total 81 > 50 cap.
+    const M = 80;
+    const cardSourceRows = Array.from({ length: M }, (_, i) => ({
+      id: randomUUID(),
+      companyId,
+      title: `Done card-source ${i}`,
+      status: "done",
+      identifier: `LOOA-C${i}`,
+    }));
+    await db.insert(issues).values(cardSourceRows);
+    await db.insert(issueThreadInteractions).values(
+      cardSourceRows.map((r, i) => ({
+        id: randomUUID(),
+        companyId,
+        issueId: r.id,
+        kind: "request_confirmation" as const,
+        status: "pending" as const,
+        createdByAgentId: creatorId,
+        title: `Pending card ${i}`,
+        payload: { version: 1, prompt: "Accept?" } as any,
+      })),
+    );
+
+    const totalCards = M + 1; // 81
+    const { service, wakeup } = makeService();
+
+    // --- Sweep 1 ---------------------------------------------------------
+    const first = await service.sweep();
+    expect(first.flagged).toBe(totalCards);
+    expect(wakeup).toHaveBeenCalledTimes(1);
+
+    const prompt = (wakeup.mock.calls[0]![1] as any).payload.prompt as string;
+    const fenced = prompt.split("<untrusted-cards>")[1]!.split("</untrusted-cards>")[0]!.trim();
+    const renderedLines = fenced.split("\n").filter((l) => l.trim().length > 0);
+
+    // (a1) cards-per-prompt is bounded: exactly the 50-card cap is rendered.
+    expect(renderedLines.length).toBe(50);
+
+    // (a2) dead-sources-per-card is bounded: the 200-source card shows 5 + overflow.
+    const bigLine = renderedLines.find((l) => l.includes(bigApprovalId));
+    expect(bigLine).toBeDefined();
+    expect((bigLine!.match(/ is done \(/g) ?? []).length).toBe(5);
+    expect(bigLine!).toContain("(+195 more)");
+
+    // (a3) the deferral is DISCLOSED in the prompt — no silent cap.
+    expect(prompt).toContain(`${totalCards - 50} further card(s)`);
+    expect(prompt).toContain("next hourly sweep");
+
+    // Only the 50 rendered cards are stamped: the big approval + 49 interactions.
+    expect(first.alarmed).toBe(50);
+    const stampedApprovals1 = (
+      await db.select().from(approvals).where(eq(approvals.companyId, companyId))
+    ).filter((a) => a.stalePremiseAlarmedAt);
+    const stampedInteractions1 = (
+      await db
+        .select()
+        .from(issueThreadInteractions)
+        .where(eq(issueThreadInteractions.companyId, companyId))
+    ).filter((row) => row.stalePremiseAlarmedAt);
+    expect(stampedApprovals1.length).toBe(1);
+    expect(stampedInteractions1.length).toBe(49);
+
+    // --- Sweep 2: THE INVARIANT -----------------------------------------
+    // The 31 deferred cards were left UNSTAMPED (bound by refusing, not evicting),
+    // so the next sweep raises them. If someone "optimizes" the cap into an
+    // eviction — truncate the render but stamp the whole batch — those cards would
+    // already be stamped here, second.flagged would be 0, and this goes red.
+    const second = await service.sweep();
+    expect(second.flagged).toBe(totalCards - 50); // 31
+    expect(second.alarmed).toBe(totalCards - 50);
+    expect(wakeup).toHaveBeenCalledTimes(2);
+
+    const stampedInteractions2 = (
+      await db
+        .select()
+        .from(issueThreadInteractions)
+        .where(eq(issueThreadInteractions.companyId, companyId))
+    ).filter((row) => row.stalePremiseAlarmedAt);
+    expect(stampedInteractions2.length).toBe(M); // all 80 now
+  }, 30_000);
 });

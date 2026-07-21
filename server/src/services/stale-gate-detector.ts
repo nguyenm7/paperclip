@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -284,7 +284,11 @@ export function staleGateDetectorService(db: Db, deps: StaleGateDetectorDeps) {
       .from(approvals)
       .innerJoin(issueApprovals, eq(issueApprovals.approvalId, approvals.id))
       .innerJoin(issues, eq(issues.id, issueApprovals.issueId))
-      .where(and(...approvalConditions));
+      .where(and(...approvalConditions))
+      // LOOA-550: deterministic oldest-first order for direct/backtest callers.
+      // The sweep re-sorts the cross-kind batch at the cap (see `sweep`), but an
+      // unordered query makes detect() itself non-deterministic. id breaks ties.
+      .orderBy(asc(approvals.createdAt), asc(approvals.id));
 
     const approvalFlags: StaleGateFlag[] = [];
     for (const rows of groupBy(approvalRows, (r) => r.cardId).values()) {
@@ -329,7 +333,9 @@ export function staleGateDetectorService(db: Db, deps: StaleGateDetectorDeps) {
       })
       .from(issueThreadInteractions)
       .innerJoin(issues, eq(issues.id, issueThreadInteractions.issueId))
-      .where(and(...interactionConditions));
+      .where(and(...interactionConditions))
+      // LOOA-550: deterministic oldest-first order (see the approval query note).
+      .orderBy(asc(issueThreadInteractions.createdAt), asc(issueThreadInteractions.id));
 
     const interactionFlags: StaleGateFlag[] = interactionRows.map((r) => ({
       cardKind: "interaction" as const,
@@ -387,12 +393,29 @@ export function staleGateDetectorService(db: Db, deps: StaleGateDetectorDeps) {
         continue;
       }
 
+      // LOOA-550 (LOOA-396 F4 follow-up): drain the cap OLDEST-FIRST (FIFO). The
+      // slice below is the point where cards are chosen vs. deferred, so the
+      // ordering guarantee is enforced HERE, at the consumer — not delegated to
+      // detect()'s query order, which is per-kind and a future refactor could
+      // silently change. Without it, `slice` takes whatever order Postgres
+      // returned across BOTH card kinds: under a sustained >cap influx a specific
+      // older card can be perpetually pushed past the cap and never alarmed
+      // (starvation), and which cards defer is non-deterministic, so the deferral
+      // note ties to no stable ordering. createdAt is the primary key so the
+      // longest-standing dead premise is raised first; cardId breaks exact ties
+      // so the deferred set — and the note that describes it — is deterministic.
+      const ordered = [...companyFlags].sort((a, b) => {
+        const byAge = a.createdAt.getTime() - b.createdAt.getTime();
+        if (byAge !== 0) return byAge;
+        return a.cardId < b.cardId ? -1 : a.cardId > b.cardId ? 1 : 0;
+      });
+
       // LOOA-396 F4: bound the batch by REFUSING the write, never by evicting.
       // Only the cards we render get stamped below; the deferred remainder stays
       // fresh so the next sweep raises it. Rendering a slice while stamping the
       // whole batch would burn raise-once on cards the CEO never saw (F1).
-      const batch = companyFlags.slice(0, MAX_CARDS_PER_ALARM);
-      const deferred = companyFlags.length - batch.length;
+      const batch = ordered.slice(0, MAX_CARDS_PER_ALARM);
+      const deferred = ordered.length - batch.length;
       if (deferred > 0) {
         logger.info(
           { companyId, rendered: batch.length, deferred, cap: MAX_CARDS_PER_ALARM },

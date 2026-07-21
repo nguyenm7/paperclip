@@ -478,6 +478,94 @@ describeEmbeddedPostgres("stale-gate detector (LOOA-296)", () => {
     expect(stampedInteractions2.length).toBe(M); // all 80 now
   }, 30_000);
 
+  // LOOA-550 (follow-up to LOOA-396 F4): the batch cap must drain OLDEST-FIRST
+  // (FIFO) so the longest-standing dead premise is raised first and no card can
+  // be perpetually starved past the cap under a sustained >cap influx. sweep()
+  // slices the first MAX_CARDS_PER_ALARM, so without an explicit sort *which*
+  // cards render vs. defer is whatever order Postgres returns.
+  //
+  // This is a CROSS-KIND pin, not just a "distinct createdAt" pin: the 40 OLDEST
+  // cards are interactions and the 20 NEWEST are approvals. detect() concatenates
+  // approval flags BEFORE interaction flags, so even with each kind internally
+  // ordered, a slice over the concatenated list would render newer approvals
+  // ahead of older interactions — starving older interactions and raising
+  // approvals that should defer. Only an oldest-first sort at the cap (in sweep,
+  // the actual consumer) yields the true oldest 50. Cards are also inserted
+  // newest-first so DB heap/insertion order is not FIFO either. Removing the
+  // sweep sort turns this red even if the per-query ORDER BY stays.
+  it("drains the alarm batch cap oldest-first across BOTH card kinds (FIFO), never starving an older card (LOOA-550)", async () => {
+    const { companyId, creatorId } = await seedCompany();
+
+    const CAP = 50;
+    const OLD_INTERACTIONS = 40;
+    const NEW_APPROVALS = 20;
+    const TOTAL = OLD_INTERACTIONS + NEW_APPROVALS; // 60 > CAP
+    const base = Date.UTC(2026, 0, 1, 0, 0, 0);
+    const at = (i: number) => new Date(base + i * 60_000); // index i = i-th oldest
+
+    // Insert newest-first (reverse index) so neither insertion order nor kind
+    // order matches FIFO order.
+    const idByIndex = new Map<number, string>();
+    for (let i = TOTAL - 1; i >= 0; i--) {
+      const issueId = await seedIssue(companyId, "done", `LOOA-FIFO${i}`);
+      if (i < OLD_INTERACTIONS) {
+        const id = await seedPendingInteraction(companyId, issueId, creatorId, {
+          createdAt: at(i),
+          title: `FIFO interaction ${i}`,
+        });
+        idByIndex.set(i, id);
+      } else {
+        const id = await seedPendingApproval(companyId, creatorId, [issueId], {
+          createdAt: at(i),
+          payload: { title: `FIFO approval ${i}` },
+        });
+        idByIndex.set(i, id);
+      }
+    }
+
+    const oldestCap = Array.from({ length: CAP }, (_, i) => idByIndex.get(i)!); // 0..49
+    const newerRemainder = Array.from(
+      { length: TOTAL - CAP },
+      (_, i) => idByIndex.get(CAP + i)!,
+    ); // 50..59 (all approvals)
+
+    const { service, wakeup } = makeService();
+
+    // --- Sweep 1: exactly the CAP OLDEST cards render + stamp ---------------
+    const first = await service.sweep();
+    expect(first.flagged).toBe(TOTAL);
+    expect(first.alarmed).toBe(CAP);
+
+    const prompt1 = (wakeup.mock.calls[0]![1] as any).payload.prompt as string;
+    for (const id of oldestCap) expect(prompt1).toContain(id); // oldest 50 raised
+    for (const id of newerRemainder) expect(prompt1).not.toContain(id); // newer deferred
+    expect(prompt1).toContain(`${TOTAL - CAP} further card(s)`); // deferral disclosed
+
+    // The stamped set is EXACTLY the oldest 50 across BOTH ledgers — not "some 50".
+    const stampedInteractions = (
+      await db
+        .select()
+        .from(issueThreadInteractions)
+        .where(eq(issueThreadInteractions.companyId, companyId))
+    )
+      .filter((r) => r.stalePremiseAlarmedAt)
+      .map((r) => r.id);
+    const stampedApprovals = (
+      await db.select().from(approvals).where(eq(approvals.companyId, companyId))
+    )
+      .filter((r) => r.stalePremiseAlarmedAt)
+      .map((r) => r.id);
+    expect(new Set([...stampedInteractions, ...stampedApprovals])).toEqual(new Set(oldestCap));
+
+    // --- Sweep 2: the newer remainder is raised (no card starves) ----------
+    const second = await service.sweep();
+    expect(second.flagged).toBe(TOTAL - CAP);
+    expect(second.alarmed).toBe(TOTAL - CAP);
+
+    const prompt2 = (wakeup.mock.calls[1]![1] as any).payload.prompt as string;
+    for (const id of newerRemainder) expect(prompt2).toContain(id);
+  }, 30_000);
+
   // LOOA-366 (follow-up to LOOA-334, SecurityEngineer residual risk #1): a
   // premise-exempt permanently silences the Rule 9 alarm for a card, and the
   // creator agent can grant it on its own card. The grant was audit-logged but

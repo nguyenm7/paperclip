@@ -5236,6 +5236,10 @@ describeEmbeddedPostgres("issueService.assertCheckoutOwner stale checkout adopti
     checkoutStatus: "running" | "queued" | "failed" | "timed_out";
     actorRunStatus?: "running" | "failed" | "timed_out" | "succeeded";
     assigneeMatchesActor?: boolean;
+    // Scope of the actor run (contextSnapshot.issueId). Defaults to THIS issue —
+    // the genuine same-scope takeover the LOOA-375 reap is meant to unblock.
+    // Pass a different id (or null) to model a cross-scope drive-by (LOOA-554).
+    actorContextIssueId?: string | null;
   }) {
     const companyId = randomUUID();
     const assigneeAgentId = randomUUID();
@@ -5244,6 +5248,8 @@ describeEmbeddedPostgres("issueService.assertCheckoutOwner stale checkout adopti
     const actorRunId = randomUUID();
     const issueId = randomUUID();
     const actorRunStatus = params.actorRunStatus ?? "running";
+    const actorContextIssueId =
+      params.actorContextIssueId === undefined ? issueId : params.actorContextIssueId;
 
     await db.insert(companies).values({
       id: companyId,
@@ -5292,6 +5298,8 @@ describeEmbeddedPostgres("issueService.assertCheckoutOwner stale checkout adopti
           params.checkoutStatus === "running" || params.checkoutStatus === "queued"
             ? null
             : new Date(),
+        // The holder is a continuation scoped to THIS issue.
+        contextSnapshot: { issueId },
       },
       {
         id: actorRunId,
@@ -5301,6 +5309,8 @@ describeEmbeddedPostgres("issueService.assertCheckoutOwner stale checkout adopti
         invocationSource: "manual",
         startedAt: actorRunStatus === "running" ? new Date() : null,
         finishedAt: actorRunStatus === "running" ? null : new Date(),
+        contextSnapshot:
+          actorContextIssueId === null ? null : { issueId: actorContextIssueId },
       },
     ]);
     await db.insert(issues).values({
@@ -5516,6 +5526,65 @@ describeEmbeddedPostgres("issueService.assertCheckoutOwner stale checkout adopti
       .where(eq(heartbeatRuns.id, seeded.staleRunId))
       .then((rows) => rows[0]);
     expect(holder?.status).toBe("running");
+  });
+
+  // LOOA-554: the reap must NOT destroy a legitimately-pending, same-issue queued
+  // continuation when a CROSS-SCOPE actor run (the same agent, but scoped to a
+  // DIFFERENT issue) drives a mutation through the shared ownership check. Such a
+  // drive-by keeps the pre-fix 409 so resumeQueuedRuns can still start the pending
+  // holder. RED against the un-scope-guarded LOOA-375 fix (which reaped it and
+  // adopted); GREEN once the actor-scope guard is in place.
+  it("does not reap a queued holder for a cross-scope actor run (keeps the pre-fix 409)", async () => {
+    const seeded = await seedOwnershipIssue({
+      checkoutStatus: "queued",
+      actorContextIssueId: randomUUID(), // actor run scoped to a different issue
+    });
+
+    await expect(
+      svc.assertCheckoutOwner(seeded.issueId, seeded.actorAgentId, seeded.actorRunId),
+    ).rejects.toMatchObject({ status: 409 });
+
+    const holder = await db
+      .select({ status: heartbeatRuns.status })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, seeded.staleRunId))
+      .then((rows) => rows[0]);
+    expect(holder?.status).toBe("queued");
+  });
+
+  it("does not reap a queued holder when a cross-scope actor tries to release", async () => {
+    const seeded = await seedOwnershipIssue({
+      checkoutStatus: "queued",
+      actorContextIssueId: randomUUID(), // actor run scoped to a different issue
+    });
+
+    await expect(
+      svc.release(seeded.issueId, seeded.assigneeAgentId, seeded.actorRunId),
+    ).rejects.toMatchObject({ status: 409 });
+
+    const holder = await db
+      .select({ status: heartbeatRuns.status })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, seeded.staleRunId))
+      .then((rows) => rows[0]);
+    expect(holder?.status).toBe("queued");
+  });
+
+  // LOOA-554: a board/system release carries no owning run (actorRunId null). That
+  // is an explicit takeover of THIS issue, so the never-started queued holder is
+  // still reaped and the lock frees — the scope guard only fences agent runs.
+  it("still reaps a queued holder on a board/system release with no actor run", async () => {
+    const seeded = await seedOwnershipIssue({ checkoutStatus: "queued" });
+
+    const released = await svc.release(seeded.issueId, undefined, null);
+    expect(released).not.toBeNull();
+
+    const holder = await db
+      .select({ status: heartbeatRuns.status })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, seeded.staleRunId))
+      .then((rows) => rows[0]);
+    expect(holder?.status).toBe("cancelled");
   });
 
 });

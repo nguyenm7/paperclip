@@ -4007,6 +4007,31 @@ export function issueService(db: Db) {
       ).filter((runId) => runId !== actorRunId);
       if (holderIds.length === 0) return [];
 
+      // Scope guard (LOOA-554): only reap a never-started queued holder when the
+      // caller is genuinely taking over THIS issue — either a board/system
+      // release with no owning run (actorRunId === null), or an actor run whose
+      // own scope IS this issue (contextSnapshot.issueId === issueId).
+      //
+      // A cross-scope, same-agent drive-by — a run scoped to a DIFFERENT issue
+      // (or an unscoped timer/inbox heartbeat) that happens to mutate this issue
+      // (the same agent owns both) — must NOT reap a legitimately-pending,
+      // system-scheduled queued continuation (process-loss / missing-comment
+      // retry, or an execution-promotion window) that resumeQueuedRuns will
+      // start. For those callers we keep the pre-fix 409 so the continuation
+      // survives. Genuine same-scope re-wakes never reach here: they coalesce
+      // into the pending queued run, so actorRunId === holder and the holder was
+      // already filtered out above. See SECREVIEW-LOOA-553 F1 / LOOA-553.
+      if (actorRunId !== null) {
+        const actorScope = await tx
+          .select({
+            issueId: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'issueId'`,
+          })
+          .from(heartbeatRuns)
+          .where(eq(heartbeatRuns.id, actorRunId))
+          .then((rows) => rows[0]?.issueId ?? null);
+        if (actorScope !== issueId) return [];
+      }
+
       const reaped: string[] = [];
       const now = new Date();
       for (const runId of holderIds) {

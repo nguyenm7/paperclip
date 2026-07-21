@@ -27,6 +27,7 @@ const mockAgentService = vi.hoisted(() => ({
 const mockStaleGateService = vi.hoisted(() => ({
   detect: vi.fn(),
   sweep: vi.fn(),
+  notifyPremiseExemptGranted: vi.fn(),
   setApprovalPremiseExempt: vi.fn(),
   clearApprovalPremiseExempt: vi.fn(),
   setInteractionPremiseExempt: vi.fn(),
@@ -163,6 +164,11 @@ describe("premise-exempt routes (LOOA-296)", () => {
       premiseExemptAt: new Date(),
     });
     mockStaleGateService.clearApprovalPremiseExempt.mockResolvedValue(pendingApproval);
+    mockStaleGateService.notifyPremiseExemptGranted.mockResolvedValue({
+      outcome: "notified",
+      ceoAgentId: "agent-ceo",
+      noticeRunId: "notice-run-1",
+    });
   });
 
   it("lets the card's creator agent set the exempt marker and audit-logs it", async () => {
@@ -180,6 +186,24 @@ describe("premise-exempt routes (LOOA-296)", () => {
       expect.anything(),
       expect.objectContaining({ action: "approval.premise_exempt_set", agentId: "agent-creator" }),
     );
+    // LOOA-366: the grant is surfaced to the CEO (the service decides skip-CEO).
+    expect(mockStaleGateService.notifyPremiseExemptGranted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cardKind: "approval",
+        cardId: "approval-1",
+        reason: "record-keeping per CEO ruling",
+        actor: { agentId: "agent-creator", userId: null },
+      }),
+    );
+  });
+
+  it("LOOA-366: clearing the exempt marker does NOT fire a grant notice (clearing re-arms the card)", async () => {
+    const res = await request(await createApp(creatorAgentActor)).delete(
+      "/api/approvals/approval-1/premise-exempt",
+    );
+    expect(res.status).toBe(200);
+    expect(mockStaleGateService.clearApprovalPremiseExempt).toHaveBeenCalledWith("approval-1");
+    expect(mockStaleGateService.notifyPremiseExemptGranted).not.toHaveBeenCalled();
   });
 
   it("rejects an unrelated agent with 403 and does not mutate", async () => {
@@ -195,6 +219,7 @@ describe("premise-exempt routes (LOOA-296)", () => {
 
     expect(res.status).toBe(403);
     expect(mockStaleGateService.setApprovalPremiseExempt).not.toHaveBeenCalled();
+    expect(mockStaleGateService.notifyPremiseExemptGranted).not.toHaveBeenCalled();
     expect(mockLogActivity).not.toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ action: "approval.premise_exempt_set" }),

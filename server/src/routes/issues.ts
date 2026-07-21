@@ -6645,6 +6645,18 @@ export function issueRoutes(
         entityId: issue.id,
         details: { interactionId: interaction.id, interactionKind: interaction.kind, reason },
       });
+      // LOOA-366: surface the grant to the CEO the same way the stale-gate alarm
+      // is surfaced. Best-effort; self-skips when the CEO is the exempting actor.
+      await staleGates.notifyPremiseExemptGranted({
+        companyId: issue.companyId,
+        cardKind: "interaction",
+        cardId: interaction.id,
+        cardTitle: interaction.title ?? null,
+        reason,
+        actor,
+        issueId: issue.id,
+        issueIdentifier: issue.identifier ?? null,
+      });
       res.json(updated);
     },
   );

@@ -2902,5 +2902,12 @@ describe("reconcileReusedExecutionWorkspaceProjectWorkspaceId", () => {
   it("returns null when both existing and resolved are absent", () => {
     expect(reconcileReusedExecutionWorkspaceProjectWorkspaceId(null, null)).toBeNull();
     expect(reconcileReusedExecutionWorkspaceProjectWorkspaceId(undefined, undefined)).toBeNull();
+    expect(reconcileReusedExecutionWorkspaceProjectWorkspaceId(null, undefined)).toBeNull();
+  });
+
+  it("backfills when existing is undefined and resolved is present", () => {
+    expect(
+      reconcileReusedExecutionWorkspaceProjectWorkspaceId(undefined, "resolved-workspace"),
+    ).toBe("resolved-workspace");
   });
 });

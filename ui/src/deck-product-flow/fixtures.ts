@@ -155,7 +155,7 @@ export const deckProductFlowFixture: DeckProductFlowFixture = {
   ],
 };
 
-export function clampDeckProductFlowFrame(index: number) {
+export function clampDeckProductFlowFrame(index: number, frameCount = deckProductFlowFixture.frames.length) {
   if (!Number.isFinite(index)) return 0;
-  return Math.min(Math.max(Math.trunc(index), 0), deckProductFlowFixture.frames.length - 1);
+  return Math.min(Math.max(Math.trunc(index), 0), Math.max(frameCount - 1, 0));
 }

@@ -45,8 +45,8 @@ function artifactStateClass(state: DeckProductFlowArtifact["state"]) {
   return "border-border bg-muted/30 text-muted-foreground";
 }
 
-function readInitialFrame(initialFrame: number | undefined) {
-  return clampDeckProductFlowFrame(initialFrame ?? 0);
+function readInitialFrame(initialFrame: number | undefined, frameCount: number) {
+  return clampDeckProductFlowFrame(initialFrame ?? 0, frameCount);
 }
 
 export function DeckProductFlowHarness({
@@ -55,23 +55,24 @@ export function DeckProductFlowHarness({
   fixture = deckProductFlowFixture,
   className,
 }: DeckProductFlowHarnessProps) {
-  const [frameIndex, setFrameIndex] = useState(() => readInitialFrame(initialFrame));
+  const frameCount = fixture.frames.length;
+  const [frameIndex, setFrameIndex] = useState(() => readInitialFrame(initialFrame, frameCount));
 
   useEffect(() => {
-    setFrameIndex(readInitialFrame(initialFrame));
-  }, [initialFrame]);
+    setFrameIndex(readInitialFrame(initialFrame, frameCount));
+  }, [frameCount, initialFrame]);
 
   const frame = fixture.frames[frameIndex] ?? fixture.frames[0]!;
   const activeAgent = fixture.agents.find((agent) => agent.id === frame.activeAgentId) ?? fixture.agents[0]!;
   const activeStageIndex = fixture.stages.findIndex((stage) => stage.id === frame.activeStageId);
 
   const progressLabel = useMemo(
-    () => `${frameIndex + 1} of ${fixture.frames.length}`,
-    [fixture.frames.length, frameIndex],
+    () => `${frameIndex + 1} of ${frameCount}`,
+    [frameCount, frameIndex],
   );
 
   const moveFrame = (delta: number) => {
-    setFrameIndex((current) => clampDeckProductFlowFrame(current + delta));
+    setFrameIndex((current) => clampDeckProductFlowFrame(current + delta, frameCount));
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -87,7 +88,7 @@ export function DeckProductFlowHarness({
       setFrameIndex(0);
     } else if (event.key === "End") {
       event.preventDefault();
-      setFrameIndex(fixture.frames.length - 1);
+      setFrameIndex(clampDeckProductFlowFrame(frameCount - 1, frameCount));
     }
   };
 

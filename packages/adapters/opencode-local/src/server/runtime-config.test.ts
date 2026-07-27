@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prepareOpenCodeRuntimeConfig } from "./runtime-config.js";
 
 const cleanupPaths = new Set<string>();
+const originalOpenRouterApiKey = process.env.OPENROUTER_API_KEY;
 
 afterEach(async () => {
   await Promise.all(
@@ -13,6 +14,18 @@ afterEach(async () => {
       cleanupPaths.delete(filepath);
     }),
   );
+});
+
+beforeEach(() => {
+  delete process.env.OPENROUTER_API_KEY;
+});
+
+afterEach(async () => {
+  if (originalOpenRouterApiKey === undefined) {
+    delete process.env.OPENROUTER_API_KEY;
+  } else {
+    process.env.OPENROUTER_API_KEY = originalOpenRouterApiKey;
+  }
 });
 
 async function makeConfigHome(initialConfig?: Record<string, unknown>) {
@@ -117,6 +130,76 @@ describe("prepareOpenCodeRuntimeConfig", () => {
     } finally {
       delete process.env.PAPERCLIP_OPENCODE_PROVIDERS;
     }
+  });
+
+  it("injects a default OpenRouter provider when OPENROUTER_API_KEY is present", async () => {
+    const configHome = await makeConfigHome({ permission: { read: "allow" } });
+    const prepared = await prepareOpenCodeRuntimeConfig({
+      env: { XDG_CONFIG_HOME: configHome, OPENROUTER_API_KEY: "or-test-key" },
+      config: {},
+    });
+    cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
+    const runtimeConfig = JSON.parse(
+      await fs.readFile(path.join(prepared.env.XDG_CONFIG_HOME, "opencode", "opencode.json"), "utf8"),
+    ) as { provider?: Record<string, { npm: string; name: string; options: { baseURL: string; apiKey: string } }> };
+    expect(runtimeConfig.provider?.openrouter).toMatchObject({
+      npm: "@ai-sdk/openai-compatible",
+      name: "OpenRouter",
+      options: {
+        baseURL: "https://openrouter.ai/api/v1",
+        apiKey: "or-test-key",
+      },
+    });
+    expect(prepared.notes).toContain(
+      "Injected default OpenRouter provider from OPENROUTER_API_KEY into the runtime OpenCode config.",
+    );
+    await prepared.cleanup();
+  });
+
+  it("does not clobber a custom OpenRouter provider while injecting missing OpenRouter defaults", async () => {
+    const configHome = await makeConfigHome({ permission: { read: "allow" } });
+    const providers = {
+      openrouter: {
+        npm: "@some/vendor-sdk",
+        name: "Enterprise Gateway",
+        options: {
+          baseURL: "https://gateway.example/api/v1",
+        },
+        models: { "example/model-a": { name: "Model A" } },
+      },
+    };
+    const prepared = await prepareOpenCodeRuntimeConfig({
+      env: {
+        XDG_CONFIG_HOME: configHome,
+        OPENROUTER_API_KEY: "or-test-key",
+        PAPERCLIP_OPENCODE_PROVIDERS: JSON.stringify(providers),
+      },
+      config: { model: "openrouter/example/model-a" },
+    });
+    cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
+    const runtimeConfig = JSON.parse(
+      await fs.readFile(path.join(prepared.env.XDG_CONFIG_HOME, "opencode", "opencode.json"), "utf8"),
+    ) as {
+      provider?: {
+        openrouter?: {
+          npm: string;
+          name: string;
+          options?: { baseURL: string; apiKey?: string };
+          models?: Record<string, unknown>;
+        };
+      };
+    };
+    expect(runtimeConfig.provider?.openrouter?.npm).toBe("@some/vendor-sdk");
+    expect(runtimeConfig.provider?.openrouter?.name).toBe("Enterprise Gateway");
+    expect(runtimeConfig.provider?.openrouter?.options?.baseURL).toBe("https://gateway.example/api/v1");
+    expect(runtimeConfig.provider?.openrouter?.options?.apiKey).toBe("or-test-key");
+    expect(runtimeConfig.provider?.openrouter?.models).toEqual({
+      "example/model-a": { name: "Model A" },
+    });
+    expect(prepared.notes).toContain(
+      "Injected default OpenRouter provider from OPENROUTER_API_KEY into the runtime OpenCode config.",
+    );
+    await prepared.cleanup();
   });
 
   it("expands {env:VAR} placeholders in custom providers using the run/process env (bakes the literal vk)", async () => {

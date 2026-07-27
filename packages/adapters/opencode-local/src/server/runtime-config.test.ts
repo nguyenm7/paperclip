@@ -156,6 +156,34 @@ describe("prepareOpenCodeRuntimeConfig", () => {
     await prepared.cleanup();
   });
 
+  it("falls back to a process-level OPENROUTER_API_KEY when the run env sets an empty value", async () => {
+    // A blank run-env key must not mask a valid process-level key: model
+    // discovery reads process.env, so skipping injection here would leave
+    // OpenRouter models selectable but unrunnable.
+    process.env.OPENROUTER_API_KEY = "or-process-key";
+    const configHome = await makeConfigHome({ permission: { read: "allow" } });
+    const prepared = await prepareOpenCodeRuntimeConfig({
+      env: { XDG_CONFIG_HOME: configHome, OPENROUTER_API_KEY: "" },
+      config: {},
+    });
+    cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
+    const runtimeConfig = JSON.parse(
+      await fs.readFile(path.join(prepared.env.XDG_CONFIG_HOME, "opencode", "opencode.json"), "utf8"),
+    ) as { provider?: Record<string, { npm: string; name: string; options: { baseURL: string; apiKey: string } }> };
+    expect(runtimeConfig.provider?.openrouter).toMatchObject({
+      npm: "@ai-sdk/openai-compatible",
+      name: "OpenRouter",
+      options: {
+        baseURL: "https://openrouter.ai/api/v1",
+        apiKey: "or-process-key",
+      },
+    });
+    expect(prepared.notes).toContain(
+      "Injected default OpenRouter provider from OPENROUTER_API_KEY into the runtime OpenCode config.",
+    );
+    await prepared.cleanup();
+  });
+
   it("does not clobber a custom OpenRouter provider while injecting missing OpenRouter defaults", async () => {
     const configHome = await makeConfigHome({ permission: { read: "allow" } });
     const providers = {

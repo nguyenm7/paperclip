@@ -225,7 +225,13 @@ export async function prepareOpenCodeRuntimeConfig(input: {
     );
   }
 
-  const openRouterApiKey = input.env.OPENROUTER_API_KEY?.trim() ?? process.env.OPENROUTER_API_KEY?.trim();
+  // Prefer the run-env key, but treat a blank/whitespace value as absent so a
+  // valid process-level key still wins. Using `??` here would let an empty
+  // `OPENROUTER_API_KEY=""` in the run env mask a real process key, skipping
+  // provider injection even though model discovery (which reads process.env)
+  // still surfaces OpenRouter models — leaving them selectable but unrunnable.
+  const openRouterApiKey =
+    input.env.OPENROUTER_API_KEY?.trim() || process.env.OPENROUTER_API_KEY?.trim() || undefined;
   if (openRouterApiKey) {
     const { providers: providersWithOpenRouter, changed } = ensureOpenRouterProviderInConfig(
       nextProvider,

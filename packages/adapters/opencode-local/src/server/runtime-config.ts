@@ -115,7 +115,14 @@ function ensureOpenRouterProviderInConfig(
     providerOptions.baseURL = OPENROUTER_DEFAULT_PROVIDER_BASE_URL;
     changed = true;
   }
-  if (!("apiKey" in providerOptions)) {
+  // Treat a blank/whitespace (or non-string) existing apiKey as absent so the
+  // resolved OPENROUTER_API_KEY still wins. A mere presence check would keep an
+  // explicit `apiKey: ""` from PAPERCLIP_OPENCODE_PROVIDERS, leaving OpenRouter
+  // models discoverable (discovery reads process.env) but unrunnable — the same
+  // "selectable but unauthenticated" failure the run-env key resolution guards
+  // against above.
+  const existingApiKey = providerOptions.apiKey;
+  if (typeof existingApiKey !== "string" || existingApiKey.trim().length === 0) {
     providerOptions.apiKey = openRouterApiKey;
     changed = true;
   }

@@ -230,6 +230,36 @@ describe("prepareOpenCodeRuntimeConfig", () => {
     await prepared.cleanup();
   });
 
+  it("fills a blank apiKey on a custom OpenRouter provider with the resolved key", async () => {
+    // A custom openrouter provider that declares an empty/whitespace apiKey must
+    // not mask the resolved OPENROUTER_API_KEY: a bare presence check would keep
+    // the blank value, leaving models discoverable but unauthenticated at runtime.
+    const configHome = await makeConfigHome({ permission: { read: "allow" } });
+    const providers = {
+      openrouter: {
+        options: {
+          baseURL: "https://gateway.example/api/v1",
+          apiKey: "   ",
+        },
+      },
+    };
+    const prepared = await prepareOpenCodeRuntimeConfig({
+      env: {
+        XDG_CONFIG_HOME: configHome,
+        OPENROUTER_API_KEY: "or-test-key",
+        PAPERCLIP_OPENCODE_PROVIDERS: JSON.stringify(providers),
+      },
+      config: {},
+    });
+    cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
+    const runtimeConfig = JSON.parse(
+      await fs.readFile(path.join(prepared.env.XDG_CONFIG_HOME, "opencode", "opencode.json"), "utf8"),
+    ) as { provider?: { openrouter?: { options?: { baseURL: string; apiKey?: string } } } };
+    expect(runtimeConfig.provider?.openrouter?.options?.baseURL).toBe("https://gateway.example/api/v1");
+    expect(runtimeConfig.provider?.openrouter?.options?.apiKey).toBe("or-test-key");
+    await prepared.cleanup();
+  });
+
   it("expands {env:VAR} placeholders in custom providers using the run/process env (bakes the literal vk)", async () => {
     const configHome = await makeConfigHome({ permission: { read: "allow" } });
     const providers = {

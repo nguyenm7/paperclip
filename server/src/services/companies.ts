@@ -15,6 +15,16 @@ import {
   budgetPolicies,
   companySecretBindings,
   companySkillTestRuns,
+  decisionArchiveNotificationOutbox,
+  decisionBundles,
+  decisionEffectExecutions,
+  decisionQueueItems,
+  decisionQueues,
+  decisionRetention,
+  decisions,
+  decisionTargetIssues,
+  decisionTriage,
+  decisionTriageEvents,
   documentAnnotationAnchorSnapshots,
   documentAnnotationComments,
   documentAnnotationThreads,
@@ -83,6 +93,15 @@ type CompanyScopedTable = PgTable & { companyId: AnyPgColumn };
  * here in the right position.
  */
 export const companyRemoveCascadeOrder: readonly CompanyScopedTable[] = [
+  decisionTargetIssues,
+  decisions,
+  decisionBundles,
+  decisionTriageEvents,
+  decisionQueueItems,
+  decisionTriage,
+  decisionQueues,
+  decisionRetention,
+  decisionArchiveNotificationOutbox,
   heartbeatRunEvents,
   heartbeatRunWatchdogDecisions,
   agentTaskSessions,
@@ -144,6 +163,15 @@ export const companyRemoveCascadeOrder: readonly CompanyScopedTable[] = [
   projects,
   goals,
   agents,
+];
+
+/**
+ * Tables with a blocking FK chain to `companies` but no `company_id` column.
+ * `remove()` sweeps each with a dedicated delete before the ordered cascade
+ * above; the cascade test counts them as covered.
+ */
+export const companyRemoveSpecialCasedTables: readonly PgTable[] = [
+  decisionEffectExecutions,
 ];
 
 export interface CompanyActivityActor {
@@ -549,6 +577,18 @@ export function companyService(db: Db) {
             .delete(heartbeatRunEvents)
             .where(inArray(heartbeatRunEvents.runId, companyRunIds.map((run) => run.id)));
         }
+        // decision_effect_executions has no company_id; sweep rows that block
+        // this company's issues via target_issue_id. Rows tied to this
+        // company's decisions with other targets go via ON DELETE CASCADE when
+        // the decisions rows are deleted below.
+        await tx
+          .delete(decisionEffectExecutions)
+          .where(
+            inArray(
+              decisionEffectExecutions.targetIssueId,
+              tx.select({ id: issues.id }).from(issues).where(eq(issues.companyId, id)),
+            ),
+          );
         for (const table of companyRemoveCascadeOrder) {
           await tx.delete(table).where(eq(table.companyId, id));
         }

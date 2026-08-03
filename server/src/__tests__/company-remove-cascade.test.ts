@@ -2,7 +2,7 @@ import { is } from "drizzle-orm";
 import { PgTable, getTableConfig } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 import * as schema from "@paperclipai/db";
-import { companyRemoveCascadeOrder } from "../services/companies.js";
+import { companyRemoveCascadeOrder, companyRemoveSpecialCasedTables } from "../services/companies.js";
 
 // onDelete values that block deleting the referenced row. Drizzle's default
 // (undefined) maps to Postgres NO ACTION, which blocks like RESTRICT.
@@ -39,8 +39,11 @@ describe("company remove cascade", () => {
   const tables = allTables();
   const edges = blockingEdges(tables);
   const orderNames = companyRemoveCascadeOrder.map((table) => getTableConfig(table).name);
+  // Special-cased tables have no company_id; remove() sweeps them with a
+  // dedicated delete before the ordered cascade, so they count as covered.
+  const specialNames = companyRemoveSpecialCasedTables.map((table) => getTableConfig(table).name);
   // companies is deleted last by remove(), after the ordered list.
-  const covered = new Set([...orderNames, "companies"]);
+  const covered = new Set([...orderNames, ...specialNames, "companies"]);
 
   it("introspects a non-trivial schema (guards against vacuous passes)", () => {
     expect(tables.size).toBeGreaterThan(50);
@@ -51,6 +54,17 @@ describe("company remove cascade", () => {
 
   it("has no duplicate tables in the cascade order", () => {
     expect(new Set(orderNames).size).toBe(orderNames.length);
+  });
+
+  it("special-cases only tables that lack company_id and are not in the ordered list", () => {
+    for (const table of companyRemoveSpecialCasedTables) {
+      const config = getTableConfig(table);
+      expect(
+        config.columns.some((column) => column.name === "company_id"),
+        `${config.name} has a company_id column; move it into companyRemoveCascadeOrder`,
+      ).toBe(false);
+      expect(orderNames).not.toContain(config.name);
+    }
   });
 
   it("deletes by company_id, so every listed table must carry that column", () => {

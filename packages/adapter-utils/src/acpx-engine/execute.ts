@@ -130,12 +130,24 @@ function flushChildStderr(state: ChildStderrState) {
   state.pendingLiveLine = "";
 }
 
-type AcpxRuntimeFactory = (options: AcpRuntimeOptions) => AcpRuntime;
+type AcpxAgentProcessIdentity = { pid: number; startedAt: string };
+
+type PaperclipAcpRuntimeOptions = AcpRuntimeOptions & {
+  onAgentSpawn?: (meta: AcpxAgentProcessIdentity) => Promise<void>;
+};
+
+type AcpxProcessIdentitySink = {
+  current: AdapterExecutionContext["onSpawn"];
+  latest: AcpxAgentProcessIdentity | null;
+};
+
+type AcpxRuntimeFactory = (options: PaperclipAcpRuntimeOptions) => AcpRuntime;
 
 export interface RuntimeCacheEntry {
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
   childStderrState: ChildStderrState;
+  processIdentitySink: AcpxProcessIdentitySink;
   fingerprint: string;
   lastUsedAt: number;
   cleanupTimer?: NodeJS.Timeout;
@@ -2321,7 +2333,17 @@ async function emitAcpxLog(ctx: AdapterExecutionContext, payload: Record<string,
   await ctx.onLog("stdout", `${JSON.stringify(payload)}\n`);
 }
 
-async function emitRuntimeEvent(ctx: AdapterExecutionContext, event: AcpRuntimeEvent) {
+// acpx substitutes a literal "tool call" title when an ACP tool_call_update
+// omits one, which would persist a generic name over the real one ("Terminal",
+// "Read", …) in the stored run log. Remember each call's real title so update
+// lines keep the name durably.
+const GENERIC_ACP_TOOL_TITLE = "tool call";
+
+async function emitRuntimeEvent(
+  ctx: AdapterExecutionContext,
+  event: AcpRuntimeEvent,
+  toolTitles?: Map<string, string>,
+) {
   if (event.type === "text_delta") {
     await emitAcpxLog(ctx, {
       type: "acpx.text_delta",
@@ -2334,9 +2356,21 @@ async function emitRuntimeEvent(ctx: AdapterExecutionContext, event: AcpRuntimeE
   if (event.type === "tool_call") {
     const eventRecord = event as Record<string, unknown>;
     const toolInput = eventRecord.input;
+    let name = event.title ?? "acp_tool";
+    const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : "";
+    if (toolTitles && toolCallId) {
+      if (event.title && event.title !== GENERIC_ACP_TOOL_TITLE) {
+        // First real title is the call's identity; later retitles (ACP swaps
+        // in the invocation, e.g. "Terminal" → "ls -la") keep their own line
+        // but don't become the remembered name.
+        if (!toolTitles.has(toolCallId)) toolTitles.set(toolCallId, event.title);
+      } else {
+        name = toolTitles.get(toolCallId) ?? name;
+      }
+    }
     await emitAcpxLog(ctx, {
       type: "acpx.tool_call",
-      name: event.title ?? "acp_tool",
+      name,
       toolCallId: event.toolCallId,
       status: event.status,
       text: event.text,
@@ -2972,9 +3006,17 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
     const resumeSessionId = canResume ? asString(previousParams.acpSessionId, "") || undefined : undefined;
     const cached = canResume ? warmHandles.get(prepared.sessionKey) : undefined;
     const childStderrState = cached?.childStderrState ?? { logPath: null, pendingLiveLine: "" };
+    const processIdentitySink = cached?.processIdentitySink ?? {
+      current: ctx.onSpawn,
+      latest: null,
+    };
+    // ACPX runtimes can stay warm across heartbeat runs. Keep the callback
+    // target mutable so a later agent respawn records identity on the current
+    // heartbeat instead of the run that originally created the runtime.
+    processIdentitySink.current = ctx.onSpawn;
     flushChildStderr(childStderrState);
     childStderrState.logPath = prepared.childStderrLogPath;
-    const runtimeOptions: AcpRuntimeOptions = {
+    const runtimeOptions: PaperclipAcpRuntimeOptions = {
       cwd: prepared.cwd,
       // Host-only spawn cwd for the relay proxy on the remote process-session
       // lane; `undefined` elsewhere so acpx falls back to `cwd` (byte-identical).
@@ -2995,14 +3037,23 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
       onAgentStderr: prepared.childStderrLogPath
         ? (chunk) => routeChildStderr(childStderrState, chunk)
         : undefined,
+      onAgentSpawn: async (meta) => {
+        processIdentitySink.latest = meta;
+        await processIdentitySink.current?.({
+          pid: meta.pid,
+          processGroupId: null,
+          startedAt: meta.startedAt,
+        });
+      },
     };
     // Open Q2: split the ~7s `acp.handshake` into the two in-repo-observable
     // sub-phases — the ACP runtime construction (`createRuntime`) vs the session
-    // establishment envelope (`ensureSession`). The finer spawn/`initialize`/
-    // `session/new` split lives inside external `acpx` and is gated on an
-    // upstream lifecycle hook (not bundled here). `createRuntime` runs once and
-    // only on a cold start; a warm-handle hit reuses `cached.runtime`, so
-    // `createRuntimeMs` stays undefined and the split reports nothing for it.
+    // establishment envelope (`ensureSession`). The patched spawn lifecycle
+    // hook records process identity, but the finer spawn/`initialize`/
+    // `session/new` timing split still lives inside external `acpx`.
+    // `createRuntime` runs once and only on a cold start; a warm-handle hit
+    // reuses `cached.runtime`, so `createRuntimeMs` stays undefined and the
+    // split reports nothing for it.
     let createRuntimeMs: number | undefined;
     let runtime: AcpRuntime;
     if (cached?.runtime) {
@@ -3082,6 +3133,16 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
             }),
           });
         }
+      }
+      // A compatible warm handle reuses the already-running ACP agent and does
+      // not emit another spawn event. Persist its known identity on this run
+      // before the next prompt starts so every running heartbeat is adoptable.
+      if (handle && cached && processIdentitySink.latest && ctx.onSpawn) {
+        await ctx.onSpawn({
+          pid: processIdentitySink.latest.pid,
+          processGroupId: null,
+          startedAt: processIdentitySink.latest.startedAt,
+        });
       }
     } catch (err) {
       // Bring-up failed at the handshake — close the root span with error status.
@@ -3255,13 +3316,14 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
       cancelActiveTurn = async (reason: string) => {
         await turn.cancel({ reason });
       };
+      const toolTitles = new Map<string, string>();
       for await (const event of turn.events) {
         if (event.type === "text_delta") textParts.push(event.text);
         if (event.type === "status" && event.tag === "usage_update") {
           eventBreakdown = event.breakdown ?? eventBreakdown;
           eventCostUsd = usdCostAmount(event.cost) ?? eventCostUsd;
         }
-        await emitRuntimeEvent(ctx, event);
+        await emitRuntimeEvent(ctx, event, toolTitles);
       }
       const terminal = await turn.result;
       if (timeout) clearTimeout(timeout);
@@ -3303,6 +3365,7 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
             runtime,
             handle: sessionHandle,
             childStderrState,
+            processIdentitySink,
             fingerprint: prepared.fingerprint,
             lastUsedAt: now(),
           };

@@ -3,6 +3,8 @@ import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/i18n";
 import { Layout } from "./components/Layout";
 import { ConferenceRoomChatGate } from "./components/ConferenceRoomChatGate";
+import { TaskChatRedesignGate } from "./components/TaskChatRedesignGate";
+import { TaskChatLab } from "./pages/TaskChatLab";
 import { PipelinesExperimentalGate } from "./components/PipelinesExperimentalGate";
 import { CasesExperimentalGate } from "./components/CasesExperimentalGate";
 import { StatusCardsExperimentalGate } from "./components/StatusCardsExperimentalGate";
@@ -40,8 +42,10 @@ import { Approvals } from "./pages/Approvals";
 import { ApprovalDetail } from "./pages/ApprovalDetail";
 import { Costs } from "./pages/Costs";
 import { Activity } from "./pages/Activity";
+import { CompanyAudit } from "./pages/audit/CompanyAudit";
 import { Inbox } from "./pages/Inbox";
 import { WhatNeedsMe } from "./pages/WhatNeedsMe";
+import { DecisionQueuePage } from "./pages/DecisionQueuePage";
 import { TrainingInspector, TrainingLibrary } from "./pages/Training";
 import { BoardChat } from "./pages/BoardChat";
 import { CompanySettings } from "./pages/CompanySettings";
@@ -258,6 +262,7 @@ function boardRoutes() {
       <Route path="approvals/:approvalId" element={<ApprovalDetail />} />
       <Route path="costs" element={<Costs />} />
       <Route path="activity" element={<Activity />} />
+      <Route path="audit" element={<CompanyAudit />} />
       {/* Conference Room Chat surfaces (PAP-136/PAP-137): routes stay
           registered but redirect to the company home while the experimental
           flag is off. The board-level `artifacts` mount below is the new
@@ -267,7 +272,16 @@ function boardRoutes() {
         <Route path="board-chat" element={<BoardChat />} />
         <Route path="artifacts" element={<Artifacts />} />
       </Route>
+      {/* Task Chat Redesign dev harness — dev builds only, and additionally
+          gated by enableTaskChatRedesign (redirects to /dashboard when the
+          flag is off). */}
+      {import.meta.env.DEV ? (
+        <Route element={<TaskChatRedesignGate />}>
+          <Route path="dev/task-chat-lab" element={<TaskChatLab />} />
+        </Route>
+      ) : null}
       <Route path="decisions" element={<WhatNeedsMe />} />
+      <Route path="decisions/queues/:key" element={<DecisionQueuePage />} />
       <Route path="decisions/training" element={<TrainingLibrary />} />
       <Route path="decisions/training/:id" element={<TrainingInspector />} />
       <Route path="training" element={<Navigate to="/decisions/training" replace />} />

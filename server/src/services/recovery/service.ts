@@ -645,6 +645,21 @@ function isStrandedIssueRecoveryIssue(issue: Pick<typeof issues.$inferSelect, "o
   return isStrandedIssueRecoveryOriginKind(issue.originKind);
 }
 
+/**
+ * True when the issue's latest run was cancelled by a board operator (the
+ * board cancel route stamps the attribution; interrupt-by-comment uses the
+ * operator_interrupted error code). While such a run is the latest activity
+ * on an issue, recovery stands down entirely: the operator deliberately
+ * stopped the agent, and re-waking it — or escalating "stranding" — would
+ * fight the human. Any newer run or wake supersedes the exemption.
+ */
+function isOperatorCancelledRun(latestRun: LatestIssueRun): boolean {
+  if (!latestRun || latestRun.status !== "cancelled") return false;
+  if (latestRun.errorCode === "operator_interrupted") return true;
+  const result = parseObject(latestRun.resultJson);
+  return result.cancelledByActorType === "user" || result.cancelledByActorType === "board";
+}
+
 function isUnsuccessfulTerminalIssueRun(latestRun: LatestIssueRun) {
   return Boolean(
     latestRun &&
@@ -2913,7 +2928,9 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         : recoveryCause === "workspace_validation_failed"
           ? readWorkspaceValidationPayload(input.latestRun)?.reason === "git_worktree_branch_incoherence"
             ? "Repair the source issue git worktree branch incoherence, or choose a new execution workspace, before resuming adapter execution."
-            : "Repair the source issue workspace link, project workspace cwd, or git checkout before resuming adapter execution."
+            : readWorkspaceValidationPayload(input.latestRun)?.reason === "git_worktree_base_materialization_failed"
+              ? "Repair the project workspace repository URL or clone access, or configure a local checkout cwd, before resuming adapter execution."
+              : "Repair the source issue workspace link, project workspace cwd, or git checkout before resuming adapter execution."
         : recoveryCause === "configuration_incomplete"
           ? "Bind the missing secret(s) named in the run failure to the agent/project/routine env before resuming adapter execution."
         : recoveryCause === "execution_review_participant_recovery"
@@ -3653,6 +3670,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       waitingOnReviewResolved: 0,
       providerQuotaMonitored: 0,
       recentProgressExempted: 0,
+      operatorCancelExempted: 0,
       skipped: 0,
       issueIds: [] as string[],
     };
@@ -3703,6 +3721,10 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       }
 
       let latestRun = await getLatestIssueRun(issue.companyId, issue.id);
+      if (isOperatorCancelledRun(latestRun)) {
+        result.operatorCancelExempted += 1;
+        continue;
+      }
       if (latestRun?.status === "succeeded" && await hasPersistedDurableWaitPath(issue)) {
         result.skipped += 1;
         continue;

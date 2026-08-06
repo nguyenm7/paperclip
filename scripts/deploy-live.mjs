@@ -64,6 +64,21 @@ if (source !== "service-registry") {
   process.exit(1);
 }
 
+// Resolve the health endpoint BEFORE touching the tree. A registry record can
+// carry a port without a url; a deploy we cannot health-gate is one we refuse
+// to start, because the alternative is fast-forwarding and then falsely
+// reporting the result (a "null/api/health" probe times out and tells the
+// operator to roll back a deploy that worked).
+const healthBase =
+  service.url ?? (typeof service.port === "number" ? `http://127.0.0.1:${service.port}` : null);
+if (!healthBase) {
+  console.error(
+    `The registry record for the serving process has neither url nor port, so the\n` +
+      `deploy cannot be health-gated. Refusing to start; nothing was changed.`,
+  );
+  process.exit(1);
+}
+
 const mainWorktree = git(["rev-parse", "--path-format=absolute", "--git-common-dir"], process.cwd());
 const servingIsThisRepo = (() => {
   try {
@@ -83,7 +98,7 @@ if (servingIsThisRepo) {
   process.exit(1);
 }
 
-console.log(`serving tree: ${liveTree}  (pid ${service.pid}, ${service.url})`);
+console.log(`serving tree: ${liveTree}  (pid ${service.pid}, ${healthBase})`);
 
 const before = git(["rev-parse", "HEAD"], liveTree);
 git(["fetch", "origin", "master"], liveTree);
@@ -139,7 +154,7 @@ if (lockChanged) {
 }
 
 console.log("waiting for the server to come back...");
-if (await waitForHealth(`${service.url}/api/health`)) {
+if (await waitForHealth(`${healthBase}/api/health`)) {
   console.log(`deployed: ${liveTree} is serving ${target.slice(0, 9)}`);
   process.exit(0);
 }

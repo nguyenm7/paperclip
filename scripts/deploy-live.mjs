@@ -123,7 +123,19 @@ console.log(`fast-forwarded to ${target.slice(0, 9)}`);
 
 if (lockChanged) {
   console.log("lockfile changed -- installing dependencies (the server will be unhealthy until this finishes)");
-  run("pnpm", ["install", "--frozen-lockfile"], liveTree);
+  try {
+    run("pnpm", ["install", "--frozen-lockfile"], liveTree);
+  } catch (error) {
+    // Do not leave the tree on new code with a half-installed node_modules --
+    // that is a crash loop, not a deploy. Point the tree back at the commit the
+    // current install belongs to.
+    git(["reset", "--hard", before], liveTree);
+    console.error(
+      `pnpm install failed; rolled the serving tree back to ${before.slice(0, 9)}.\n` +
+        `Fix the install (disk, registry, lockfile) and rerun pnpm deploy:live.\n${error.message ?? error}`,
+    );
+    process.exit(1);
+  }
 }
 
 console.log("waiting for the server to come back...");

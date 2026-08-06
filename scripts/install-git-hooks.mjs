@@ -55,8 +55,20 @@ function main() {
     const source = path.join(SOURCE_DIR, hook);
     const target = path.join(hooksDir, hook);
 
-    const alreadyCurrent =
-      existsSync(target) && readFileSync(target, "utf8") === readFileSync(source, "utf8");
+    const sourceContent = readFileSync(source, "utf8");
+    const existing = existsSync(target) ? readFileSync(target, "utf8") : null;
+    const alreadyCurrent = existing === sourceContent;
+
+    // Overwrite our own previous versions freely, but never clobber a hook we
+    // did not install -- a lint or secret-scanning guard someone set up
+    // independently would vanish without a trace.
+    if (existing !== null && !alreadyCurrent && !existing.includes(`Paperclip ${hook} hook`)) {
+      console.error(
+        `hooks:install -- ${target} already exists and was not installed by this script; ` +
+          `refusing to overwrite it. Move it aside, or chain scripts/git-hooks/${hook} from it.`,
+      );
+      process.exit(1);
+    }
 
     copyFileSync(source, target);
     chmodSync(target, 0o755);

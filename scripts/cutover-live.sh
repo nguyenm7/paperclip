@@ -31,7 +31,10 @@
 
 set -uo pipefail
 
-SERVING_TREE="${SERVING_TREE:-/Users/annica/paperclip-live}"
+# Default resolved after REPO_ROOT is known: a `paperclip-live` sibling of the
+# repo this script ships in, so the default is meaningful on any operator's
+# machine rather than one person's home directory.
+SERVING_TREE="${SERVING_TREE:-}"
 DRY_RUN=0
 HEALTH_TIMEOUT_SECS=180
 STOP_TIMEOUT_SECS=60
@@ -52,6 +55,7 @@ while [ $# -gt 0 ]; do
 done
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SERVING_TREE="${SERVING_TREE:-$(dirname "$REPO_ROOT")/paperclip-live}"
 LOG_DIR="${HOME}/.paperclip/instances/${PAPERCLIP_INSTANCE_ID:-default}/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="${LOG_DIR}/cutover-live.log"
@@ -214,9 +218,30 @@ check "serving tree's node_modules was installed from the lockfile it will serve
 # able to open a data directory initialised by the old one. A major-version skew
 # here does not degrade -- Postgres refuses to start, and the company has no
 # database.
+#
+# pnpm installs only the platform-matching @embedded-postgres package, so the
+# folder name to look for depends on where this script runs. Derive it rather
+# than hard-coding one platform; on an unrecognised platform fall back to
+# matching any of them (the major-version skew is the failure this guards, not
+# the platform suffix).
+case "$(uname -s)" in
+  Darwin) pg_pkg_os="darwin" ;;
+  Linux)  pg_pkg_os="linux" ;;
+  *)      pg_pkg_os="" ;;
+esac
+case "$(uname -m)" in
+  arm64|aarch64) pg_pkg_arch="arm64" ;;
+  x86_64|amd64)  pg_pkg_arch="x64" ;;
+  *)             pg_pkg_arch="" ;;
+esac
+if [ -n "$pg_pkg_os" ] && [ -n "$pg_pkg_arch" ]; then
+  pg_pkg_platform="${pg_pkg_os}-${pg_pkg_arch}"
+else
+  pg_pkg_platform="*"
+fi
 PG_DATA_VERSION="$(cat "${HOME}/.paperclip/instances/${PAPERCLIP_INSTANCE_ID:-default}/db/PG_VERSION" 2>/dev/null || echo "?")"
 check "serving tree ships embedded-postgres major ${PG_DATA_VERSION} (matches the cluster on disk)" \
-  "ls -d '${SERVING_TREE}'/node_modules/.pnpm/@embedded-postgres+darwin-arm64@${PG_DATA_VERSION}.* >/dev/null 2>&1"
+  "ls -d '${SERVING_TREE}'/node_modules/.pnpm/@embedded-postgres+${pg_pkg_platform}@${PG_DATA_VERSION}.* >/dev/null 2>&1"
 
 if [ "$precondition_failures" -gt 0 ]; then
   fail "${precondition_failures} precondition(s) failed -- nothing was stopped, the control plane is untouched"

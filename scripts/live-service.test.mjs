@@ -132,7 +132,30 @@ test("ignores services that are not the control plane", () => {
   assert.equal(findServingService(env), null);
 });
 
-test("when two servers are registered, the newest owns the port", () => {
+test("the process holding the production port wins over a newer one that relocated", () => {
+  // A second server started while the port was busy relocates to a free port,
+  // so the newer process can be the one NOT serving production.
+  const env = makeRegistry({
+    holder: {
+      profileKind: "paperclip-dev",
+      cwd: "/Users/annica/paperclip-live",
+      pid: process.pid,
+      port: 3100,
+      startedAt: "2026-06-18T04:30:29.469Z",
+    },
+    relocated: {
+      profileKind: "paperclip-dev",
+      cwd: "/Users/annica/Paperclip",
+      pid: process.pid,
+      port: 3101,
+      startedAt: "2026-07-14T13:00:00.000Z",
+    },
+  });
+
+  assert.equal(findServingService(env).cwd, "/Users/annica/paperclip-live");
+});
+
+test("when no record names the production port, the newest wins", () => {
   const env = makeRegistry({
     old: {
       profileKind: "paperclip-dev",

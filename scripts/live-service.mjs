@@ -135,8 +135,19 @@ export function findServingService(env = process.env) {
 
   if (candidates.length === 0) return null;
 
-  // If two servers are somehow up, the most recently started one owns the port.
-  candidates.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
+  // If two servers are somehow up, the one holding the production port is
+  // production. Recency alone gets this wrong: a second server started while
+  // the port was busy relocates to a free port, so the *newer* process can be
+  // the one NOT serving. Only one process can bind the port, so the port test
+  // is decisive; recency is just the tie-break for records that never learned
+  // their port.
+  const productionPort = Number.parseInt(env.PORT ?? "", 10) || 3100;
+  candidates.sort((a, b) => {
+    const aHoldsPort = a.port === productionPort ? 1 : 0;
+    const bHoldsPort = b.port === productionPort ? 1 : 0;
+    if (aHoldsPort !== bHoldsPort) return bHoldsPort - aHoldsPort;
+    return String(b.startedAt).localeCompare(String(a.startedAt));
+  });
   return candidates[0];
 }
 

@@ -3981,7 +3981,7 @@ export async function startWikiQuerySession(ctx: PluginContext, input: QuerySess
   const sendResult = await ctx.agents.sessions.sendMessage(session.sessionId, input.companyId, {
     prompt,
     reason: "LLM Wiki query",
-    onEvent: (event) => {
+    onEvent: async (event) => {
       if (event.eventType === "chunk" && event.stream !== "stderr" && event.message) {
         answer += event.message;
       }
@@ -4009,7 +4009,7 @@ export async function startWikiQuerySession(ctx: PluginContext, input: QuerySess
           message: event.message,
         });
         ctx.streams.close(channel);
-        void markOperation(ctx, {
+        await markOperation(ctx, {
           companyId: input.companyId,
           operationId: operation.operationId,
           status: finalStatus,
@@ -4017,21 +4017,21 @@ export async function startWikiQuerySession(ctx: PluginContext, input: QuerySess
           warning: event.eventType === "error" ? event.message : null,
           metadata: { answerLength: answer.length },
         });
-        void ctx.db.execute(
+        await ctx.db.execute(
           `UPDATE ${tableName(ctx.db.namespace, "wiki_query_sessions")}
               SET status = $3,
                   updated_at = now()
             WHERE company_id = $1 AND id = $2`,
           [input.companyId, operation.operationId, finalStatus === "done" ? "completed" : "failed"],
         );
-        void ctx.issues.createComment(
+        await ctx.issues.createComment(
           operation.issue.id,
           event.eventType === "done"
             ? `Query completed.\n\n${answer.trim() || "_No answer text was streamed._"}`
             : `Query failed: ${event.message ?? "agent session ended with an error"}`,
           input.companyId,
         );
-        void ctx.issues.update(
+        await ctx.issues.update(
           operation.issue.id,
           { status: event.eventType === "done" ? "done" : "blocked", originRunId: event.runId },
           input.companyId,

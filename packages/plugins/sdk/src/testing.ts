@@ -139,7 +139,10 @@ export interface TestHarness {
   /** Read raw in-memory state for assertions. */
   getState(input: ScopeKey): unknown;
   /** Simulate a streaming event arriving for an active session. */
-  simulateSessionEvent(sessionId: string, event: Omit<AgentSessionEvent, "sessionId">): void;
+  simulateSessionEvent(
+    sessionId: string,
+    event: Omit<AgentSessionEvent, "sessionId" | "companyId">,
+  ): Promise<void>;
   logs: TestHarnessLogEntry[];
   activity: Array<{ message: string; entityType?: string; entityId?: string; metadata?: Record<string, unknown> }>;
   metrics: Array<{ name: string; value: number; tags?: Record<string, string> }>;
@@ -568,7 +571,10 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
   const localFolderFiles = new Map<string, string>();
 
   const sessions = new Map<string, AgentSession>();
-  const sessionEventCallbacks = new Map<string, (event: AgentSessionEvent) => void>();
+  const sessionEventCallbacks = new Map<
+    string,
+    (event: AgentSessionEvent) => void | Promise<void>
+  >();
 
   const events: EventRegistration[] = [];
   const jobs = new Map<string, (job: PluginJobContext) => Promise<void>>();
@@ -2622,10 +2628,12 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
     getState(input) {
       return state.get(stateMapKey(input));
     },
-    simulateSessionEvent(sessionId, event) {
+    async simulateSessionEvent(sessionId, event) {
       const cb = sessionEventCallbacks.get(sessionId);
       if (!cb) throw new Error(`No active session event callback for session: ${sessionId}`);
-      cb({ ...event, sessionId });
+      const session = sessions.get(sessionId);
+      if (!session) throw new Error(`No active session for session event: ${sessionId}`);
+      await cb({ ...event, sessionId, companyId: session.companyId });
     },
     logs,
     activity,

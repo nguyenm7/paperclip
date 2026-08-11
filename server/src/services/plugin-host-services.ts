@@ -3294,9 +3294,13 @@ export function buildHostServices(
             const payload = event.payload as Record<string, unknown> | undefined;
             if (!payload || payload.runId !== run.id) return;
 
+            // Keep the host-owned company on every push. The worker manager
+            // derives a fresh invocation scope from it, and the SDK carries
+            // that scope through any callback-initiated host calls.
             if (event.type === "heartbeat.run.log" || event.type === "heartbeat.run.event") {
               notifyWorker("agents.sessions.event", {
                 sessionId: params.sessionId,
+                companyId,
                 runId: run.id,
                 seq: (payload.seq as number) ?? 0,
                 eventType: "chunk",
@@ -3309,6 +3313,7 @@ export function buildHostServices(
               if (TERMINAL_STATUSES.has(status)) {
                 notifyWorker("agents.sessions.event", {
                   sessionId: params.sessionId,
+                  companyId,
                   runId: run.id,
                   seq: 0,
                   eventType: status === "succeeded" ? "done" : "error",
@@ -3322,6 +3327,7 @@ export function buildHostServices(
               } else {
                 notifyWorker("agents.sessions.event", {
                   sessionId: params.sessionId,
+                  companyId,
                   runId: run.id,
                   seq: 0,
                   eventType: "status",

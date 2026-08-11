@@ -3724,7 +3724,7 @@ Duplicate headings receive stable suffixes.
       sessionId: string;
       runId: string;
       channel: string;
-      issue: { assigneeAgentId: string | null };
+      issue: { id: string; assigneeAgentId: string | null };
       agent: { id: string; name: string; status: string };
     }>("start-query", {
       companyId: COMPANY_ID,
@@ -3743,15 +3743,15 @@ Duplicate headings receive stable suffixes.
     expect(harness.dbExecutes.some((execute) => execute.sql.includes("wiki_query_sessions"))).toBe(true);
     expect(harness.dbExecutes.some((execute) => execute.sql.includes("run_ids"))).toBe(true);
 
-    harness.simulateSessionEvent(result.sessionId, {
+    await harness.simulateSessionEvent(result.sessionId, {
       runId: result.runId,
       seq: 1,
       eventType: "chunk",
       stream: "stdout",
-      message: "Keep wiki behavior in the plugin.",
+      message: "Keep wiki behavior in the plugin [wiki source](wiki/concepts/plugin-boundaries.md).",
       payload: null,
     });
-    harness.simulateSessionEvent(result.sessionId, {
+    await harness.simulateSessionEvent(result.sessionId, {
       runId: result.runId,
       seq: 2,
       eventType: "done",
@@ -3759,16 +3759,31 @@ Duplicate headings receive stable suffixes.
       message: "Run completed",
       payload: null,
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
     expect(streamEvents).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "query.started", operationId: result.operationId }),
-      expect.objectContaining({ type: "agent.event", message: "Keep wiki behavior in the plugin." }),
-      expect.objectContaining({ type: "query.done", answer: "Keep wiki behavior in the plugin." }),
+      expect.objectContaining({
+        type: "agent.event",
+        message: "Keep wiki behavior in the plugin [wiki source](wiki/concepts/plugin-boundaries.md).",
+      }),
+      expect.objectContaining({
+        type: "query.done",
+        answer: "Keep wiki behavior in the plugin [wiki source](wiki/concepts/plugin-boundaries.md).",
+      }),
     ]));
     expect(harness.dbExecutes.some((execute) =>
       execute.sql.includes("wiki_query_sessions") && execute.params?.includes("completed"),
     )).toBe(true);
+    await expect(harness.ctx.issues.listComments(result.issue.id, COMPANY_ID)).resolves.toEqual([
+      expect.objectContaining({
+        body: expect.stringContaining(
+          "Keep wiki behavior in the plugin [wiki source](wiki/concepts/plugin-boundaries.md).",
+        ),
+      }),
+    ]);
+    await expect(harness.ctx.issues.get(result.issue.id, COMPANY_ID)).resolves.toMatchObject({
+      status: "done",
+      originRunId: result.runId,
+    });
   });
 
   it("returns the existing active session instead of dispatching again for a repeated client submission", async () => {

@@ -342,7 +342,10 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
   }>();
 
   // Agent session event callbacks (populated by sendMessage, cleared by close)
-  const sessionEventCallbacks = new Map<string, (event: AgentSessionEvent) => void>();
+  const sessionEventCallbacks = new Map<
+    string,
+    (event: AgentSessionEvent) => void | Promise<void>
+  >();
 
   // Pending outbound (worker→host) requests
   const pendingRequests = new Map<string | number, {
@@ -1178,7 +1181,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
           async sendMessage(sessionId: string, companyId: string, opts: {
             prompt: string;
             reason?: string;
-            onEvent?: (event: AgentSessionEvent) => void;
+            onEvent?: (event: AgentSessionEvent) => void | Promise<void>;
           }) {
             if (opts.onEvent) {
               sessionEventCallbacks.set(sessionId, opts.onEvent);
@@ -2083,7 +2086,14 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
       if (notif.method === "agents.sessions.event" && notif.params) {
         const event = notif.params as AgentSessionEvent;
         const cb = sessionEventCallbacks.get(event.sessionId);
-        if (cb) cb(event);
+        if (cb) {
+          Promise.resolve(runNotification(() => cb(event))).catch((err) => {
+            notifyHost("log", {
+              level: "error",
+              message: `Failed to handle agent session event: ${err instanceof Error ? err.message : String(err)}`,
+            });
+          });
+        }
       } else if (notif.method === "onEvent" && notif.params) {
         // Plugin event bus notifications — dispatch to registered event handlers
         Promise.resolve(runNotification(() => handleOnEvent(notif.params as OnEventParams))).catch((err) => {

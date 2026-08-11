@@ -102,6 +102,7 @@ describe("plugin agent sessions", () => {
       "agents.sessions.event",
       expect.objectContaining({
         sessionId,
+        companyId,
         runId: "run-1",
         eventType: "done",
         message: "Hello! How can I help?",

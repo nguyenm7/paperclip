@@ -1686,6 +1686,8 @@ export interface AgentSession {
  */
 export interface AgentSessionEvent {
   sessionId: string;
+  /** Company scope stamped by the host so callback follow-up calls stay governed. */
+  companyId: string;
   runId: string;
   seq: number;
   /** The kind of event: "chunk" for output data, "status" for run state changes, "done" for end-of-stream, "error" for failures. */
@@ -1730,7 +1732,7 @@ export interface PluginAgentSessionsClient {
   sendMessage(sessionId: string, companyId: string, opts: {
     prompt: string;
     reason?: string;
-    onEvent?: (event: AgentSessionEvent) => void;
+    onEvent?: (event: AgentSessionEvent) => void | Promise<void>;
   }): Promise<AgentSessionSendResult>;
 
   /** Close a session, releasing resources. Requires `agent.sessions.close`. */

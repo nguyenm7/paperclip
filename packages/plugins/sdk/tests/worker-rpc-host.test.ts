@@ -9,9 +9,11 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { definePlugin } from "../src/define-plugin.js";
 import {
+  createNotification,
   createRequest,
   createErrorResponse,
   createSuccessResponse,
+  isJsonRpcNotification,
   isJsonRpcRequest,
   isJsonRpcResponse,
   parseMessage,
@@ -156,6 +158,180 @@ describe("worker performAction context", () => {
 });
 
 describe("worker invocation scope propagation", () => {
+  it("scopes issues calls made from agent session event callbacks", async () => {
+    const hostToWorker = new PassThrough();
+    const workerToHost = new PassThrough();
+    const hostReadline = createInterface({ input: workerToHost });
+    const pending = new Map<string, (response: JsonRpcResponse) => void>();
+    const sessionEventInvocation: PluginInvocationContext = {
+      id: "session-event-invocation",
+      scope: { companyId: "company-1" },
+    };
+    const issueCalls: Array<{ method: string; invocationId?: string }> = [];
+    let rejectNextComment = false;
+    let failureLogMessage: string | null = null;
+    let resolveFailureLog: (() => void) | null = null;
+    const failureLogged = new Promise<void>((resolve) => {
+      resolveFailureLog = resolve;
+    });
+    let resolveIssueCalls: (() => void) | null = null;
+    const issueCallsComplete = new Promise<void>((resolve) => {
+      resolveIssueCalls = resolve;
+    });
+    let nextRequestId = 1;
+
+    const plugin = definePlugin({
+      async setup(ctx) {
+        ctx.actions.register("start", async () => {
+          return ctx.agents.sessions.sendMessage("session-1", "company-1", {
+            prompt: "answer the question",
+            onEvent: async (event) => {
+              if (event.eventType !== "done") return;
+              await ctx.issues.createComment("issue-1", event.message ?? "done", "company-1");
+              await ctx.issues.update("issue-1", { status: "done" }, "company-1");
+            },
+          });
+        });
+      },
+    });
+
+    const worker = startWorkerRpcHost({ plugin, stdin: hostToWorker, stdout: workerToHost });
+
+    function callWorker(method: string, params: unknown, invocation?: PluginInvocationContext) {
+      const id = `host-${nextRequestId++}`;
+      const result = new Promise<unknown>((resolve, reject) => {
+        pending.set(id, (response) => {
+          if ("error" in response && response.error) {
+            reject(new Error(response.error.message));
+            return;
+          }
+          resolve((response as { result?: unknown }).result);
+        });
+      });
+      hostToWorker.write(serializeMessage({
+        ...createRequest(method, params, id),
+        ...(invocation ? { paperclipInvocation: invocation } : {}),
+      }));
+      return result;
+    }
+
+    hostReadline.on("line", (line) => {
+      const message = parseMessage(line);
+      if (isJsonRpcResponse(message)) {
+        pending.get(String(message.id))?.(message);
+        pending.delete(String(message.id));
+        return;
+      }
+      if (isJsonRpcNotification(message) && message.method === "log") {
+        failureLogMessage = String((message.params as { message?: unknown }).message ?? "");
+        resolveFailureLog?.();
+        return;
+      }
+      if (!isJsonRpcRequest(message)) return;
+
+      if (message.method === "agents.sessions.sendMessage") {
+        hostToWorker.write(serializeMessage(createSuccessResponse(message.id, { runId: "run-1" })));
+        return;
+      }
+      if (message.method === "issues.createComment" || message.method === "issues.update") {
+        issueCalls.push({
+          method: message.method,
+          invocationId: (message as { paperclipInvocationId?: string }).paperclipInvocationId,
+        });
+        if (message.method === "issues.createComment" && rejectNextComment) {
+          rejectNextComment = false;
+          hostToWorker.write(serializeMessage(createErrorResponse(
+            message.id,
+            PLUGIN_RPC_ERROR_CODES.INVOCATION_SCOPE_DENIED,
+            "rejected company-scoped issue call",
+          )));
+          return;
+        }
+        hostToWorker.write(serializeMessage(createSuccessResponse(message.id, { id: "issue-1" })));
+        if (issueCalls.length === 2) resolveIssueCalls?.();
+      }
+    });
+
+    try {
+      await callWorker("initialize", {
+        manifest: {
+          id: "paperclip.session-scope-test",
+          apiVersion: 1,
+          version: "1.0.0",
+          displayName: "Session scope test",
+          description: "Session scope test",
+          author: "Paperclip",
+          categories: ["automation"],
+          capabilities: ["agents.sessions.send", "issue.comments.create", "issues.update"],
+          entrypoints: { worker: "dist/worker.js" },
+        },
+        config: {},
+        instanceInfo: { instanceId: "test", hostVersion: "0.0.0" },
+        apiVersion: 1,
+      });
+      await callWorker("performAction", {
+        key: "start",
+        params: {},
+        actorContext: {
+          type: "agent",
+          userId: null,
+          agentId: "agent-1",
+          runId: "run-1",
+          companyId: "company-1",
+        },
+        renderEnvironment: null,
+      }, {
+        id: "start-invocation",
+        scope: { companyId: "company-1" },
+      });
+
+      hostToWorker.write(serializeMessage({
+        ...createNotification("agents.sessions.event", {
+          sessionId: "session-1",
+          companyId: "company-1",
+          runId: "run-1",
+          seq: 1,
+          eventType: "done",
+          stream: "system",
+          message: "Cited answer",
+          payload: null,
+        }),
+        paperclipInvocation: sessionEventInvocation,
+      }));
+
+      await issueCallsComplete;
+      expect(issueCalls).toEqual([
+        { method: "issues.createComment", invocationId: sessionEventInvocation.id },
+        { method: "issues.update", invocationId: sessionEventInvocation.id },
+      ]);
+
+      rejectNextComment = true;
+      hostToWorker.write(serializeMessage({
+        ...createNotification("agents.sessions.event", {
+          sessionId: "session-1",
+          companyId: "company-1",
+          runId: "run-2",
+          seq: 1,
+          eventType: "done",
+          stream: "system",
+          message: "Second answer",
+          payload: null,
+        }),
+        paperclipInvocation: {
+          id: "failed-session-event-invocation",
+          scope: { companyId: "company-1" },
+        },
+      }));
+      await failureLogged;
+      expect(failureLogMessage).toContain(
+        "Failed to handle agent session event: rejected company-scoped issue call",
+      );
+    } finally {
+      worker.stop();
+      hostReadline.close();
+    }
+  });
+
   it("keeps overlapping company scopes local to each getData invocation", async () => {
     const hostToWorker = new PassThrough();
     const workerToHost = new PassThrough();

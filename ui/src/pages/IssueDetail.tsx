@@ -1699,7 +1699,10 @@ export function IssueDetail() {
   // legacy title/description block, sub-tasks table, plan decompositions and
   // Documents section are gated off (plan lives in the properties-pane Plan
   // tab). Flag ON restores the legacy page.
-  const { enabled: classicTaskInterfaceEnabled } = useClassicTaskInterfaceEnabled();
+  const {
+    enabled: classicTaskInterfaceEnabled,
+    loaded: classicTaskInterfaceLoaded,
+  } = useClassicTaskInterfaceEnabled();
   const taskChatShellEnabled = !classicTaskInterfaceEnabled;
   // Chat-style: the page wrapper spans the full center pane so the thread's
   // scroll viewport (and its scrollbar) reaches the properties-pane border;
@@ -3672,6 +3675,10 @@ export function IssueDetail() {
       return true;
     }
 
+    // The classic interface owns document links in its center-column
+    // Documents section. Do not open its tab-less properties panel.
+    if (!classicTaskInterfaceLoaded || !taskChatShellEnabled) return false;
+
     if (isMobile) {
       setMobilePropsOpen(true);
     } else {
@@ -3688,10 +3695,20 @@ export function IssueDetail() {
       requestId: current?.issueId === targetIssueId ? current.requestId + 1 : 1,
     }));
     return true;
-  }, [isMobile, issue?.id, issueId, setPanelVisible, suppressPanelForFirstTask]);
+  }, [
+    classicTaskInterfaceLoaded,
+    isMobile,
+    issue?.id,
+    issueId,
+    setPanelVisible,
+    suppressPanelForFirstTask,
+    taskChatShellEnabled,
+  ]);
 
   useEffect(() => {
-    routeIssueDocumentDeepLink(location.hash);
+    if (!routeIssueDocumentDeepLink(location.hash)) {
+      setDocumentDeepLink(null);
+    }
   }, [issueId, location.hash, routeIssueDocumentDeepLink]);
 
   // React Router does not emit a location update when the user clicks a link

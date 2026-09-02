@@ -16,6 +16,7 @@ import {
   ensureAdapterExecutionTargetDirectory,
   runAdapterExecutionTargetProcess,
   resolveAdapterExecutionTargetCwd,
+  resolveAdapterExecutionTargetCommandForLogs,
 } from "@paperclipai/adapter-utils/execution-target";
 import {
   detectClaudeLoginRequired,
@@ -51,6 +52,14 @@ function summarizeStatus(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentT
 
 function isNonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function localExecutablesMatch(
+  trustedCommand: string | null,
+  runtimeCommand: string | null,
+): boolean {
+  if (!trustedCommand || !runtimeCommand) return false;
+  return trustedCommand === runtimeCommand;
 }
 
 export async function testEnvironment(
@@ -136,8 +145,17 @@ export async function testEnvironment(
     })),
   );
   const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
+  let localRuntimeCommand: string | null = null;
   try {
     await ensureAdapterExecutionTargetCommandResolvable(command, target, cwd, runtimeEnv);
+    if (!targetIsRemote) {
+      localRuntimeCommand = await resolveAdapterExecutionTargetCommandForLogs(
+        command,
+        target,
+        cwd,
+        runtimeEnv,
+      );
+    }
     checks.push({
       code: "claude_command_resolvable",
       level: "info",
@@ -228,7 +246,26 @@ export async function testEnvironment(
     ? minimumClaudeCliVersionForModel(configuredModel)
     : null;
   const versionProbeCommand = localProbe?.command ?? (targetIsRemote ? command : null);
-  if (canRunProbe && minimumCliVersion && versionProbeCommand) {
+  const versionProbeMatchesRuntime = targetIsRemote || localExecutablesMatch(
+    localProbe?.command ?? null,
+    localRuntimeCommand,
+  );
+  if (
+    canRunProbe &&
+    minimumCliVersion &&
+    versionProbeCommand &&
+    !versionProbeMatchesRuntime
+  ) {
+    configuredModelIsCompatible = false;
+    checks.push({
+      code: "claude_cli_version_probe_mismatch",
+      level: "error",
+      message:
+        "Cannot verify Fable 5.1 because the runtime PATH selects a different Claude executable than the trusted local Test probe.",
+      hint:
+        "Remove the adapter PATH override or ensure its Claude Code is 2.1.251 or newer. Execution will enforce the minimum version before launch.",
+    });
+  } else if (canRunProbe && minimumCliVersion && versionProbeCommand) {
     const versionProbeEnv = localProbe?.env ?? env;
     const detectedCliVersion = await readClaudeCommandVersion({
       runId,

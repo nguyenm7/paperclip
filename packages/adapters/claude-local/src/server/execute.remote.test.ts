@@ -403,4 +403,86 @@ describe("claude remote execution", () => {
     expect(result.errorCode).toBe("duplex_channel_lost");
   });
 
+  describe("CLI-lane model pass-through", () => {
+    async function executeWithModel(prefix: string, config: Record<string, unknown>) {
+      const rootDir = await mkdtemp(path.join(os.tmpdir(), prefix));
+      cleanupDirs.push(rootDir);
+      const workspaceDir = path.join(rootDir, "workspace");
+      await mkdir(workspaceDir, { recursive: true });
+
+      await execute({
+        runId: "run-model-passthrough",
+        agent: {
+          id: "agent-1",
+          companyId: "company-1",
+          name: "Claude Coder",
+          adapterType: "claude_local",
+          adapterConfig: {},
+        },
+        runtime: {
+          sessionId: null,
+          sessionParams: null,
+          sessionDisplayId: null,
+          taskKey: null,
+        },
+        config: {
+          command: "claude",
+          ...config,
+        },
+        context: {
+          paperclipWorkspace: {
+            cwd: workspaceDir,
+            source: "project_primary",
+          },
+        },
+        executionTransport: {
+          remoteExecution: {
+            host: "127.0.0.1",
+            port: 2222,
+            username: "fixture",
+            remoteWorkspacePath: "/remote/workspace",
+            remoteCwd: "/remote/workspace",
+            privateKey: "PRIVATE KEY",
+            knownHosts: "[127.0.0.1]:2222 ssh-ed25519 AAAA",
+            strictHostKeyChecking: true,
+          },
+        },
+        onLog: async () => {},
+      });
+
+      const call = runChildProcess.mock.calls[0] as unknown as [string, string, string[]] | undefined;
+      return call?.[2] ?? [];
+    }
+
+    it("passes the exact configured Fable 5.1 ID as --model on the CLI lane", async () => {
+      const args = await executeWithModel("paperclip-claude-model-direct-", {
+        model: "claude-fable-5-1",
+      });
+
+      const modelFlag = args.indexOf("--model");
+      expect(modelFlag).toBeGreaterThanOrEqual(0);
+      expect(args[modelFlag + 1]).toBe("claude-fable-5-1");
+    });
+
+    it("passes the Bedrock-native Fable 5.1 ID as --model under Bedrock auth", async () => {
+      const args = await executeWithModel("paperclip-claude-model-bedrock-", {
+        model: "us.anthropic.claude-fable-5-1",
+        env: { CLAUDE_CODE_USE_BEDROCK: "1" },
+      });
+
+      const modelFlag = args.indexOf("--model");
+      expect(modelFlag).toBeGreaterThanOrEqual(0);
+      expect(args[modelFlag + 1]).toBe("us.anthropic.claude-fable-5-1");
+    });
+
+    it("skips --model for a direct Anthropic ID under Bedrock auth", async () => {
+      const args = await executeWithModel("paperclip-claude-model-bedrock-skip-", {
+        model: "claude-fable-5-1",
+        env: { CLAUDE_CODE_USE_BEDROCK: "1" },
+      });
+
+      expect(args).not.toContain("--model");
+    });
+  });
+
 });

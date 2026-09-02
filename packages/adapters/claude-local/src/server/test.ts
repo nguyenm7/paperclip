@@ -259,11 +259,11 @@ export async function testEnvironment(
     configuredModelIsCompatible = false;
     checks.push({
       code: "claude_cli_version_probe_mismatch",
-      level: "error",
+      level: "warn",
       message:
-        "Cannot verify Fable 5.1 because the runtime PATH selects a different Claude executable than the trusted local Test probe.",
+        "Skipped Fable 5.1 readiness probing because the runtime PATH selects a different Claude executable than the trusted local Test probe.",
       hint:
-        "Remove the adapter PATH override or ensure its Claude Code is 2.1.251 or newer. Execution will enforce the minimum version before launch.",
+        "Ensure the runtime-selected Claude Code is 2.1.251 or newer. Execution will verify that exact executable before launch.",
     });
   } else if (canRunProbe && minimumCliVersion && versionProbeCommand) {
     const versionProbeEnv = localProbe?.env ?? env;

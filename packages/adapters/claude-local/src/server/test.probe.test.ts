@@ -629,7 +629,7 @@ describe("claude CLI local hello probe hardening", () => {
     expect(JSON.stringify(spawnedEnv)).not.toContain("caller-proxy");
   });
 
-  it("does not approve Fable when runtime PATH selects a different local Claude executable", async () => {
+  it("warns without executing when runtime PATH selects a different local Claude executable", async () => {
     const runtimeDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-cli-runtime-path-"));
     const runtimeClaudePath = path.join(runtimeDir, "claude");
     await writeFile(runtimeClaudePath, "#!/bin/sh\nexit 0\n");
@@ -651,10 +651,10 @@ describe("claude CLI local hello probe hardening", () => {
         environmentName: null,
       });
 
-      expect(result.status).toBe("fail");
+      expect(result.status).toBe("warn");
       expect(result.checks).toContainEqual(expect.objectContaining({
         code: "claude_cli_version_probe_mismatch",
-        level: "error",
+        level: "warn",
       }));
       expect(runAdapterExecutionTargetProcess).not.toHaveBeenCalled();
     } finally {

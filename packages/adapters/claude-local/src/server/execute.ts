@@ -83,6 +83,7 @@ import {
 } from "./claude-config.js";
 import {
   claudeCliVersionAtLeast,
+  claudeCommandLooksLike,
   claudeCommandSupportsEffortFlag,
   minimumClaudeCliVersionForModel,
   readClaudeCommandVersion,
@@ -1258,7 +1259,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   };
 
   try {
-    const minimumCliVersion = passesConfiguredModel
+    const minimumCliVersion = passesConfiguredModel && claudeCommandLooksLike(command, "claude")
       ? minimumClaudeCliVersionForModel(model)
       : null;
     if (minimumCliVersion) {

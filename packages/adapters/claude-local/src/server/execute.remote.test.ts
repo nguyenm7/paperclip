@@ -513,6 +513,20 @@ describe("claude remote execution", () => {
         detectedClaudeCodeVersion: "2.1.247",
       });
     });
+
+    it("leaves Fable compatibility to explicitly configured custom CLI wrappers", async () => {
+      const { args, result } = await executeWithModel("paperclip-claude-model-wrapper-", {
+        command: "/opt/paperclip/claude-wrapper",
+        model: "claude-fable-5-1",
+      });
+
+      expect(args).toContain("--model");
+      expect(args).toContain("claude-fable-5-1");
+      expect(result.errorCode).not.toBe("claude_cli_version_incompatible");
+      expect(runChildProcess.mock.calls.some((call) =>
+        (call[2] as string[]).includes("--version"),
+      )).toBe(false);
+    });
   });
 
 });

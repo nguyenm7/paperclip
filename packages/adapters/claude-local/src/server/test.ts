@@ -222,7 +222,9 @@ export async function testEnvironment(
     );
   let configuredModelIsCompatible = true;
   const configuredModel = asString(config.model, "").trim();
-  const minimumCliVersion = !hasBedrock || isBedrockModelId(configuredModel)
+  const minimumCliVersion =
+    claudeCommandLooksLike(command, "claude") &&
+    (!hasBedrock || isBedrockModelId(configuredModel))
     ? minimumClaudeCliVersionForModel(configuredModel)
     : null;
   const versionProbeCommand = localProbe?.command ?? (targetIsRemote ? command : null);

@@ -39,14 +39,25 @@ describe("HTTP product feedback grant broker", () => {
   });
 
   it("rejects oversized broker responses", async () => {
+    let cancelled = false;
+    const oversizedBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(12 * 1024));
+        controller.enqueue(new Uint8Array(12 * 1024));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
     const broker = createHttpProductFeedbackGrantBroker({
       endpoint: "https://feedback.paperclip.ing/v1/grants",
       issuerId: "paperclip-local-canary",
       issuerSecret: "issuer-secret-that-is-long-enough-for-tests",
-    }, vi.fn(async () => new Response("x".repeat(17 * 1024), { status: 200 })) as typeof fetch);
+    }, vi.fn(async () => new Response(oversizedBody, { status: 200 })) as typeof fetch);
     await expect(broker.issueGrant({
       submissionId: "a1b2c3d4-1111-4222-8333-123456789abc",
       followUpConsent: false,
     })).rejects.toThrow("feedback_broker_response_too_large");
+    expect(cancelled).toBe(true);
   });
 });

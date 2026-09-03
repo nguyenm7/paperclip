@@ -35,7 +35,11 @@ describeDatabase("Postgres feedback store", () => {
     });
     await store.createGrant({ claims: issued.claims, followUpConsent: false, reporterEmailCiphertext: null });
     const eventHash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    await expect(store.redeemGrantAndRecord({ claims: issued.claims, eventHash, now })).resolves.toBe("accepted");
+    const concurrentResults = await Promise.all([
+      store.redeemGrantAndRecord({ claims: issued.claims, eventHash, now }),
+      store.redeemGrantAndRecord({ claims: issued.claims, eventHash, now }),
+    ]);
+    expect(concurrentResults.sort()).toEqual(["accepted", "duplicate"]);
     await expect(store.redeemGrantAndRecord({ claims: issued.claims, eventHash, now })).resolves.toBe("duplicate");
     const [receipt] = await cleanup`
       SELECT event_hash, received_at

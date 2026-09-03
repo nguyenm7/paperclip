@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { loadGatewayConfig } from "./config.js";
 import { createFeedbackGateway } from "./gateway.js";
+import { drainHttpServer } from "./gateway-lifecycle.js";
 import { PostgresFeedbackStore } from "./postgres-store.js";
 
 const config = loadGatewayConfig();
@@ -12,10 +13,26 @@ server.listen(config.PORT, "0.0.0.0", () => {
   process.stdout.write(`paperclip product feedback gateway listening on ${config.PORT}\n`);
 });
 
-async function shutdown() {
-  server.close();
-  await store.close();
+let shutdownStarted = false;
+
+async function shutdown(): Promise<void> {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  try {
+    await drainHttpServer(server);
+  } finally {
+    await store.close();
+  }
 }
 
-process.once("SIGINT", () => void shutdown().finally(() => process.exit(0)));
-process.once("SIGTERM", () => void shutdown().finally(() => process.exit(0)));
+function handleShutdownSignal(): void {
+  void shutdown().catch((error: unknown) => {
+    process.stderr.write(`paperclip product feedback gateway shutdown failed: ${
+      error instanceof Error ? error.message : "unknown error"
+    }\n`);
+    process.exitCode = 1;
+  });
+}
+
+process.once("SIGINT", handleShutdownSignal);
+process.once("SIGTERM", handleShutdownSignal);

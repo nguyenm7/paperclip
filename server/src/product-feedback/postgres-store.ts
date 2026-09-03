@@ -59,7 +59,17 @@ export class PostgresFeedbackStore implements FeedbackStore {
           AND expires_at > ${input.now}
         RETURNING jti
       `;
-      if (grants.length !== 1) return "invalid" as const;
+      if (grants.length !== 1) {
+        // A concurrent delivery can wait on the same grant row and then find
+        // it already redeemed. Read again in this transaction's new
+        // READ COMMITTED snapshot so an accepted delivery stays idempotent.
+        const duplicate = await tx`
+          SELECT submission_id
+          FROM feedback_submissions
+          WHERE submission_id = ${input.claims.submissionId}
+        `;
+        return duplicate.length > 0 ? "duplicate" as const : "invalid" as const;
+      }
 
       await tx`
         INSERT INTO feedback_submissions (

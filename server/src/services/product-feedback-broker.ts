@@ -7,6 +7,34 @@ import {
 
 const MAX_RESPONSE_BYTES = 16 * 1024;
 
+async function readBoundedResponseText(response: Response): Promise<string> {
+  const contentLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) {
+    await response.body?.cancel();
+    throw new Error("feedback_broker_response_too_large");
+  }
+  if (!response.body) return "";
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new Error("feedback_broker_response_too_large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), totalBytes).toString("utf8");
+}
+
 export interface ProductFeedbackBrokerConfig {
   endpoint: string;
   issuerId: string;
@@ -41,9 +69,11 @@ export function createHttpProductFeedbackGrantBroker(
         redirect: "error",
         signal: AbortSignal.timeout(5_000),
       });
-      if (!response.ok) throw new Error(`feedback_broker_http_${response.status}`);
-      const responseBody = await response.text();
-      if (Buffer.byteLength(responseBody) > MAX_RESPONSE_BYTES) throw new Error("feedback_broker_response_too_large");
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new Error(`feedback_broker_http_${response.status}`);
+      }
+      const responseBody = await readBoundedResponseText(response);
       return productFeedbackGrantSchema.parse(JSON.parse(responseBody));
     },
   };

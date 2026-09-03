@@ -107,6 +107,27 @@ export const updatesConfigSchema = z.object({
   checkEnabled: z.boolean().default(true),
 }).passthrough().prefault({});
 
+const productFeedbackPosthogHostSchema = z.string().url().refine((value) => {
+  const parsed = new URL(value);
+  return parsed.protocol === "https:"
+    && !parsed.username
+    && !parsed.password
+    && (parsed.host === "us.i.posthog.com" || parsed.host === "eu.i.posthog.com");
+}, "must be an approved HTTPS PostHog ingest origin without credentials");
+
+const productFeedbackPosthogProjectTokenSchema = z.string().trim().regex(
+  /^phc_[A-Za-z0-9_-]+$/,
+  "must be a public PostHog project token beginning with phc_",
+);
+
+export const productFeedbackConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  posthogApiHost: productFeedbackPosthogHostSchema.optional(),
+  posthogProjectToken: productFeedbackPosthogProjectTokenSchema.optional(),
+  surveyId: z.string().trim().min(1).optional(),
+  questionId: z.string().trim().min(1).optional(),
+}).passthrough().prefault({});
+
 export const paperclipConfigSchema = z
   .object({
     $meta: configMetaSchema,
@@ -115,6 +136,7 @@ export const paperclipConfigSchema = z
     logging: loggingConfigSchema,
     server: serverConfigSchema,
     telemetry: telemetryConfigSchema,
+    productFeedback: productFeedbackConfigSchema,
     updates: updatesConfigSchema.optional(),
     auth: authConfigSchema.default({
       baseUrlMode: "auto",
@@ -202,6 +224,7 @@ export type SecretsLocalEncryptedConfig = z.infer<typeof secretsLocalEncryptedCo
 export type AuthConfig = z.infer<typeof authConfigSchema>;
 export type TelemetryConfig = z.infer<typeof telemetryConfigSchema>;
 export type UpdatesConfig = z.infer<typeof updatesConfigSchema>;
+export type ProductFeedbackConfig = z.infer<typeof productFeedbackConfigSchema>;
 export type ConfigMeta = z.infer<typeof configMetaSchema>;
 export type DatabaseBackupConfig = z.infer<typeof databaseBackupConfigSchema>;
 

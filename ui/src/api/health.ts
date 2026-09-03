@@ -1,4 +1,4 @@
-import type { ServerInfoSnapshot } from "@paperclipai/shared";
+import type { ProductFeedbackCapability, ServerInfoSnapshot } from "@paperclipai/shared";
 
 export type DevServerHealthStatus = {
   enabled: true;
@@ -32,6 +32,7 @@ export type HealthStatus = {
   bootstrapInviteActive?: boolean;
   features?: {
     companyDeletionEnabled?: boolean;
+    productFeedback?: ProductFeedbackCapability;
   };
   serverInfo?: ServerInfoSnapshot;
   devServer?: DevServerHealthStatus;

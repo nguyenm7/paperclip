@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   BookOpen,
@@ -9,7 +9,7 @@ import {
   UserRound,
   UserRoundPen,
 } from "lucide-react";
-import type { DeploymentMode, ServerGitInfo } from "@paperclipai/shared";
+import type { DeploymentMode, ProductFeedbackCapability, ServerGitInfo } from "@paperclipai/shared";
 import { Link } from "@/lib/router";
 import { authApi } from "@/api/auth";
 import { queryKeys } from "@/lib/queryKeys";
@@ -22,6 +22,7 @@ import { cn, SIDEBAR_RAIL_HIDDEN_LABEL } from "../lib/utils";
 import { ThemeToggle } from "./ThemeToggle";
 import { SidebarServerInfo } from "./SidebarServerInfo";
 import { Badge } from "@/components/ui/badge";
+import { ProductFeedbackDialog } from "./ProductFeedbackDialog";
 
 const PROFILE_SETTINGS_PATH = "/company/settings/instance/profile";
 const DOCS_URL = "https://docs.paperclip.ing/";
@@ -37,6 +38,7 @@ interface SidebarAccountMenuProps {
   version?: string | null;
   /** Contextual navigation occupies a full sidebar even if the saved global nav mode is collapsed. */
   forceExpanded?: boolean;
+  productFeedback?: ProductFeedbackCapability;
 }
 
 interface MenuActionProps {
@@ -121,8 +123,11 @@ export function SidebarAccountMenu({
   serverGit,
   version,
   forceExpanded = false,
+  productFeedback,
 }: SidebarAccountMenuProps) {
   const [internalOpen, setInternalOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const openingFeedbackRef = useRef(false);
   const { isMobile, setSidebarOpen, collapsed, peeking } = useSidebar();
   const rail = collapsed && !peeking && !forceExpanded;
   const open = controlledOpen ?? internalOpen;
@@ -147,6 +152,7 @@ export function SidebarAccountMenu({
       ? serverGit.fullSha
       : sourceSha;
   const sourceBranch = sourceSha && serverGit?.available ? serverGit.branchName : null;
+  const nativeFeedbackEnabled = productFeedback?.enabled === true && productFeedback.posthog !== undefined;
 
   function closeNavigationChrome() {
     setOpen(false);
@@ -182,6 +188,9 @@ export function SidebarAccountMenu({
             align="start"
             sideOffset={10}
             className="w-(--sz-277px) max-w-(--sz-calc-24) overflow-hidden rounded-t-2xl rounded-b-none border-border p-0 shadow-2xl"
+            onCloseAutoFocus={(event) => {
+              if (openingFeedbackRef.current) event.preventDefault();
+            }}
           >
             <div className="h-24 bg-(image:--gradient-extract-25)" />
             <div className="-mt-8 px-4 pb-4">
@@ -292,18 +301,37 @@ export function SidebarAccountMenu({
         {!rail ? (
           <Tooltip>
             <TooltipTrigger asChild>
-              <a
-                href={FEEDBACK_URL}
-                target="_blank"
-                rel="noreferrer"
+              <button
+                type="button"
                 aria-label="Share feedback"
                 className="flex size-8 shrink-0 items-center justify-center rounded-lg text-foreground/80 transition-colors hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => {
+                  if (!nativeFeedbackEnabled) {
+                    window.open(FEEDBACK_URL, "_blank", "noopener,noreferrer");
+                    return;
+                  }
+                  openingFeedbackRef.current = true;
+                  setFeedbackOpen(true);
+                }}
               >
                 <Flag className="h-4 w-4" aria-hidden="true" />
-              </a>
+              </button>
             </TooltipTrigger>
             <TooltipContent side="top">Share feedback</TooltipContent>
           </Tooltip>
+        ) : null}
+        {nativeFeedbackEnabled && productFeedback ? (
+          <ProductFeedbackDialog
+            open={feedbackOpen}
+            onOpenChange={(nextOpen) => {
+              if (!nextOpen) openingFeedbackRef.current = false;
+              setFeedbackOpen(nextOpen);
+            }}
+            capability={productFeedback}
+            deploymentMode={deploymentMode ?? "local_trusted"}
+            knownEmail={deploymentMode === "authenticated" ? session?.user.email : null}
+            appVersion={version}
+          />
         ) : null}
       </div>
     </div>

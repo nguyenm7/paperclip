@@ -50,6 +50,7 @@ const apiPrefixes: Record<string, string> = {
   "openapi.ts": "/api",
   "plugin-ui-static.ts": "/api",
   "plugins.ts": "/api",
+  "product-feedback.ts": "/api",
   "projects.ts": "/api",
   "resource-memberships.ts": "/api",
   "remote-agent-profiles.ts": "/api",
@@ -192,6 +193,25 @@ describe("openapi routes", () => {
       AgentBearerAuth: { type: "http", scheme: "bearer" },
     });
     expect(res.body.paths["/api/health"].get.security).toEqual([]);
+    expect(res.body.paths["/api/health"].get.responses["200"].content["application/json"].schema).toMatchObject({
+      type: "object",
+      properties: {
+        features: {
+          type: "object",
+          properties: {
+            productFeedback: {
+              type: "object",
+              properties: {
+                enabled: { type: "boolean" },
+                provider: { type: "string", enum: ["posthog"] },
+              },
+              required: expect.arrayContaining(["enabled", "provider", "limits"]),
+            },
+          },
+          required: expect.arrayContaining(["companyDeletionEnabled", "productFeedback"]),
+        },
+      },
+    });
     expect(res.body.paths["/mcp/gateways/{gatewayPublicId}"].post.security).toEqual([]);
     expect(res.body.paths["/api/mcp/gateways/{gatewayPublicId}"]).toBeUndefined();
     expect(res.body.paths["/api/companies"].post.responses["201"]).toBeDefined();

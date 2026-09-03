@@ -26,6 +26,7 @@ COPY packages/kv-demo-mcp-server/package.json packages/kv-demo-mcp-server/
 COPY packages/mcp-server/package.json packages/mcp-server/
 COPY packages/paperclip-eval-kernel/package.json packages/paperclip-eval-kernel/
 COPY packages/paperclip-runner/package.json packages/paperclip-runner/
+COPY packages/product-feedback-service/package.json packages/product-feedback-service/
 COPY packages/skills-catalog/package.json packages/skills-catalog/
 COPY packages/tailscale-https-broker/package.json packages/tailscale-https-broker/
 COPY packages/teams-catalog/package.json packages/teams-catalog/

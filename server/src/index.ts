@@ -85,6 +85,7 @@ import {
   reconcileAdapterAvailability,
 } from "./services/adapter-registry-bootstrap.js";
 import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-share-client.js";
+import { createHttpProductFeedbackGrantBroker } from "./services/product-feedback-broker.js";
 import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runtime-api.js";
 import { isLoopbackHost, rewriteLoopbackUrlPort } from "./url-utils.js";
 import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
@@ -822,6 +823,10 @@ export async function startServer(): Promise<StartedServer> {
     authPublicBaseUrl: config.authPublicBaseUrl,
     authReady,
     companyDeletionEnabled: config.companyDeletionEnabled,
+    productFeedback: config.productFeedback,
+    productFeedbackBroker: config.productFeedbackBroker
+      ? createHttpProductFeedbackGrantBroker(config.productFeedbackBroker)
+      : undefined,
     pluginMigrationDb: pluginMigrationDb as any,
     betterAuthHandler,
     resolveSession,

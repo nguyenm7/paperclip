@@ -662,6 +662,7 @@ export function Layout() {
               deploymentMode={health?.deploymentMode}
               serverGit={health?.serverInfo?.git}
               version={health?.version}
+              productFeedback={health?.features?.productFeedback}
               forceExpanded={replacesPrimarySidebar}
             />
           </div>
@@ -687,6 +688,7 @@ export function Layout() {
               deploymentMode={health?.deploymentMode}
               serverGit={health?.serverInfo?.git}
               version={health?.version}
+              productFeedback={health?.features?.productFeedback}
               forceExpanded={replacesPrimarySidebar}
             />
           </SidebarShell>

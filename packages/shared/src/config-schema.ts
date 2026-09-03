@@ -107,6 +107,16 @@ export const updatesConfigSchema = z.object({
   checkEnabled: z.boolean().default(true),
 }).passthrough().prefault({});
 
+export const productFeedbackConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  posthogApiHost: z.string().url().optional(),
+  posthogProjectToken: z.string().trim().min(1).optional(),
+  surveyId: z.string().trim().min(1).optional(),
+  questionId: z.string().trim().min(1).optional(),
+  deliveryMode: z.enum(["brokered", "posthog_direct"]).optional(),
+  validationRunId: z.string().trim().min(1).max(200).optional(),
+}).passthrough().prefault({});
+
 export const paperclipConfigSchema = z
   .object({
     $meta: configMetaSchema,
@@ -115,6 +125,7 @@ export const paperclipConfigSchema = z
     logging: loggingConfigSchema,
     server: serverConfigSchema,
     telemetry: telemetryConfigSchema,
+    productFeedback: productFeedbackConfigSchema,
     updates: updatesConfigSchema.optional(),
     auth: authConfigSchema.default({
       baseUrlMode: "auto",
@@ -202,6 +213,7 @@ export type SecretsLocalEncryptedConfig = z.infer<typeof secretsLocalEncryptedCo
 export type AuthConfig = z.infer<typeof authConfigSchema>;
 export type TelemetryConfig = z.infer<typeof telemetryConfigSchema>;
 export type UpdatesConfig = z.infer<typeof updatesConfigSchema>;
+export type ProductFeedbackConfig = z.infer<typeof productFeedbackConfigSchema>;
 export type ConfigMeta = z.infer<typeof configMetaSchema>;
 export type DatabaseBackupConfig = z.infer<typeof databaseBackupConfigSchema>;
 

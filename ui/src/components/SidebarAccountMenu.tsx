@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   BookOpen,
@@ -9,7 +9,7 @@ import {
   UserRound,
   UserRoundPen,
 } from "lucide-react";
-import type { DeploymentMode, ServerGitInfo } from "@paperclipai/shared";
+import type { DeploymentMode, ProductFeedbackCapability, ServerGitInfo } from "@paperclipai/shared";
 import { Link } from "@/lib/router";
 import { authApi } from "@/api/auth";
 import { queryKeys } from "@/lib/queryKeys";
@@ -21,6 +21,7 @@ import { cn, SIDEBAR_RAIL_HIDDEN_LABEL } from "../lib/utils";
 import { ThemeToggle } from "./ThemeToggle";
 import { SidebarServerInfo } from "./SidebarServerInfo";
 import { Badge } from "@/components/ui/badge";
+import { ProductFeedbackDialog } from "./ProductFeedbackDialog";
 
 const PROFILE_SETTINGS_PATH = "/company/settings/instance/profile";
 const DOCS_URL = "https://docs.paperclip.ing/";
@@ -34,6 +35,7 @@ interface SidebarAccountMenuProps {
   onOpenChange?: (open: boolean) => void;
   serverGit?: ServerGitInfo;
   version?: string | null;
+  productFeedback?: ProductFeedbackCapability;
   /** Contextual navigation occupies a full sidebar even if the saved global nav mode is collapsed. */
   forceExpanded?: boolean;
 }
@@ -119,9 +121,12 @@ export function SidebarAccountMenu({
   onOpenChange,
   serverGit,
   version,
+  productFeedback,
   forceExpanded = false,
 }: SidebarAccountMenuProps) {
   const [internalOpen, setInternalOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const openingFeedbackRef = useRef(false);
   const { isMobile, setSidebarOpen, collapsed, peeking } = useSidebar();
   const rail = collapsed && !peeking && !forceExpanded;
   const open = controlledOpen ?? internalOpen;
@@ -146,6 +151,7 @@ export function SidebarAccountMenu({
       ? serverGit.fullSha
       : sourceSha;
   const sourceBranch = sourceSha && serverGit?.available ? serverGit.branchName : null;
+  const nativeFeedbackEnabled = productFeedback?.enabled === true && productFeedback.posthog !== undefined;
 
   function closeNavigationChrome() {
     setOpen(false);
@@ -177,6 +183,9 @@ export function SidebarAccountMenu({
           align="start"
           sideOffset={10}
           className="w-(--sz-277px) max-w-(--sz-calc-24) overflow-hidden rounded-t-2xl rounded-b-none border-border p-0 shadow-2xl"
+          onCloseAutoFocus={(event) => {
+            if (openingFeedbackRef.current) event.preventDefault();
+          }}
         >
           <div className="h-24 bg-(image:--gradient-extract-25)" />
           <div className="-mt-8 px-4 pb-4">
@@ -257,11 +266,17 @@ export function SidebarAccountMenu({
               />
               <MenuAction
                 label="Feedback"
-                description="Share feedback or report an issue."
+                description="Share feedback or report a bug."
                 icon={Megaphone}
-                href={FEEDBACK_URL}
-                external
-                onClick={() => setOpen(false)}
+                href={nativeFeedbackEnabled ? undefined : FEEDBACK_URL}
+                external={!nativeFeedbackEnabled}
+                onClick={() => {
+                  setOpen(false);
+                  if (nativeFeedbackEnabled) {
+                    openingFeedbackRef.current = true;
+                    setFeedbackOpen(true);
+                  }
+                }}
               />
               <ThemeToggle variant="menu-action" onAfterToggle={() => setOpen(false)} />
               {deploymentMode === "authenticated" ? (
@@ -292,6 +307,20 @@ export function SidebarAccountMenu({
           </div>
         </PopoverContent>
       </Popover>
+      {nativeFeedbackEnabled && productFeedback ? (
+        <ProductFeedbackDialog
+          open={feedbackOpen}
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen) openingFeedbackRef.current = false;
+            setFeedbackOpen(nextOpen);
+          }}
+          capability={productFeedback}
+          deploymentMode={deploymentMode ?? "local_trusted"}
+          knownEmail={deploymentMode === "authenticated" ? session?.user.email : null}
+          authenticatedUserId={deploymentMode === "authenticated" ? session?.user.id ?? null : null}
+          appVersion={version}
+        />
+      ) : null}
     </div>
   );
 }

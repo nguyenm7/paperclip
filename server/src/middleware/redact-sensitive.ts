@@ -40,6 +40,13 @@ const SENSITIVE_KEYS = new Set<string>([
   "private_key",
   "privatekey",
   "paperclip_capability",
+  // Product-feedback follow-up contact is intentionally separated from the
+  // PostHog event, but the same-origin grant route can still fail with a 4xx or
+  // 5xx. HTTP error logging copies request bodies, so redact this PII at the
+  // centralized boundary as well.
+  "reporteremail",
+  "reporter_email",
+  "reporter-email",
   // The Claude setup-token login fields. `browserCode` carries the one-time
   // sign-in code and `authorization_code` carries the OAuth code; neither may
   // reach a log line.

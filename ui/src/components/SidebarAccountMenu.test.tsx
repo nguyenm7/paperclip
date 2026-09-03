@@ -20,6 +20,16 @@ const mockInstanceSettingsApi = vi.hoisted(() => ({
 const mockToggleTheme = vi.hoisted(() => vi.fn());
 const mockSetSidebarOpen = vi.hoisted(() => vi.fn());
 const mockNavigateTopLevel = vi.hoisted(() => vi.fn());
+const mockProductFeedbackDialog = vi.hoisted(() => vi.fn());
+
+vi.mock("./ProductFeedbackDialog", () => ({
+  ProductFeedbackDialog: (props: { open: boolean; authenticatedUserId?: string | null }) => {
+    mockProductFeedbackDialog(props);
+    return props.open
+      ? <div data-testid="product-feedback-dialog">Native product feedback</div>
+      : null;
+  },
+}));
 
 vi.mock("@/api/auth", () => ({
   authApi: mockAuthApi,
@@ -268,6 +278,85 @@ describe("SidebarAccountMenu", () => {
     await act(async () => {
       root.unmount();
     });
+  });
+
+  it("opens the native dialog only when the server advertises the capability", async () => {
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <SidebarAccountMenu
+            deploymentMode="local_trusted"
+            open
+            productFeedback={{
+              enabled: true,
+              provider: "posthog",
+              posthog: {
+                apiHost: "https://us.i.posthog.com",
+                projectToken: "phc_public_test_token",
+                surveyId: "survey-123",
+                questionId: "question-456",
+              },
+              limits: { feedbackMaxLength: 5_000, diagnosticCount: 5 },
+            }}
+          />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+
+    expect(document.body.querySelector('a[href="https://paperclip.ing/feedback"]')).toBeNull();
+    const feedbackButton = Array.from(document.body.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("Feedback"),
+    );
+    await act(() => feedbackButton?.click());
+    await flushReact();
+
+    expect(document.body.querySelector('[data-testid="product-feedback-dialog"]')).not.toBeNull();
+    expect(mockProductFeedbackDialog).toHaveBeenLastCalledWith(expect.objectContaining({
+      deploymentMode: "local_trusted",
+      authenticatedUserId: null,
+    }));
+
+    await act(() => root.unmount());
+  });
+
+  it("scopes an authenticated feedback draft with the session user ID", async () => {
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <SidebarAccountMenu
+            deploymentMode="authenticated"
+            productFeedback={{
+              enabled: true,
+              provider: "posthog",
+              posthog: {
+                apiHost: "https://us.i.posthog.com",
+                projectToken: "phc_public_test_token",
+                surveyId: "survey-123",
+                questionId: "question-456",
+              },
+              limits: { feedbackMaxLength: 5_000, diagnosticCount: 5 },
+            }}
+          />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(mockProductFeedbackDialog).toHaveBeenLastCalledWith(expect.objectContaining({
+      deploymentMode: "authenticated",
+      authenticatedUserId: "user-1",
+      knownEmail: "jane@example.com",
+    }));
+
+    await act(() => root.unmount());
   });
 
   it("shows the short commit sha instead of a version for source builds", async () => {

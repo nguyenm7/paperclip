@@ -27,6 +27,35 @@ describe("paperclip config schema", () => {
     expect(parsed.logging.logDir).toBe("~/.paperclip/instances/default/logs");
     expect(parsed.storage.localDisk.baseDir).toBe("~/.paperclip/instances/default/data/storage");
     expect(parsed.secrets.localEncrypted.keyFilePath).toBe("~/.paperclip/instances/default/secrets/master.key");
+    expect(parsed.productFeedback).toEqual({ enabled: false });
+  });
+
+  it("retains public operator-supplied product feedback survey configuration", () => {
+    const parsed = paperclipConfigSchema.parse({
+      $meta: {
+        version: 1,
+        updatedAt: "2026-09-01T00:00:00.000Z",
+        source: "configure",
+      },
+      database: { mode: "embedded-postgres" },
+      logging: { mode: "file" },
+      server: {},
+      productFeedback: {
+        enabled: true,
+        posthogApiHost: "https://us.i.posthog.com",
+        posthogProjectToken: "phc_public_test_token",
+        surveyId: "survey-123",
+        questionId: "question-456",
+      },
+    });
+
+    expect(parsed.productFeedback).toEqual({
+      enabled: true,
+      posthogApiHost: "https://us.i.posthog.com",
+      posthogProjectToken: "phc_public_test_token",
+      surveyId: "survey-123",
+      questionId: "question-456",
+    });
   });
 
   it("retains extension keys at the top level and every nested config boundary", () => {

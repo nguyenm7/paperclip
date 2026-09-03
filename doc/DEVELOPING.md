@@ -1112,6 +1112,57 @@ Run the focused harness checks without contacting Paperclip or PostHog:
 node --test scripts/smoke/posthog-live.test.mjs
 ```
 
+## Product feedback canary
+
+The Paperclip-owned feedback dialog is disabled by default. When it is disabled,
+the account menu keeps the existing `https://paperclip.ing/feedback` action.
+An operator can advertise the canary with a public PostHog project token and a
+specific survey/question pair:
+
+```sh
+PAPERCLIP_PRODUCT_FEEDBACK_ENABLED=true \
+PAPERCLIP_PRODUCT_FEEDBACK_POSTHOG_API_HOST=https://us.i.posthog.com \
+PAPERCLIP_PRODUCT_FEEDBACK_POSTHOG_PROJECT_TOKEN=phc_public_project_token \
+PAPERCLIP_PRODUCT_FEEDBACK_SURVEY_ID=survey-id \
+PAPERCLIP_PRODUCT_FEEDBACK_QUESTION_ID=question-id \
+PAPERCLIP_PRODUCT_FEEDBACK_DELIVERY_MODE=posthog_direct \
+PAPERCLIP_PRODUCT_FEEDBACK_VALIDATION_RUN_ID=local-validation-run-id \
+pnpm dev
+```
+
+`posthog_direct` is a validation-only mode. It sends the feedback, follow-up preference, and sanitized diagnostics directly to PostHog without first requesting a contact grant. It never sends an email address. The matching PostHog destination may deliver the event to Asana with at-least-once semantics, so the Asana project must use the canonical submission ID to identify duplicates.
+
+For the brokered production-hardening path, add the server-only settings below instead of `posthog_direct`:
+
+```sh
+PAPERCLIP_PRODUCT_FEEDBACK_ENABLED=true \
+PAPERCLIP_PRODUCT_FEEDBACK_POSTHOG_API_HOST=https://us.i.posthog.com \
+PAPERCLIP_PRODUCT_FEEDBACK_POSTHOG_PROJECT_TOKEN=phc_public_project_token \
+PAPERCLIP_PRODUCT_FEEDBACK_SURVEY_ID=survey-id \
+PAPERCLIP_PRODUCT_FEEDBACK_QUESTION_ID=question-id \
+PAPERCLIP_PRODUCT_FEEDBACK_BROKER_ENDPOINT=https://feedback.example.com/v1/grants \
+PAPERCLIP_PRODUCT_FEEDBACK_BROKER_ISSUER_ID=paperclip-local-canary \
+PAPERCLIP_PRODUCT_FEEDBACK_BROKER_ISSUER_SECRET=replace-with-at-least-32-random-characters \
+pnpm dev
+```
+
+The project token is browser-visible PostHog configuration, not a privileged
+personal API key. Never put a PostHog personal API key, Asana credential, or
+reporter email in these settings.
+
+Without all three broker settings, enabling the capability only exposes and
+exercises the native dialog: submission returns `503` and the browser keeps the
+draft. When they are configured, the server HMAC-signs the exact grant request
+to the HTTPS endpoint; the issuer secret never reaches the browser. The
+capture-only client sends no reporter email and does not initialize PostHog's
+autocapture, replay, heatmaps, popup surveys, or person enrichment.
+
+The receiver and worker live in the separate private workspace package
+`packages/product-feedback-service`. They are distinct deployable processes;
+do not mount their public receivers into the main Paperclip Express server.
+See that package's README and `.env.example` for the database, PostHog Event
+Destination, Asana webhook, validation-window, and least-privilege setup.
+
 ## OpenClaw Docker UI One-Command Script
 
 To boot OpenClaw in Docker and print a host-browser dashboard URL in one command:

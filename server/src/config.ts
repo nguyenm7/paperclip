@@ -8,6 +8,7 @@ import { maybeRepairLegacyWorktreeConfigAndEnvFiles } from "./worktree-config.js
 import {
   AUTH_BASE_URL_MODES,
   BIND_MODES,
+  DISABLED_PRODUCT_FEEDBACK_CAPABILITY,
   DEPLOYMENT_EXPOSURES,
   DEPLOYMENT_MODES,
   SECRET_PROVIDERS,
@@ -16,6 +17,7 @@ import {
   type AuthBaseUrlMode,
   type DeploymentExposure,
   type DeploymentMode,
+  type ProductFeedbackCapability,
   type SecretProvider,
   type StorageProvider,
   inferBindModeFromHost,
@@ -29,6 +31,7 @@ import {
   resolveDefaultStorageDir,
   resolveHomeAwarePath,
 } from "./home-paths.js";
+import type { ProductFeedbackBrokerConfig } from "./services/product-feedback-broker.js";
 
 const PAPERCLIP_ENV_FILE_PATH = resolvePaperclipEnvPath();
 if (existsSync(PAPERCLIP_ENV_FILE_PATH)) {
@@ -88,6 +91,34 @@ export interface Config {
   heartbeatSchedulerIntervalMs: number;
   companyDeletionEnabled: boolean;
   telemetryEnabled: boolean;
+  productFeedback: ProductFeedbackCapability;
+  productFeedbackBroker: ProductFeedbackBrokerConfig | null;
+}
+
+function normalizeProductFeedbackApiHost(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  const parsed = new URL(trimmed);
+  if (parsed.protocol !== "https:") {
+    throw new Error("productFeedback.posthogApiHost must use https");
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("productFeedback.posthogApiHost must not contain credentials");
+  }
+  parsed.pathname = parsed.pathname.replace(/\/$/, "");
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed.toString().replace(/\/$/, "");
+}
+
+function normalizeProductFeedbackBrokerEndpoint(value: string): string {
+  const parsed = new URL(value);
+  if (parsed.protocol !== "https:") throw new Error("productFeedback.brokerEndpoint must use https");
+  if (parsed.username || parsed.password) {
+    throw new Error("productFeedback.brokerEndpoint must not contain credentials");
+  }
+  parsed.hash = "";
+  return parsed.toString();
 }
 
 function detectTailnetBindHost(): string | undefined {
@@ -249,6 +280,82 @@ export function loadConfig(): Config {
     companyDeletionEnvRaw !== undefined
       ? companyDeletionEnvRaw === "true"
       : deploymentMode === "local_trusted";
+  const productFeedbackEnabled = process.env.PAPERCLIP_PRODUCT_FEEDBACK_ENABLED !== undefined
+    ? process.env.PAPERCLIP_PRODUCT_FEEDBACK_ENABLED === "true"
+    : (fileConfig?.productFeedback.enabled ?? false);
+  const productFeedbackPosthog = {
+    apiHost: productFeedbackEnabled
+      ? normalizeProductFeedbackApiHost(
+          process.env.PAPERCLIP_PRODUCT_FEEDBACK_POSTHOG_API_HOST
+            ?? fileConfig?.productFeedback.posthogApiHost,
+        )
+      : undefined,
+    projectToken: process.env.PAPERCLIP_PRODUCT_FEEDBACK_POSTHOG_PROJECT_TOKEN?.trim()
+      || fileConfig?.productFeedback.posthogProjectToken,
+    surveyId: process.env.PAPERCLIP_PRODUCT_FEEDBACK_SURVEY_ID?.trim()
+      || fileConfig?.productFeedback.surveyId,
+    questionId: process.env.PAPERCLIP_PRODUCT_FEEDBACK_QUESTION_ID?.trim()
+      || fileConfig?.productFeedback.questionId,
+  };
+  if (productFeedbackEnabled && Object.values(productFeedbackPosthog).some((value) => !value)) {
+    throw new Error(
+      "Product feedback is enabled but its PostHog API host, project token, survey ID, or question ID is missing",
+    );
+  }
+  const productFeedbackDeliveryMode = process.env.PAPERCLIP_PRODUCT_FEEDBACK_DELIVERY_MODE?.trim()
+    || fileConfig?.productFeedback.deliveryMode
+    || "brokered";
+  if (
+    productFeedbackEnabled
+    && productFeedbackDeliveryMode !== "brokered"
+    && productFeedbackDeliveryMode !== "posthog_direct"
+  ) {
+    throw new Error("productFeedback.deliveryMode must be brokered or posthog_direct");
+  }
+  const productFeedbackValidationRunId = process.env.PAPERCLIP_PRODUCT_FEEDBACK_VALIDATION_RUN_ID?.trim()
+    || fileConfig?.productFeedback.validationRunId;
+  if (productFeedbackEnabled && productFeedbackDeliveryMode === "posthog_direct" && !productFeedbackValidationRunId) {
+    throw new Error("productFeedback.validationRunId is required for posthog_direct delivery");
+  }
+  const productFeedback: ProductFeedbackCapability = {
+    enabled: productFeedbackEnabled,
+    provider: "posthog",
+    ...(productFeedbackEnabled ? {
+      posthog: {
+        ...productFeedbackPosthog as Omit<NonNullable<ProductFeedbackCapability["posthog"]>, "directDelivery">,
+        ...(productFeedbackDeliveryMode === "posthog_direct"
+          ? {
+              directDelivery: {
+                submissionMode: "local_validation" as const,
+                validationRunId: productFeedbackValidationRunId!,
+              },
+            }
+          : {}),
+      },
+    } : {}),
+    limits: {
+      ...DISABLED_PRODUCT_FEEDBACK_CAPABILITY.limits,
+    },
+  };
+  const productFeedbackBrokerRaw = {
+    endpoint: process.env.PAPERCLIP_PRODUCT_FEEDBACK_BROKER_ENDPOINT?.trim(),
+    issuerId: process.env.PAPERCLIP_PRODUCT_FEEDBACK_BROKER_ISSUER_ID?.trim(),
+    issuerSecret: process.env.PAPERCLIP_PRODUCT_FEEDBACK_BROKER_ISSUER_SECRET?.trim(),
+  };
+  const configuredBrokerValues = Object.values(productFeedbackBrokerRaw).filter(Boolean).length;
+  if (configuredBrokerValues > 0 && configuredBrokerValues !== 3) {
+    throw new Error("Product feedback broker endpoint, issuer ID, and issuer secret must be configured together");
+  }
+  if (productFeedbackBrokerRaw.issuerSecret && productFeedbackBrokerRaw.issuerSecret.length < 32) {
+    throw new Error("productFeedback.brokerIssuerSecret must contain at least 32 characters");
+  }
+  const productFeedbackBroker: ProductFeedbackBrokerConfig | null = configuredBrokerValues === 3
+    ? {
+        endpoint: normalizeProductFeedbackBrokerEndpoint(productFeedbackBrokerRaw.endpoint!),
+        issuerId: productFeedbackBrokerRaw.issuerId!,
+        issuerSecret: productFeedbackBrokerRaw.issuerSecret!,
+      }
+    : null;
   const databaseBackupEnabled =
     process.env.PAPERCLIP_DB_BACKUP_ENABLED !== undefined
       ? process.env.PAPERCLIP_DB_BACKUP_ENABLED === "true"
@@ -354,5 +461,7 @@ export function loadConfig(): Config {
     heartbeatSchedulerIntervalMs: Math.max(10000, Number(process.env.HEARTBEAT_SCHEDULER_INTERVAL_MS) || 30000),
     companyDeletionEnabled,
     telemetryEnabled: fileConfig?.telemetry?.enabled ?? true,
+    productFeedback,
+    productFeedbackBroker,
   };
 }

@@ -151,6 +151,8 @@ import {
   withdrawIssueThreadInteractionSchema,
   // Auth / profile
   updateCurrentUserProfileSchema,
+  // Product feedback
+  productFeedbackCapabilitySchema,
   // Company portability (legacy routes)
   companyPortabilityExportSchema,
   companyPortabilityPreviewSchema,
@@ -241,6 +243,9 @@ import {
   claudeSetupTokenCompletionResponseSchema,
   claudeOAuthTokenStatusResponseSchema,
   startAdapterAuthSessionRequestSchema,
+  // Product feedback
+  productFeedbackGrantRequestSchema,
+  productFeedbackGrantSchema,
 } from "@paperclipai/shared";
 import {
   COMPANY_IMPORT_TRANSFERS_API_PATH,
@@ -1251,6 +1256,10 @@ registry.registerPath({
       }).strict().optional(),
       bootstrapStatus: z.enum(["ready", "bootstrap_pending"]).optional(),
       bootstrapInviteActive: z.boolean().optional(),
+      features: z.object({
+        companyDeletionEnabled: z.boolean(),
+        productFeedback: productFeedbackCapabilitySchema,
+      }).strict().optional(),
       databaseBackup: z.object({
         enabled: z.boolean(),
         status: z.enum(["ok", "warning"]),
@@ -1302,6 +1311,22 @@ registry.registerPath({
         },
       },
     },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/api/product-feedback/grant",
+  tags: ["product-feedback"],
+  summary: "Request a short-lived product feedback submission grant",
+  request: { body: jsonBody(productFeedbackGrantRequestSchema) },
+  responses: {
+    201: r.ok(productFeedbackGrantSchema),
+    400: r.badRequest,
+    403: r.forbidden,
+    404: r.notFound,
+    502: r.serverError,
+    503: r.serverError,
   },
 });
 

@@ -1,0 +1,35 @@
+{
+  "name": "@paperclipai/product-feedback-service",
+  "version": "0.3.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc && cp -r migrations dist/migrations",
+    "clean": "rm -rf dist",
+    "dev:gateway": "tsx src/gateway-entry.ts",
+    "dev:worker": "tsx src/worker-entry.ts",
+    "migrate": "tsx src/migrate.ts",
+    "slack:gate": "tsx src/slack-gate-entry.ts",
+    "triage:once": "tsx src/paperclip-triage-entry.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@paperclipai/shared": "workspace:*",
+    "express": "^5.1.0",
+    "postgres": "^3.4.9",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "@types/supertest": "^7.2.1",
+    "supertest": "^7.2.0",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=24.11.0"
+  }
+}

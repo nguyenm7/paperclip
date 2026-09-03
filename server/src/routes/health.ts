@@ -3,7 +3,12 @@ import { Router } from "express";
 import type { Db } from "@paperclipai/db";
 import { and, count, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { heartbeatRuns, instanceUserRoles, invites } from "@paperclipai/db";
-import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
+import {
+  DISABLED_PRODUCT_FEEDBACK_CAPABILITY,
+  type DeploymentExposure,
+  type DeploymentMode,
+  type ProductFeedbackCapability,
+} from "@paperclipai/shared";
 import { readPersistedDevServerStatus, toDevServerHealthStatus, writeDevServerRestartRequest } from "../dev-server-status.js";
 import { logger } from "../middleware/logger.js";
 import { getServerInfoSnapshot, type ServerInfoSnapshot } from "../server-info.js";
@@ -104,6 +109,7 @@ export function healthRoutes(
     deploymentExposure: DeploymentExposure;
     authReady: boolean;
     companyDeletionEnabled: boolean;
+    productFeedback?: ProductFeedbackCapability;
     serverInfo?: ServerInfoSnapshot;
     databaseBackupHealth?: InspectDatabaseBackupHealthOptions;
     runtimeEnv?: CloudInstanceEnv;
@@ -112,9 +118,11 @@ export function healthRoutes(
     deploymentExposure: "private",
     authReady: true,
     companyDeletionEnabled: true,
+    productFeedback: DISABLED_PRODUCT_FEEDBACK_CAPABILITY,
   },
 ) {
   const router = Router();
+  const productFeedback = opts.productFeedback ?? DISABLED_PRODUCT_FEEDBACK_CAPABILITY;
 
   router.post("/dev-server/restart", async (req, res) => {
     const actorType = "actor" in req ? req.actor?.type : null;
@@ -332,6 +340,9 @@ export function healthRoutes(
       bootstrapInviteActive,
       features: {
         companyDeletionEnabled: opts.companyDeletionEnabled,
+        productFeedback: cloud
+          ? { ...productFeedback, enabled: false, posthog: undefined }
+          : productFeedback,
       },
       serverInfo,
       ...(databaseBackup ? { databaseBackup } : {}),

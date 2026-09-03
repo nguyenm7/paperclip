@@ -34,6 +34,7 @@ interface ProductFeedbackDialogProps {
   deploymentMode: DeploymentMode;
   knownEmail?: string | null;
   appVersion?: string | null;
+  companyId: string;
   requestGrant?: typeof productFeedbackApi.requestGrant;
   captureEvent?: ProductFeedbackCapture;
 }
@@ -49,6 +50,7 @@ export function ProductFeedbackDialog({
   deploymentMode,
   knownEmail,
   appVersion = null,
+  companyId,
   requestGrant = productFeedbackApi.requestGrant,
   captureEvent,
 }: ProductFeedbackDialogProps) {
@@ -123,6 +125,7 @@ export function ProductFeedbackDialog({
     setErrorMessage(null);
     try {
       const grant = await requestGrant({
+        companyId,
         submissionId: submissionIdRef.current,
         followUpConsent,
         ...(followUpConsent ? { reporterEmail: selectedEmail } : {}),

@@ -52,6 +52,7 @@ const meta = {
     onOpenChange: () => undefined,
     capability,
     deploymentMode: "authenticated",
+    companyId: "11111111-1111-4111-8111-111111111111",
     knownEmail: "owner@example.com",
     appVersion: "2026.901.0",
     captureEvent: async () => undefined,

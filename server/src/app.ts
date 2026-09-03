@@ -439,6 +439,7 @@ export async function createApp(
   );
   api.use(openApiRoutes());
   api.use(productFeedbackRoutes({
+    db,
     capability: productFeedback,
     broker: opts.productFeedbackBroker,
   }));

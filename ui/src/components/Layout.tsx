@@ -658,6 +658,7 @@ export function Layout() {
               </div>
             </div>
             <SidebarAccountMenu
+              companyId={selectedCompanyId}
               deploymentMode={health?.deploymentMode}
               serverGit={health?.serverInfo?.git}
               version={health?.version}
@@ -684,6 +685,7 @@ export function Layout() {
               )}
             </div>
             <SidebarAccountMenu
+              companyId={selectedCompanyId}
               deploymentMode={health?.deploymentMode}
               serverGit={health?.serverInfo?.git}
               version={health?.version}

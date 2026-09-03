@@ -34,12 +34,13 @@ export interface ProductFeedbackDiagnostic {
 }
 
 export interface ProductFeedbackGrantRequest {
+  companyId: string;
   submissionId: string;
   followUpConsent: boolean;
   reporterEmail?: string;
 }
 
-export type ProductFeedbackBrokerRequest = ProductFeedbackGrantRequest;
+export type ProductFeedbackBrokerRequest = Omit<ProductFeedbackGrantRequest, "companyId">;
 
 export interface ProductFeedbackGrant {
   grantToken: string;

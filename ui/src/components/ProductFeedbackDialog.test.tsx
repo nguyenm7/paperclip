@@ -103,6 +103,7 @@ describe("ProductFeedbackDialog", () => {
         open
         onOpenChange={vi.fn()}
         capability={capability}
+        companyId="11111111-1111-4111-8111-111111111111"
         deploymentMode="authenticated"
         knownEmail="owner@example.com"
         captureEvent={captureEvent}
@@ -124,6 +125,7 @@ describe("ProductFeedbackDialog", () => {
         open
         onOpenChange={vi.fn()}
         capability={capability}
+        companyId="11111111-1111-4111-8111-111111111111"
         deploymentMode="local_trusted"
         captureEvent={vi.fn().mockResolvedValue(undefined)}
       />,
@@ -140,6 +142,7 @@ describe("ProductFeedbackDialog", () => {
       open: true,
       onOpenChange: vi.fn(),
       capability,
+      companyId: "11111111-1111-4111-8111-111111111111",
       deploymentMode: "authenticated" as const,
       captureEvent: vi.fn().mockResolvedValue(undefined),
     };
@@ -161,6 +164,7 @@ describe("ProductFeedbackDialog", () => {
         open
         onOpenChange={vi.fn()}
         capability={capability}
+        companyId="11111111-1111-4111-8111-111111111111"
         deploymentMode="local_trusted"
         requestGrant={requestGrant}
         captureEvent={captureEvent}
@@ -200,6 +204,7 @@ describe("ProductFeedbackDialog", () => {
         open
         onOpenChange={onOpenChange}
         capability={capability}
+        companyId="11111111-1111-4111-8111-111111111111"
         deploymentMode="local_trusted"
         requestGrant={requestGrant}
         captureEvent={captureEvent}
@@ -214,6 +219,9 @@ describe("ProductFeedbackDialog", () => {
 
     const sentCall = captureEvent.mock.calls.find(([event]) => event === "survey sent");
     expect(requestGrant).toHaveBeenCalledOnce();
+    expect(requestGrant).toHaveBeenCalledWith(expect.objectContaining({
+      companyId: "11111111-1111-4111-8111-111111111111",
+    }));
     expect(sentCall).toBeDefined();
     expect(document.body.textContent).toContain("Feedback sent");
     expect(sentCall?.[1]).toMatchObject({

@@ -25,7 +25,7 @@ export const productFeedbackCapabilitySchema = z.object({
   }).strict(),
 }).strict();
 
-export const productFeedbackGrantRequestSchema = z.object({
+const productFeedbackContactRequestSchema = z.object({
   submissionId: z.string().uuid(),
   followUpConsent: z.boolean(),
   reporterEmail: z.string().trim().email().max(320).optional(),
@@ -44,6 +44,29 @@ export const productFeedbackGrantRequestSchema = z.object({
     });
   }
 });
+
+export const productFeedbackGrantRequestSchema = z.object({
+  companyId: z.string().uuid(),
+  submissionId: z.string().uuid(),
+  followUpConsent: z.boolean(),
+  reporterEmail: z.string().trim().email().max(320).optional(),
+}).strict().superRefine((value, ctx) => {
+  if (value.followUpConsent && value.reporterEmail === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "reporterEmail is required when followUpConsent is enabled",
+      path: ["reporterEmail"],
+    });
+  } else if (!value.followUpConsent && value.reporterEmail !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "reporterEmail requires followUpConsent",
+      path: ["reporterEmail"],
+    });
+  }
+});
+
+export const productFeedbackBrokerRequestSchema = productFeedbackContactRequestSchema;
 
 export const productFeedbackGrantSchema = z.object({
   grantToken: z.string().min(1).max(4096),

@@ -2,10 +2,19 @@ import { PassThrough } from "node:stream";
 import express from "express";
 import pino from "pino";
 import request from "supertest";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Db } from "@paperclipai/db";
 import type { ProductFeedbackCapability } from "@paperclipai/shared";
 import { createHttpLogger } from "../middleware/logger.js";
 import { productFeedbackRoutes, type ProductFeedbackGrantBroker } from "../routes/product-feedback.js";
+
+const mockLogActivity = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+
+vi.mock("../services/activity-log.js", () => ({
+  logActivity: mockLogActivity,
+}));
+
+const companyId = "11111111-1111-4111-8111-111111111111";
 
 const enabledCapability: ProductFeedbackCapability = {
   enabled: true,
@@ -34,7 +43,7 @@ function createApp(input: {
     req.actor = {
       type: "board",
       userId: "board-user-1",
-      companyIds: [],
+      companyIds: [companyId],
       source: "local_implicit",
       isInstanceAdmin: false,
       ...input.actor,
@@ -42,6 +51,7 @@ function createApp(input: {
     next();
   });
   app.use("/api", productFeedbackRoutes({
+    db: {} as Db,
     capability: input.capability ?? enabledCapability,
     broker: input.broker,
   }));
@@ -49,12 +59,17 @@ function createApp(input: {
 }
 
 const validRequest = {
+  companyId,
   submissionId: "708db09f-1a29-4dd6-ad62-99b19b6902b4",
   followUpConsent: true,
   reporterEmail: "reporter@example.com",
 };
 
 describe("POST /api/product-feedback/grant", () => {
+  beforeEach(() => {
+    mockLogActivity.mockClear();
+  });
+
   it("is absent while the capability is disabled", async () => {
     const response = await request(createApp({
       capability: { ...enabledCapability, enabled: false, posthog: undefined },
@@ -140,6 +155,21 @@ describe("POST /api/product-feedback/grant", () => {
     expect(response.body.code).toBe("board_session_required");
   });
 
+  it("conceals companies outside the board actor's scope", async () => {
+    const issueGrant = vi.fn();
+    const response = await request(createApp({
+      actor: { companyIds: [], source: "session" },
+      broker: { issueGrant },
+    }))
+      .post("/api/product-feedback/grant")
+      .send(validRequest);
+
+    expect(response.status).toBe(404);
+    expect(response.body.code).toBe("company_not_found");
+    expect(issueGrant).not.toHaveBeenCalled();
+    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
   it("hands contact data only to the authenticated server broker", async () => {
     const issueGrant = vi.fn().mockResolvedValue({
       grantToken: "single-use-grant",
@@ -155,8 +185,18 @@ describe("POST /api/product-feedback/grant", () => {
 
     expect(response.status).toBe(201);
     expect(issueGrant).toHaveBeenCalledWith({
-      ...validRequest,
+      submissionId: validRequest.submissionId,
+      followUpConsent: true,
+      reporterEmail: "reporter@example.com",
     });
+    expect(mockLogActivity).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      companyId,
+      action: "product_feedback.grant_requested",
+      entityType: "product_feedback_submission",
+      entityId: validRequest.submissionId,
+      details: { provider: "posthog", followUpConsent: true },
+    }));
+    expect(JSON.stringify(mockLogActivity.mock.calls)).not.toContain("reporter@example.com");
     expect(response.body).toEqual({
       grantToken: "single-use-grant",
       submissionMode: "production_feedback",

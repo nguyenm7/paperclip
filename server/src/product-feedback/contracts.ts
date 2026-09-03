@@ -3,12 +3,12 @@ import {
   PRODUCT_FEEDBACK_DIAGNOSTIC_LIMIT,
   PRODUCT_FEEDBACK_MAX_LENGTH,
   PRODUCT_FEEDBACK_SCHEMA_VERSION,
-  productFeedbackGrantRequestSchema,
+  productFeedbackBrokerRequestSchema,
 } from "@paperclipai/shared";
 
 export const submissionModeSchema = z.enum(["local_validation", "production_feedback"]);
 
-export const brokerGrantRequestSchema = productFeedbackGrantRequestSchema;
+export const brokerGrantRequestSchema = productFeedbackBrokerRequestSchema;
 
 export const grantClaimsSchema = z.object({
   v: z.literal(1),

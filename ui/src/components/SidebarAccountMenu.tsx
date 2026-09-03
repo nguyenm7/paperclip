@@ -31,6 +31,7 @@ const SOURCE_REPOSITORY_URL = "https://github.com/paperclipai/paperclip";
 const SOURCE_VERSION_RE = /\+\d+\.git\.([0-9a-f]{7,40})(?:\.dirty)?$/i;
 
 interface SidebarAccountMenuProps {
+  companyId?: string | null;
   deploymentMode?: DeploymentMode;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -117,6 +118,7 @@ function MenuAction({ label, description, icon: Icon, onClick, href, external = 
 }
 
 export function SidebarAccountMenu({
+  companyId,
   deploymentMode,
   open: controlledOpen,
   onOpenChange,
@@ -152,7 +154,8 @@ export function SidebarAccountMenu({
       ? serverGit.fullSha
       : sourceSha;
   const sourceBranch = sourceSha && serverGit?.available ? serverGit.branchName : null;
-  const nativeFeedbackEnabled = productFeedback?.enabled === true && productFeedback.posthog !== undefined;
+  const nativeFeedbackEnabled =
+    Boolean(companyId) && productFeedback?.enabled === true && productFeedback.posthog !== undefined;
 
   function closeNavigationChrome() {
     setOpen(false);
@@ -320,8 +323,9 @@ export function SidebarAccountMenu({
             <TooltipContent side="top">Share feedback</TooltipContent>
           </Tooltip>
         ) : null}
-        {nativeFeedbackEnabled && productFeedback ? (
+        {nativeFeedbackEnabled && productFeedback && companyId ? (
           <ProductFeedbackDialog
+            companyId={companyId}
             open={feedbackOpen}
             onOpenChange={(nextOpen) => {
               if (!nextOpen) openingFeedbackRef.current = false;

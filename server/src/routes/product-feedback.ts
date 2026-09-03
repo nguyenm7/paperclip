@@ -1,4 +1,5 @@
 import { Router } from "express";
+import type { Db } from "@paperclipai/db";
 import {
   productFeedbackGrantRequestSchema,
   productFeedbackGrantSchema,
@@ -6,12 +7,15 @@ import {
   type ProductFeedbackCapability,
   type ProductFeedbackGrant,
 } from "@paperclipai/shared";
+import { logActivity } from "../services/activity-log.js";
+import { getActorInfo, hasCompanyAccess } from "./authz.js";
 
 export interface ProductFeedbackGrantBroker {
   issueGrant(request: ProductFeedbackBrokerRequest): Promise<ProductFeedbackGrant>;
 }
 
 export function productFeedbackRoutes(opts: {
+  db: Db;
   capability: ProductFeedbackCapability;
   broker?: ProductFeedbackGrantBroker;
 }) {
@@ -41,6 +45,10 @@ export function productFeedbackRoutes(opts: {
       });
       return;
     }
+    if (!hasCompanyAccess(req, parsed.data.companyId)) {
+      res.status(404).json({ code: "company_not_found", error: "Company not found." });
+      return;
+    }
 
     // The open-source product intentionally ships without a production broker
     // credential or browser-selectable trust flag. An operator may advertise
@@ -54,9 +62,29 @@ export function productFeedbackRoutes(opts: {
       return;
     }
 
-    const brokerRequest: ProductFeedbackBrokerRequest = parsed.data;
+    const brokerRequest: ProductFeedbackBrokerRequest = {
+      submissionId: parsed.data.submissionId,
+      followUpConsent: parsed.data.followUpConsent,
+      ...(parsed.data.reporterEmail ? { reporterEmail: parsed.data.reporterEmail } : {}),
+    };
 
     try {
+      const actor = getActorInfo(req);
+      await logActivity(opts.db, {
+        companyId: parsed.data.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        agentApiKeyId: actor.agentApiKeyId,
+        action: "product_feedback.grant_requested",
+        entityType: "product_feedback_submission",
+        entityId: parsed.data.submissionId,
+        details: {
+          provider: "posthog",
+          followUpConsent: parsed.data.followUpConsent,
+        },
+      });
       const grant = productFeedbackGrantSchema.parse(await opts.broker.issueGrant(brokerRequest));
       res.status(201).json(grant);
     } catch {

@@ -23,7 +23,11 @@ export interface FeedbackStore {
   }): Promise<"accepted" | "duplicate" | "invalid">;
   getGrant(submissionId: string): Promise<GrantRecord | null>;
   getSubmission(submissionId: string): Promise<PosthogFeedbackDelivery | null>;
-  registerAsanaWebhook(input: { webhookGid: string; resourceGid: string; secretCiphertext: string }): Promise<void>;
+  registerAsanaWebhook(input: {
+    webhookGid: string;
+    resourceGid: string;
+    secretCiphertext: string;
+  }): Promise<boolean>;
   findActiveAsanaWebhook(webhookGid: string): Promise<{ secretCiphertext: string } | null>;
   recordAsanaDeliveryAndEnqueue(input: {
     webhookGid: string;

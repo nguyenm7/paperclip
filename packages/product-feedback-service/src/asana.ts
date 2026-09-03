@@ -67,6 +67,46 @@ export class AsanaClient {
     return gid;
   }
 
+  async findFeedbackTaskBySubmissionId(submissionId: string): Promise<string | null> {
+    const marker = `Submission ID: ${submissionId}`;
+    const seenOffsets = new Set<string>();
+    let offset: string | undefined;
+
+    do {
+      const query = new URLSearchParams({
+        project: this.config.projectGid,
+        completed_since: "1970-01-01T00:00:00.000Z",
+        limit: "100",
+        opt_fields: "notes",
+      });
+      if (offset) query.set("offset", offset);
+      const result = await this.request(`/tasks?${query.toString()}`) as {
+        data?: unknown;
+        next_page?: { offset?: unknown } | null;
+      };
+      if (!Array.isArray(result.data)) throw new AsanaApiError(502, "asana_invalid_response");
+      for (const task of result.data) {
+        if (!task || typeof task !== "object") continue;
+        const gid = (task as { gid?: unknown }).gid;
+        const notes = (task as { notes?: unknown }).notes;
+        if (typeof gid !== "string" || typeof notes !== "string") continue;
+        const boundary = notes.indexOf("--- BEGIN UNTRUSTED FEEDBACK ---");
+        const trustedPreamble = boundary === -1 ? "" : notes.slice(0, boundary);
+        if (trustedPreamble.split("\n").includes(marker)) return gid;
+      }
+
+      const nextOffset = result.next_page?.offset;
+      if (nextOffset == null) return null;
+      if (typeof nextOffset !== "string" || !nextOffset || seenOffsets.has(nextOffset)) {
+        throw new AsanaApiError(502, "asana_invalid_response");
+      }
+      seenOffsets.add(nextOffset);
+      offset = nextOffset;
+    } while (offset);
+
+    return null;
+  }
+
   async placeFeedbackTask(
     taskGid: string,
     submissionMode: PosthogFeedbackDelivery["submission_mode"],

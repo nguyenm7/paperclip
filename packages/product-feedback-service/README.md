@@ -19,7 +19,7 @@ Run the gateway and worker as separate processes and preferably separate databas
 - Paperclip signs the exact grant request body with an issuer-scoped HMAC. Timestamp and nonce checks prevent replay.
 - Reporter email is encrypted before storage and is never sent through PostHog or written into Asana.
 - PostHog deliveries must pass Standard Webhooks verification, the exact survey/question/schema allowlist, signed-grant validation, and atomic one-use redemption before queuing.
-- Asana handshakes persist the generated secret encrypted. Later webhook requests are verified over the raw body and deduplicated before queuing.
+- Asana handshakes persist the generated secret encrypted once. A later handshake cannot replace an active secret. Later webhook requests are verified over the raw body and deduplicated before queuing.
 - User feedback is placed only inside a clearly delimited untrusted-data block. Workers never follow links or access customer environments.
 - `local_validation` requires a configured run ID and expiry. Validation tasks go only to the validation section.
 - Failed jobs retry with exponential backoff and become `dead` after eight attempts. Errors are stored as bounded codes, not raw vendor responses.
@@ -58,7 +58,9 @@ Create the Asana webhook only after the public target exists. The target is:
 
 `https://<gateway>/v1/asana/webhooks/<PRODUCT_FEEDBACK_ASANA_WEBHOOK_REF>`
 
-The webhook receiver acknowledges in under ten seconds and queues reconciliation. A scheduled reconciler must also refetch project state to cover Asana's at-most-once exceptional loss cases.
+Treat `PRODUCT_FEEDBACK_ASANA_WEBHOOK_REF` as a high-entropy capability. Use a new reference when you replace a webhook. The receiver accepts only the first handshake for each reference, so an unauthenticated retry cannot replace the active signing secret.
+
+The webhook receiver acknowledges in under ten seconds and queues reconciliation. A scheduled reconciler must also refetch project state to cover Asana's at-most-once exceptional loss cases. A retried task-creation job first scans the strongly consistent project task list for its canonical submission ID. It reuses the matching task before it sends another create request.
 
 ## Local durable proof
 

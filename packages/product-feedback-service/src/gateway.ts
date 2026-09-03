@@ -200,11 +200,15 @@ export function createFeedbackGateway(input: {
           response.status(400).end();
           return;
         }
-        await input.store.registerAsanaWebhook({
+        const registered = await input.store.registerAsanaWebhook({
           webhookGid: request.params.webhookRef,
           resourceGid: input.config.PRODUCT_FEEDBACK_ASANA_PROJECT_GID,
           secretCiphertext: encryptContact(handshakeSecret, input.config.PRODUCT_FEEDBACK_CONTACT_ENCRYPTION_KEY),
         });
+        if (!registered) {
+          response.status(409).end();
+          return;
+        }
         response.setHeader("X-Hook-Secret", handshakeSecret);
         response.status(200).end();
         return;

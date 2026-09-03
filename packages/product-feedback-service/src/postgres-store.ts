@@ -149,16 +149,18 @@ export class PostgresFeedbackStore implements FeedbackStore {
     };
   }
 
-  async registerAsanaWebhook(input: { webhookGid: string; resourceGid: string; secretCiphertext: string }): Promise<void> {
-    await this.sql`
+  async registerAsanaWebhook(input: {
+    webhookGid: string;
+    resourceGid: string;
+    secretCiphertext: string;
+  }): Promise<boolean> {
+    const rows = await this.sql`
       INSERT INTO feedback_asana_webhooks (webhook_gid, resource_gid, secret_ciphertext)
       VALUES (${input.webhookGid}, ${input.resourceGid}, ${input.secretCiphertext})
-      ON CONFLICT (webhook_gid) DO UPDATE SET
-        resource_gid = EXCLUDED.resource_gid,
-        secret_ciphertext = EXCLUDED.secret_ciphertext,
-        active = true,
-        updated_at = now()
+      ON CONFLICT (webhook_gid) DO NOTHING
+      RETURNING webhook_gid
     `;
+    return rows.length === 1;
   }
 
   async findActiveAsanaWebhook(webhookGid: string): Promise<{ secretCiphertext: string } | null> {

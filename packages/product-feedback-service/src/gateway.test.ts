@@ -145,7 +145,24 @@ describe("product feedback gateway", () => {
     expect(handshake.status).toBe(200);
     expect(handshake.headers["x-hook-secret"]).toBe(secret);
 
+    const replacementSecret = "attacker-controlled-secret-long-enough";
+    const replacement = await request(app)
+      .post(path)
+      .set("Content-Type", "application/json")
+      .set("X-Hook-Secret", replacementSecret)
+      .send("");
+    expect(replacement.status).toBe(409);
+    expect(replacement.headers["x-hook-secret"]).toBeUndefined();
+
     const body = JSON.stringify({ events: [{ action: "changed", resource: { gid: "99", resource_type: "task" } }] });
+    const forgedSignature = createHmac("sha256", replacementSecret).update(body).digest("hex");
+    const forgedDelivery = await request(app)
+      .post(path)
+      .set("Content-Type", "application/json")
+      .set("X-Hook-Signature", forgedSignature)
+      .send(body);
+    expect(forgedDelivery.status).toBe(401);
+
     const signature = createHmac("sha256", secret).update(body).digest("hex");
     const delivery = await request(app)
       .post(path)

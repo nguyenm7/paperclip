@@ -50,11 +50,17 @@ export class MemoryFeedbackStore implements FeedbackStore {
     return this.submissions.get(submissionId) ?? null;
   }
 
-  async registerAsanaWebhook(input: { webhookGid: string; resourceGid: string; secretCiphertext: string }): Promise<void> {
+  async registerAsanaWebhook(input: {
+    webhookGid: string;
+    resourceGid: string;
+    secretCiphertext: string;
+  }): Promise<boolean> {
+    if (this.webhookSecrets.has(input.webhookGid)) return false;
     this.webhookSecrets.set(input.webhookGid, {
       secretCiphertext: input.secretCiphertext,
       resourceGid: input.resourceGid,
     });
+    return true;
   }
 
   async findActiveAsanaWebhook(webhookGid: string): Promise<{ secretCiphertext: string } | null> {
@@ -79,7 +85,8 @@ export class MemoryFeedbackStore implements FeedbackStore {
   }
 
   async claimQueueJob(_workerId: string, _now: Date): Promise<QueueJob | null> {
-    return this.jobs.shift() ?? null;
+    const job = this.jobs.shift();
+    return job ? { ...job, attempts: job.attempts + 1 } : null;
   }
 
   async completeQueueJob(_id: string): Promise<void> {}

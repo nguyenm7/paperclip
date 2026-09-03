@@ -18,6 +18,13 @@ async function handleAsanaCreate(store: FeedbackStore, asana: AsanaClient, job: 
   if (!submission) throw new Error("submission_missing");
   const targetStatus = submission.submission_mode === "local_validation" ? "Validation canary" : "New";
   let link = await store.getAsanaTaskLink(submissionId);
+  if (!link && job.attempts > 1) {
+    const recoveredTaskGid = await asana.findFeedbackTaskBySubmissionId(submissionId);
+    if (recoveredTaskGid) {
+      await store.saveAsanaTaskLink({ submissionId, taskGid: recoveredTaskGid, status: "Created" });
+      link = { taskGid: recoveredTaskGid, status: "Created" };
+    }
+  }
   if (!link) {
     const taskGid = await asana.createFeedbackTask(submission);
     await store.saveAsanaTaskLink({ submissionId, taskGid, status: "Created" });

@@ -177,6 +177,11 @@ impl CommandExecutor for NativeProviderCommandExecutor {
     }
 
     fn shutdown(&mut self) -> Result<(), DurableRunnerError> {
+        // Terminal delivery can be reconciled by a replacement runner whose
+        // executor has not processed a provider command. Select the durable
+        // provider authority before cleanup so an absent in-memory selection
+        // can never turn the cleanup fence into a successful no-op.
+        self.select_recovery()?;
         if let Some(executor) = self.selected.as_mut() {
             executor.shutdown()
         } else {

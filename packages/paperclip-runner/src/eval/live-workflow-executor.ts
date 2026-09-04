@@ -479,6 +479,10 @@ export async function executeLiveRunnerWorkflow(input: {
   candidate: RunnerLiveEvalCandidate;
   evalCase: RunnerWorkflowEvalCase;
   workingDirectory?: string;
+  allowMissingUsage?: boolean;
+  expectedAssistantText?: string;
+  promptOverride?: string;
+  runnerBinary?: string;
 }): Promise<RunnerWorkflowObservation> {
   const runtimeRoot = await mkdtemp(
     join(tmpdir(), "paperclip-runner-live-eval-"),
@@ -487,6 +491,9 @@ export async function executeLiveRunnerWorkflow(input: {
   const store = new InMemoryCapabilityLiveSessionStore();
   const transportOptions = {
     environment: candidateTransportEnvironment(input.candidate, tracePath),
+    ...(input.runnerBinary === undefined
+      ? {}
+      : { runnerBinary: input.runnerBinary }),
   };
   let service = new CapabilityLiveSessionService({ store, transportOptions });
   let session: CapabilityLiveSession | null = null;
@@ -558,7 +565,9 @@ export async function executeLiveRunnerWorkflow(input: {
       capabilities: capabilityFixtureRunCapabilities(LIVE_GRANTS),
       explicitClaims: [...LIVE_GRANTS],
       runId: input.entry.executionId,
-      sessionId: `session-${input.entry.executionId}`,
+      // Durable session identity is validation-bearing and must not look like
+      // credential material (for example a `session-...` token).
+      sessionId: `eval-${input.entry.executionId}`,
       attemptId: `attempt-${input.entry.executionId}`,
       turnTimeoutMs: input.candidate.budget.maxLatencyMs,
       lifecyclePolicy: { mode: "warm", idleTimeoutMs: 300_000 },
@@ -573,11 +582,20 @@ export async function executeLiveRunnerWorkflow(input: {
         const settled = await Promise.allSettled([pending]);
         if (settled[0]?.status === "fulfilled") turns.push(settled[0].value);
       } else {
-        turns.push(await session.sendMessage(promptFor(input.evalCase)));
+        turns.push(
+          await session.sendMessage(
+            input.promptOverride ?? promptFor(input.evalCase),
+            {
+              allowMissingUsage: input.allowMissingUsage,
+            },
+          ),
+        );
         await settleInteractions(input.evalCase, session, turns, withinBudget);
         if (input.evalCase.id === "steering-causality" && withinBudget()) {
           turns.push(
-            await session.sendMessage(continuationPrompt(input.evalCase)),
+            await session.sendMessage(continuationPrompt(input.evalCase), {
+              allowMissingUsage: input.allowMissingUsage,
+            }),
           );
         }
         if (input.evalCase.id === "restart-recovery" && withinBudget()) {
@@ -590,7 +608,9 @@ export async function executeLiveRunnerWorkflow(input: {
           session = await service.restore(sessionId);
           subscribeToSession(session);
           turns.push(
-            await session.sendMessage(continuationPrompt(input.evalCase)),
+            await session.sendMessage(continuationPrompt(input.evalCase), {
+              allowMissingUsage: input.allowMissingUsage,
+            }),
           );
         }
       }
@@ -799,6 +819,16 @@ export async function executeLiveRunnerWorkflow(input: {
         assistantTexts.some((text) => text.trim().length >= 2),
       "provider emitted no user-facing response",
     ),
+    ...(input.expectedAssistantText === undefined
+      ? []
+      : [
+          check(
+            "expected-assistant-text",
+            assistantTexts.length === 1 &&
+              assistantTexts[0]?.trim() === input.expectedAssistantText,
+            "provider response did not exactly match the smoke marker",
+          ),
+        ]),
     check(
       "no-empty-comment",
       assistantTexts.every((text) => text.trim().length > 0),

@@ -88,7 +88,7 @@ the actor gate, environment branch restriction, and protected default branch.
 When `RUNNER_E2E_AWS_ENABLED=true`, paid matrix cells use the exact RunsOn fleet
 selector `runs-on/fleet=paperclip-public-pr-x64/env=public-ci`, matching the AWS
 fleet selected by `pr-trusted.yml` only after its stable numeric-ID trust gate.
-Any other or missing toggle value falls back to the standard GitHub-hosted
+Any other or missing toggle value falls back to the GitHub-hosted
 `ubuntu-latest` runner and its lower concurrency ceiling. The workflow chooses
 between those two reviewed literal labels; it never evaluates a configured
 runner label.

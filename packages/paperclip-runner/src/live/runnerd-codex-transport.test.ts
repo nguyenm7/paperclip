@@ -9,10 +9,13 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import type { DurablePrpControlPlane } from "../control-plane/durable-prp-control-plane.js";
 
 import {
   NATIVE_RUNTIME_ASSET_SCHEMA,
@@ -33,6 +36,7 @@ import {
 import { releaseMaterializedNativeRuntimeSkills } from "../drivers/runtime-context-materializer.js";
 
 import {
+  authorizedToolSetForProvider,
   createCapabilityRunnerdCodexTransport,
   createCapabilityRunnerdProviderEnvironment,
   defaultCapabilityRunnerdBinary,
@@ -45,6 +49,7 @@ import {
   rehydrateRunnerdUsageNotification,
   rehydrateRunnerdWorkspaceChangeNotification,
   runnerdLaunchProfileInternals,
+  runnerdRecoveryInternals,
   resolveRunnerdAcpxPermissionMode,
   resolveRunnerdSessionIdentity,
   resolveSourceCodexHome,
@@ -53,6 +58,100 @@ import {
   unwrapRunnerdProviderNotifications,
   withCodexCollaborationRuntimeInstructions,
 } from "./runnerd-codex-transport.js";
+
+it("replays the durable run attachment outcome and latest provider identity", () => {
+  expect(
+    runnerdRecoveryInternals.recoveredRunAttachment({
+      commands: [
+        { commandId: "prepare", type: "run.prepare", status: "completed" },
+        { commandId: "attach", type: "run.attach", status: "failed" },
+      ],
+      committedEvents: [{ eventType: "session.started" }],
+    }),
+  ).toEqual({
+    commandId: "attach",
+    status: "failed",
+    providerIdentityEventIndex: -1,
+  });
+
+  expect(
+    runnerdRecoveryInternals.recoveredRunAttachment({
+      commands: [
+        { commandId: "attach", type: "run.attach", status: "completed" },
+      ],
+      committedEvents: [
+        { eventType: "runner.reconciled" },
+        { eventType: "session.started" },
+        { eventType: "runner.diagnostic" },
+        { eventType: "session.resumed" },
+      ],
+    }),
+  ).toEqual({
+    commandId: "attach",
+    status: "completed",
+    providerIdentityEventIndex: 3,
+  });
+});
+
+it("identifies an active provider turn that must stop before suspension", () => {
+  expect(
+    runnerdRecoveryInternals.providerDrainStateFromSnapshot({
+      activeProviderTurnId: "provider-turn-1",
+      pendingEvents: [{ eventType: "item.started" }],
+      queuedEvents: [{ eventType: "item.completed" }],
+    }),
+  ).toEqual({
+    pendingEventCount: 2,
+    activeProviderTurnId: "provider-turn-1",
+    providerSettled: false,
+  });
+
+  expect(
+    runnerdRecoveryInternals.providerDrainStateFromSnapshot({
+      activeTurnId: "acpx-turn-1",
+      pendingEvents: [],
+    }),
+  ).toEqual({
+    pendingEventCount: 0,
+    activeProviderTurnId: "acpx-turn-1",
+    providerSettled: false,
+  });
+
+  expect(
+    runnerdRecoveryInternals.providerDrainStateFromSnapshot({
+      activeProviderTurnId: null,
+      ambiguousTurnStartPending: false,
+      pendingEvents: [],
+      queuedEvents: [],
+    }),
+  ).toEqual({
+    pendingEventCount: 0,
+    activeProviderTurnId: null,
+    providerSettled: true,
+  });
+});
+
+it("keeps ACPX terminal tools under the reserved runner-owned catalog", () => {
+  const tools = [
+    {
+      name: "get_task_context",
+      description: "Read the task context.",
+      inputSchema: { type: "object" },
+    },
+    ...codexSemanticToolSpecs(),
+  ];
+
+  expect(authorizedToolSetForProvider("acpx", tools)).toMatchObject({
+    operations: [{ operationId: "get_task_context" }],
+  });
+  expect(authorizedToolSetForProvider("codex", tools)).toMatchObject({
+    operations: [
+      { operationId: "get_task_context" },
+      { operationId: "paperclip_block" },
+      { operationId: "paperclip_finish" },
+    ],
+  });
+});
 
 it("defaults runnerd ACPX permissions to approve reads", () => {
   expect(resolveRunnerdAcpxPermissionMode(undefined)).toBe("approve-reads");
@@ -85,7 +184,7 @@ it("rejects caller-selected local ACPX artifacts even when they are self-hashed"
   }
 });
 
-it.each(["acpx-runtime-sidecar.js", "opencode-app-server-proxy.js"] as const)(
+it.each(["acpx-runtime-sidecar.cjs", "opencode-app-server-proxy.cjs"] as const)(
   "resolves the %s local provider artifact from verified build-owned output",
   async (artifact) => {
     const directory = await mkdtemp(
@@ -116,6 +215,31 @@ it.each(["acpx-runtime-sidecar.js", "opencode-app-server-proxy.js"] as const)(
     }
   },
 );
+
+it("derives the ACPX package authority only from the verified dist/cli layout", () => {
+  const runnerPackageRoot = fileURLToPath(new URL("../..", import.meta.url));
+  expect(
+    runnerdLaunchProfileInternals.acpxProviderPackageAuthority(
+      resolve(runnerPackageRoot, "dist/cli/acpx-runtime-sidecar.cjs"),
+    ),
+  ).toEqual({
+    root: resolve(runnerPackageRoot, "../.."),
+    manifest: resolve(runnerPackageRoot, "package.json"),
+  });
+  expect(
+    runnerdLaunchProfileInternals.acpxProviderPackageAuthority(
+      "/provider-pack/dist/cli/acpx-runtime-sidecar.cjs",
+    ),
+  ).toEqual({
+    root: "/provider-pack",
+    manifest: "/provider-pack/package.json",
+  });
+  expect(() =>
+    runnerdLaunchProfileInternals.acpxProviderPackageAuthority(
+      "/unverified/acpx-runtime-sidecar.cjs",
+    ),
+  ).toThrow("ACPX sidecar must use the provider package dist/cli layout");
+});
 
 it("requires a provider-pack authority for remote ACPX artifact hashes", () => {
   expect(() =>
@@ -409,6 +533,9 @@ it.each([
         environment: {
           PATH: "/bin",
           ...credentialEnvironment,
+          PAPERCLIP_ACPX_PROVIDER_PACKAGE_ROOT: "/attacker/package-root",
+          PAPERCLIP_ACPX_PROVIDER_PACKAGE_MANIFEST:
+            "/attacker/package-root/package.json",
           PAPERCLIP_API_KEY: "must-not-reach-provider",
           DATABASE_URL: "must-not-reach-provider",
         },
@@ -424,6 +551,8 @@ it.each([
       codexHome: "/isolated/codex-home",
       runtimeContextPath: "/isolated/runtime-context.json",
       hasRuntimeContext: true,
+      acpxSidecarPath:
+        "/verified/provider-pack/dist/cli/acpx-runtime-sidecar.cjs",
     });
 
     expect(environment).toMatchObject({
@@ -432,6 +561,9 @@ it.each([
       PAPERCLIP_RUN_ID: "run-1",
       PAPERCLIP_NORMALIZED_SESSION_ID: "session-1",
       PAPERCLIP_NATIVE_RUNTIME_CONTEXT_PATH: "/isolated/runtime-context.json",
+      PAPERCLIP_ACPX_PROVIDER_PACKAGE_ROOT: "/verified/provider-pack",
+      PAPERCLIP_ACPX_PROVIDER_PACKAGE_MANIFEST:
+        "/verified/provider-pack/package.json",
     });
     for (const key of allowed)
       expect(environment[key]).toBe(credentialEnvironment[key]);
@@ -755,6 +887,17 @@ it("resolves canonical and legacy durable session identities", () => {
     processId: 4242,
     threadId: "provider-thread-1",
     sessionId: "provider-account-1",
+  });
+  expect(
+    resolveRunnerdSessionIdentity({
+      driverSessionId: "provider-thread-2",
+      providerSessionId: "provider-account-2",
+      processId: 4243,
+    }),
+  ).toEqual({
+    processId: 4243,
+    threadId: "provider-thread-2",
+    sessionId: "provider-account-2",
   });
   expect(
     resolveRunnerdSessionIdentity({
@@ -1855,6 +1998,182 @@ it("cold-restores a suspended provider session under its durable run binding", a
   }
 }, 30_000);
 
+async function verifyLiveRunnerAdoption(mismatchedCheckpoint: boolean) {
+  const stateDirectory = await mkdtemp(join(tmpdir(), "runnerd-live-adopt-"));
+  const server = createServer();
+  let authority: DurablePrpControlPlane | null = null;
+  server.on("upgrade", (request, socket, head) => {
+    if (!authority) {
+      socket.destroy();
+      return;
+    }
+    authority.handleUpgrade(request, socket, "/runner", head);
+  });
+  await new Promise<void>((resolveListen) =>
+    server.listen(0, "127.0.0.1", resolveListen),
+  );
+  const address = server.address();
+  if (!address || typeof address === "string")
+    throw new Error("Expected adoption test listener");
+  const registration = async (next: DurablePrpControlPlane) => {
+    authority = next;
+    return {
+      connectUrl: `ws://127.0.0.1:${address.port}/runner`,
+      release: async () => {
+        if (authority === next) authority = null;
+      },
+    };
+  };
+  const identity = {
+    runnerInstanceId: "runner-live-adopt",
+    environmentLeaseId: "lease-live-adopt",
+    runId: "run-live-adopt",
+    normalizedSessionId: "session-live-adopt",
+    turnId: "turn-live-adopt",
+    itemId: "item-live-adopt",
+  };
+  const sharedOptions = {
+    runnerBinary: defaultCapabilityRunnerdBinary(),
+    codexCommand: fakeCodex,
+    codexArgs: fakeCodexArgs(stateDirectory),
+    stateDirectory,
+    prpIdentity: identity,
+    lifecyclePolicy: { mode: "warm" as const, idleTimeoutMs: 60_000 },
+    controlPlaneRegistration: registration,
+  };
+  const first = createCapabilityRunnerdCodexTransport(sharedOptions);
+  let runnerPid: number | null = null;
+  let adopted: ReturnType<typeof createCapabilityRunnerdCodexTransport> | null =
+    null;
+  try {
+    let opened: Record<string, unknown>;
+    try {
+      opened = await first.transport.request("thread/start", {
+        cwd: tmpdir(),
+        dynamicTools: codexSemanticToolSpecs(),
+      });
+    } catch (error) {
+      const stderr = await readFile(
+        join(stateDirectory, "diagnostics", "runnerd.stderr.log"),
+        "utf8",
+      ).catch(() => "");
+      throw new Error(
+        `${String(error)}\n${JSON.stringify(first.evidence())}${stderr ? `\n${stderr}` : ""}`,
+      );
+    }
+    runnerPid = first.evidence().runnerPid;
+    expect(runnerPid).toEqual(expect.any(Number));
+
+    await first.detachControllerForRestart();
+    expect(() => process.kill(runnerPid!, 0)).not.toThrow();
+
+    const controlPlaneStatePath = join(
+      stateDirectory,
+      "control-plane",
+      "control-plane-state.json",
+    );
+    const compactProviderIdentityEvents = async () => {
+      const controlPlaneState = JSON.parse(
+        await readFile(controlPlaneStatePath, "utf8"),
+      ) as { committedEvents: Array<{ eventType: string }> };
+      controlPlaneState.committedEvents =
+        controlPlaneState.committedEvents.filter(
+          (event) =>
+            event.eventType !== "harness.ready" &&
+            event.eventType !== "session.started" &&
+            event.eventType !== "session.resumed",
+        );
+      await writeFile(
+        controlPlaneStatePath,
+        `${JSON.stringify(controlPlaneState, null, 2)}\n`,
+        { mode: 0o600 },
+      );
+    };
+    await compactProviderIdentityEvents();
+
+    const duplicateLauncher = vi.fn(() => {
+      throw new Error("duplicate runner spawn attempted");
+    });
+    const openedThread = opened.thread as Record<string, unknown>;
+    adopted = createCapabilityRunnerdCodexTransport({
+      ...sharedOptions,
+      resumeDynamicTools: [],
+      resumeProviderSession: {
+        driverSessionId: String(openedThread.id),
+        providerSessionId: mismatchedCheckpoint
+          ? "wrong-provider-session"
+          : String(openedThread.sessionId),
+      },
+      runnerProcessLauncher: duplicateLauncher,
+      adoptExistingRunner: {
+        pid: runnerPid!,
+        processGroupId: runnerPid,
+        startedAt: new Date().toISOString(),
+        isAlive: () => {
+          try {
+            process.kill(runnerPid!, 0);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+      },
+    });
+    if (mismatchedCheckpoint) {
+      await expect(
+        adopted.transport.request("thread/read", {}),
+      ).rejects.toThrow("native_adopted_provider_identity_mismatch");
+      expect(duplicateLauncher).not.toHaveBeenCalled();
+      expect(() => process.kill(runnerPid!, 0)).not.toThrow();
+      return;
+    }
+    await expect(adopted.transport.request("thread/read", {})).resolves.toEqual(
+      expect.objectContaining({
+        thread: expect.objectContaining({ id: "codex-thread-1" }),
+      }),
+    );
+    expect(adopted.evidence().runnerPid).toBe(runnerPid);
+    expect(duplicateLauncher).not.toHaveBeenCalled();
+    expect(adopted.evidence().diagnostics).toContain(
+      `adopted runner ${runnerPid} authenticated to its durable PRP authority`,
+    );
+    expect(adopted.evidence().diagnostics).toContain(
+      "restored adopted provider identity from the exact durable checkpoint after PRP event compaction; awaiting live confirmation",
+    );
+    expect(adopted.evidence().diagnostics).toContain(
+      "confirmed adopted provider identity against authenticated session.snapshot",
+    );
+  } finally {
+    await adopted?.transport.close().catch(() => undefined);
+    if (runnerPid) {
+      try {
+        process.kill(-runnerPid, "SIGKILL");
+      } catch {
+        // The adopted runner normally exits after its durable suspend command.
+      }
+    }
+    server.closeAllConnections();
+    if (server.listening) {
+      await new Promise<void>((resolveClose) =>
+        server.close(() => resolveClose()),
+      );
+    }
+    await rm(stateDirectory, { recursive: true, force: true });
+  }
+}
+
+it(
+  "adopts a live runner on the same durable authority without spawning a duplicate",
+  () => verifyLiveRunnerAdoption(false),
+  30_000,
+);
+
+it(
+  "rejects a live runner whose provider identity mismatches the compacted checkpoint",
+  () => verifyLiveRunnerAdoption(true),
+  30_000,
+);
+
 it("surfaces a runner exit while provider-ingress readiness is still pending", async () => {
   const neverReady = new Promise<void>(() => undefined);
   const bundle = createCapabilityRunnerdCodexTransport({
@@ -1955,6 +2274,53 @@ it("rejects the notification stream promptly when runnerd exits after accepting 
         ),
       ]),
     ).rejects.toThrow("native_runner_process_exited");
+  } finally {
+    await bundle.transport.close();
+    await rm(stateDirectory, { recursive: true, force: true });
+  }
+}, 30_000);
+
+it("persists an active provider as settled before bounded suspension", async () => {
+  const stateDirectory = await mkdtemp(
+    join(tmpdir(), "runnerd-active-suspension-"),
+  );
+  const bundle = createCapabilityRunnerdCodexTransport({
+    runnerBinary: defaultCapabilityRunnerdBinary(),
+    codexCommand: fakeCodex,
+    codexArgs: fakeCodexArgs(stateDirectory, "--linger-after-turn-start"),
+    stateDirectory,
+  });
+  bundle.transport.setServerRequestHandler(async () => ({
+    success: true,
+    contentItems: [],
+  }));
+  try {
+    await bundle.transport.request("initialize", {});
+    await bundle.transport.request("thread/start", {
+      cwd: tmpdir(),
+      dynamicTools: [],
+    });
+    await bundle.transport.request("turn/start", {
+      input: [{ type: "text", text: "Wait for another instruction." }],
+    });
+    const notifications = bundle.transport
+      .notifications()
+      [Symbol.asyncIterator]();
+    await expect(notifications.next()).resolves.toMatchObject({
+      value: { method: "turn/started" },
+    });
+    await bundle.transport.close();
+
+    const providerState = JSON.parse(
+      await readFile(
+        join(stateDirectory, "runner", "codex-provider-state.json"),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+    expect(providerState).toMatchObject({
+      lifecycle: "prepared",
+      activeProviderTurnId: null,
+    });
   } finally {
     await bundle.transport.close();
     await rm(stateDirectory, { recursive: true, force: true });

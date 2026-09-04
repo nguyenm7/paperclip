@@ -131,14 +131,21 @@ describe("SidebarAccountMenu", () => {
     expect(accountSurface?.className).not.toContain("border-border");
     const accountTrigger = container.querySelector('button[aria-label="Open account menu"]');
     expect(accountTrigger?.classList).toContain("rounded-lg");
-    expect(accountTrigger?.classList).toContain("hover:bg-background");
+    expect(accountTrigger?.classList).toContain("hover:bg-sidebar-accent");
+    expect(accountTrigger?.classList).toContain("hover:text-sidebar-accent-foreground");
+    expect(accountTrigger?.classList).not.toContain("hover:bg-background");
 
     const feedbackButton = container.querySelector<HTMLAnchorElement>(
       'a[aria-label="Share feedback"]',
     );
     expect(feedbackButton?.getAttribute("href")).toBe("https://paperclip.ing/feedback");
     expect(feedbackButton?.getAttribute("target")).toBe("_blank");
-    expect(feedbackButton?.classList).toContain("hover:bg-background");
+    expect(feedbackButton?.classList).toContain("text-muted-foreground/50");
+    expect(feedbackButton?.classList).not.toContain("text-border");
+    expect(feedbackButton?.classList).not.toContain("text-muted-foreground");
+    expect(feedbackButton?.classList).toContain("hover:bg-sidebar-accent");
+    expect(feedbackButton?.classList).toContain("hover:text-sidebar-accent-foreground");
+    expect(feedbackButton?.classList).not.toContain("hover:bg-background");
     expect(feedbackButton?.querySelector("svg")?.classList).toContain("lucide-flag");
     expect(feedbackButton?.getAttribute("data-slot")).toBe("tooltip-trigger");
     expect(feedbackButton?.hasAttribute("title")).toBe(false);
@@ -172,6 +179,9 @@ describe("SidebarAccountMenu", () => {
     );
     expect(feedbackButton?.getAttribute("href")).toBe("https://paperclip.ing/feedback");
     expect(feedbackButton?.getAttribute("target")).toBe("_blank");
+    expect(feedbackButton?.classList).toContain("text-muted-foreground/50");
+    expect(feedbackButton?.classList).not.toContain("text-border");
+    expect(feedbackButton?.classList).not.toContain("text-muted-foreground");
     expect(feedbackButton?.classList).toContain("hover:bg-accent/50");
     expect(feedbackButton?.querySelector("svg")?.classList).toContain("lucide-flag");
     expect(feedbackButton?.getAttribute("data-slot")).toBe("tooltip-trigger");
@@ -202,10 +212,7 @@ describe("SidebarAccountMenu", () => {
       root.render(
         <QueryClientProvider client={queryClient}>
           <TooltipProvider>
-            <SidebarAccountMenu
-              deploymentMode="authenticated"
-              version="1.2.3"
-            />
+            <SidebarAccountMenu deploymentMode="authenticated" />
           </TooltipProvider>
         </QueryClientProvider>,
       );
@@ -239,10 +246,20 @@ describe("SidebarAccountMenu", () => {
     const themePos = menuText.indexOf("Switch to");
     expect(docsPos).toBeLessThan(themePos);
 
-    expect(document.body.textContent).toContain("Paperclip v1.2.3");
+    // The popover header stays down to name + email: no "Account" badge, no version line.
+    expect(popover?.textContent).not.toContain("Account");
+    expect(popover?.textContent).not.toContain("Paperclip v");
     expect(document.body.textContent).toContain("jane@example.com");
     expect(document.body.querySelector('[data-slot="popover-content"]')?.className)
-      .toContain("w-(--sz-277px)");
+      .toContain("w-(--profile-popover-width)");
+    expect(document.body.querySelector('[data-slot="popover-content"]')?.className)
+      .toContain("rounded-xl");
+    expect(document.body.querySelector('[data-slot="popover-content"]')?.className)
+      .toContain("min-h-(--profile-popover-min-height)");
+    expect(document.body.querySelector('a[href="/company/settings"]')?.className)
+      .not.toContain("bg-muted");
+    expect(document.body.textContent).not.toContain("Manage company and instance settings.");
+    expect(document.body.textContent).not.toContain("Open your activity, task, and usage ledger.");
     expect(document.body.querySelector('a[href="/company/settings/instance/profile"]')).not.toBeNull();
     expect(document.body.querySelector('a[href="/company/settings"]')).not.toBeNull();
 
@@ -368,55 +385,5 @@ describe("SidebarAccountMenu", () => {
     expect(document.body.querySelector('[data-testid="product-feedback-dialog"]')).not.toBeNull();
 
     await act(() => root.unmount());
-  });
-
-  it("shows the short commit sha instead of a version for source builds", async () => {
-    const root = createRoot(container);
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <TooltipProvider>
-            <SidebarAccountMenu
-              deploymentMode="authenticated"
-              version="2026.626.0+58.git.518fc71ce"
-              serverGit={{
-                available: true,
-                fullSha: "518fc71ce1234567890abcdef1234567890abcde",
-                shortSha: "518fc71",
-                branchName: "feature/source-build-label",
-                subject: "Show source build label",
-                committedAt: "2026-06-26T00:00:00.000Z",
-                localChanges: {
-                  available: true,
-                  hasLocalChanges: false,
-                  stagedFileCount: 0,
-                  unstagedFileCount: 0,
-                  untrackedFileCount: 0,
-                },
-              }}
-              open
-            />
-          </TooltipProvider>
-        </QueryClientProvider>,
-      );
-    });
-    await flushReact();
-
-    expect(document.body.textContent).toContain("feature/source-build-labelPaperclip 518fc71");
-    expect(document.body.textContent).not.toContain("2026.626.0+58.git.518fc71ce");
-    expect(document.body.querySelector('a[href="https://github.com/paperclipai/paperclip/tree/feature%2Fsource-build-label"]')?.textContent).toBe(
-      "feature/source-build-label",
-    );
-    expect(document.body.querySelector('a[href="https://github.com/paperclipai/paperclip/commit/518fc71ce1234567890abcdef1234567890abcde"]')?.textContent).toBe(
-      "518fc71",
-    );
-
-    await act(async () => {
-      root.unmount();
-    });
   });
 });

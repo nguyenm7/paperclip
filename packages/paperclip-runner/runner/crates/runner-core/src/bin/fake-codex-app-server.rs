@@ -514,6 +514,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .any(|value| value == "--finish-turn-with-pending-tool");
     let require_dynamic_tool = args.iter().any(|value| value == "--require-dynamic-tool");
+    let require_completion_contract = args
+        .iter()
+        .any(|value| value == "--require-completion-contract");
     let expected_canonical_task_context = argument(&args, "--expected-canonical-task-context")
         .map(|value| serde_json::from_str::<Value>(&value))
         .transpose()?;
@@ -766,6 +769,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 if require_dynamic_tool && !has_task_context_tool(&message) {
                     return Err("thread/start omitted the authorized dynamic tool".into());
                 }
+                if require_completion_contract
+                    && message.pointer("/params/completionContract")
+                        != Some(&json!({
+                            "revision": "revision-1",
+                            "criterionIds": ["criterion-1"],
+                        }))
+                {
+                    return Err("thread/start omitted the durable completion contract".into());
+                }
                 state.thread_id = "codex-thread-1".to_owned();
                 state.active_turn_id = None;
                 save_state(&state_path, &state)?;
@@ -783,6 +795,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "thread/resume" => {
                 if require_dynamic_tool && !has_task_context_tool(&message) {
                     return Err("thread/resume omitted the authorized dynamic tool".into());
+                }
+                if require_completion_contract
+                    && message.pointer("/params/completionContract")
+                        != Some(&json!({
+                            "revision": "revision-1",
+                            "criterionIds": ["criterion-1"],
+                        }))
+                {
+                    return Err("thread/resume omitted the durable completion contract".into());
                 }
                 let unowned_turn_marker = state_path.with_file_name("resume-unowned-turn");
                 if resume_unowned_turn_when_marked && unowned_turn_marker.exists() {

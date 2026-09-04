@@ -3,6 +3,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
+const ordinaryPrTrustedWorkflowRevision =
+  "a0a78ee60946a5f79f85b2bd0584fc766fae43bb";
 const fullStackTestNeeds =
   /needs:\s*\[\s*authorize,\s*target_lock,\s*catalog,\s*daytona_image,\s*build_runner_artifacts,\s*build_remote_provider_pack,?\s*\]/u;
 const buildRunnerNeeds =
@@ -11,6 +13,26 @@ const buildRemoteProviderPackNeeds =
   /needs:\s*\[\s*authorize,\s*target_lock,\s*catalog,\s*daytona_image,\s*build_runner_artifacts,?\s*\]/u;
 
 describe("public repository paid workflow security", () => {
+  it("pins ordinary PR CI to the trusted Node-before-pnpm workflow", async () => {
+    const ordinaryPrWorkflow = await readFile(
+      path.join(repositoryRoot, ".github/workflows/pr.yml"),
+      "utf8",
+    );
+    const trustedWorkflowCalls = [
+      ...ordinaryPrWorkflow.matchAll(
+        /^\s+uses:\s+(paperclipai\/paperclip\/\.github\/workflows\/pr-trusted\.yml)@([0-9a-f]{40})$/gmu,
+      ),
+    ];
+
+    expect(trustedWorkflowCalls).toHaveLength(1);
+    expect(trustedWorkflowCalls[0]?.[1]).toBe(
+      "paperclipai/paperclip/.github/workflows/pr-trusted.yml",
+    );
+    expect(trustedWorkflowCalls[0]?.[2]).toBe(
+      ordinaryPrTrustedWorkflowRevision,
+    );
+  });
+
   it("keeps pnpm bootstrap registry telemetry out of trusted workflow setup", async () => {
     for (const workflowName of [
       "runner-full-stack-e2e.yml",
@@ -42,6 +64,58 @@ describe("public repository paid workflow security", () => {
           workflowName,
         ).toHaveLength(pnpmSetupSteps.length);
       }
+    }
+  });
+
+  it("installs a modern Node runtime before every trusted pnpm bootstrap", async () => {
+    const workflows = [
+      {
+        name: "runner-full-stack-e2e.yml",
+        expectedCachedSetupNodeSteps: 4,
+      },
+      {
+        name: "pr-trusted.yml",
+        expectedCachedSetupNodeSteps: 7,
+      },
+    ];
+
+    for (const { name, expectedCachedSetupNodeSteps } of workflows) {
+      const workflow = await readFile(
+        path.join(repositoryRoot, ".github/workflows", name),
+        "utf8",
+      );
+      const steps = workflow.split(/\n(?= {6}- )/u);
+      const pnpmSetupStepIndexes = steps.flatMap((step, index) =>
+        step.includes("uses: pnpm/action-setup@") ? [index] : [],
+      );
+
+      expect(pnpmSetupStepIndexes, name).toHaveLength(7);
+      for (const pnpmSetupStepIndex of pnpmSetupStepIndexes) {
+        const pnpmSetupStep = steps[pnpmSetupStepIndex]!;
+        const nodeBootstrapStep = steps[pnpmSetupStepIndex - 1]!;
+        expect(nodeBootstrapStep, name).toContain("uses: actions/setup-node@");
+        expect(nodeBootstrapStep, name).not.toContain("cache: pnpm");
+
+        const nodeVersionMatch = nodeBootstrapStep.match(
+          /^\s*node-version:\s*["']?(\d+)(?:\.(\d+))?/mu,
+        );
+        expect(nodeVersionMatch, name).not.toBeNull();
+        const nodeMajor = Number(nodeVersionMatch![1]);
+        const nodeMinor = Number(nodeVersionMatch![2] ?? 0);
+        expect(
+          nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 13),
+          `${name} must install Node >=22.13 before pnpm/action-setup`,
+        ).toBe(true);
+
+        const conditionPattern = /^ {6}- if:\s*(.+)$/mu;
+        expect(nodeBootstrapStep.match(conditionPattern)?.[1] ?? null).toBe(
+          pnpmSetupStep.match(conditionPattern)?.[1] ?? null,
+        );
+      }
+
+      expect(workflow.match(/^\s+cache: pnpm$/gmu), name).toHaveLength(
+        expectedCachedSetupNodeSteps,
+      );
     }
   });
 
@@ -112,6 +186,10 @@ describe("public repository paid workflow security", () => {
       fullStack.indexOf("  target_lock:"),
       fullStack.indexOf("  catalog:"),
     );
+    const daytonaImageJob = fullStack.slice(
+      fullStack.indexOf("  daytona_image:"),
+      fullStack.indexOf("  build_runner_artifacts:"),
+    );
     expect(authorizeJob).toContain(
       "aws_runner='runs-on/fleet=paperclip-public-pr-x64/env=public-ci'",
     );
@@ -120,12 +198,21 @@ describe("public repository paid workflow security", () => {
       "AWS_PAID_RUNNER_ENABLED: ${{ vars.RUNNER_E2E_AWS_ENABLED }}",
     );
     expect(authorizeJob).toContain(
+      "playwright_channel: ${{ steps.runner.outputs.playwright_channel }}",
+    );
+    expect(authorizeJob).toContain('echo "playwright_channel=chrome"');
+    expect(authorizeJob).toContain('echo "playwright_channel="');
+    expect(authorizeJob).toContain(
       "Resolve requested repository branch to an immutable commit",
     );
     expect(authorizeJob).toContain(
       "repos/$REPOSITORY/branches/$encoded_branch",
     );
     expect(authorizeJob).toContain('echo "sha=$target_sha"');
+    expect(authorizeJob).toContain(
+      "target_ref: ${{ steps.target.outputs.ref }}",
+    );
+    expect(authorizeJob).toContain('echo "ref=refs/heads/$TARGET_BRANCH"');
     expect(authorizeJob).not.toContain("actions/checkout@");
     expect(authorizeJob).not.toContain("pnpm install");
     expect(targetLockJob).toContain("name: Resolve target pnpm lockfile");
@@ -156,16 +243,53 @@ describe("public repository paid workflow security", () => {
     expect(paidJob).toMatch(
       /Reauthorize paid execution before provider access[\s\S]*actions\/checkout@[0-9a-f]{40}[\s\S]*persist-credentials: false[\s\S]*Download resolved target lockfile/,
     );
+    expect(paidJob).toContain(
+      "pnpm exec playwright install --with-deps --only-shell chromium",
+    );
+    expect(paidJob).toContain("name: Qualify preinstalled Chrome");
+    expect(paidJob).toContain(
+      "if: needs.authorize.outputs.playwright_channel == 'chrome'",
+    );
+    expect(paidJob).toContain("google-chrome --version");
+    expect(paidJob).toContain(
+      "if: needs.authorize.outputs.playwright_channel != 'chrome'",
+    );
+    expect(paidJob).toContain(
+      "PAPERCLIP_PLAYWRIGHT_CHANNEL: ${{ needs.authorize.outputs.playwright_channel }}",
+    );
+    expect(paidJob).not.toContain(
+      "pnpm exec playwright install --with-deps chromium",
+    );
     const paidInstall = paidJob.indexOf(
       "pnpm install --frozen-lockfile --ignore-scripts",
     );
     const daytonaPluginPreparation = paidJob.indexOf(
       "Prepare bundled Daytona plugin without dependency lifecycle scripts",
     );
+    const awsFfmpegInstall = paidJob.indexOf(
+      "- name: Install Playwright FFmpeg on AWS runner",
+    );
+    const hostedChromiumInstall = paidJob.indexOf(
+      "- name: Install Chromium headless shell on GitHub-hosted fallback",
+    );
     const paidExecution = paidJob.indexOf("- name: Run paid cell");
     expect(paidInstall).toBeGreaterThan(0);
     expect(daytonaPluginPreparation).toBeGreaterThan(paidInstall);
+    expect(awsFfmpegInstall).toBeGreaterThan(daytonaPluginPreparation);
+    expect(hostedChromiumInstall).toBeGreaterThan(awsFfmpegInstall);
+    expect(paidExecution).toBeGreaterThan(awsFfmpegInstall);
     expect(paidExecution).toBeGreaterThan(daytonaPluginPreparation);
+    const awsFfmpegStep = paidJob.slice(
+      awsFfmpegInstall,
+      hostedChromiumInstall,
+    );
+    expect(awsFfmpegStep).toContain(
+      "if: needs.authorize.outputs.playwright_channel == 'chrome'",
+    );
+    expect(awsFfmpegStep).toContain("pnpm exec playwright install ffmpeg");
+    expect(awsFfmpegStep).not.toMatch(
+      /(?:OPENAI|ANTHROPIC|OPENROUTER|DAYTONA)_API_KEY/,
+    );
     const preparedBeforeProviderAccess = paidJob.slice(
       daytonaPluginPreparation,
       paidExecution,
@@ -204,11 +328,30 @@ describe("public repository paid workflow security", () => {
       '[ "$MAX_PARALLEL" -gt "$MAX_PARALLEL_LIMIT" ]',
     );
     expect(fullStack).toContain(
-      "group: runner-full-stack-e2e-${{ inputs.target_branch || github.event.repository.default_branch }}",
+      "group: runner-full-stack-e2e-${{ github.event_name == 'workflow_dispatch' && inputs.target_branch != '' && inputs.target_branch != github.event.repository.default_branch && format('development-{0}', inputs.target_branch) || format('protected-{0}', github.run_id) }}",
     );
     expect(fullStack).toContain(
       "cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.target_branch != '' && inputs.target_branch != github.event.repository.default_branch }}",
     );
+    expect(daytonaImageJob).toMatch(
+      /- if: needs\.catalog\.outputs\.needs_daytona == 'true'\n\s+uses: actions\/checkout@[0-9a-f]{40}/u,
+    );
+    for (const stepName of [
+      "Download resolved target lockfile",
+      "Restore resolved target lockfile",
+    ]) {
+      expect(daytonaImageJob).toMatch(
+        new RegExp(
+          `- name: ${stepName}\\n\\s+if: needs\\.catalog\\.outputs\\.needs_daytona == 'true'`,
+          "u",
+        ),
+      );
+    }
+    expect(daytonaImageJob).toMatch(
+      /- name: No Daytona image needed\n\s+id: local_only\n\s+if: needs\.catalog\.outputs\.needs_daytona != 'true'/u,
+    );
+    expect(daytonaImageJob).toContain('echo "source_revision="');
+    expect(daytonaImageJob).toContain('echo "content_id="');
     const targetCodeJobs = [
       fullStack.slice(
         fullStack.indexOf("  catalog:"),
@@ -286,6 +429,17 @@ describe("public repository paid workflow security", () => {
       "ref: ${{ needs.authorize.outputs.target_sha }}",
     );
     expect(historyJob).not.toContain("Download resolved target lockfile");
+    expect(fullStack).toContain(
+      "if: always() && !cancelled() && needs.catalog.result == 'success'",
+    );
+    for (const targetProvenanceJob of [paidJob, reportJob]) {
+      expect(targetProvenanceJob).toContain(
+        "PAPERCLIP_RUNNER_E2E_SOURCE_SHA: ${{ needs.authorize.outputs.target_sha }}",
+      );
+      expect(targetProvenanceJob).toContain(
+        "PAPERCLIP_RUNNER_E2E_SOURCE_REF: ${{ needs.authorize.outputs.target_ref }}",
+      );
+    }
     for (const [secret, condition] of Object.entries({
       OPENAI_API_KEY: "matrix.credentialName == 'OPENAI_API_KEY'",
       ANTHROPIC_API_KEY: "matrix.credentialName == 'ANTHROPIC_API_KEY'",
@@ -387,12 +541,25 @@ describe("public repository paid workflow security", () => {
     expect(buildJob).toContain(
       "provider_pack_artifact_name: ${{ steps.provider_pack_artifact_name.outputs.name }}",
     );
+    expect(buildJob).toContain(
+      "runner-e2e-build-${TARGET_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}",
+    );
+    expect(buildJob).toContain(
+      "runner-e2e-provider-pack-${TARGET_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}",
+    );
+    expect(buildJob).not.toContain("runner-e2e-build-${GITHUB_SHA}");
+    expect(buildJob).not.toContain("runner-e2e-provider-pack-${GITHUB_SHA}");
     expect(workflow).toContain("needs_runner_typescript=");
     expect(workflow).toContain("needs_native_binaries=");
     expect(workflow).toContain("needs_remote_provider_pack=");
 
     expect(testJob).toMatch(fullStackTestNeeds);
     expect(testJob).toContain("Download immutable campaign outputs");
+    expect(
+      testJob.match(
+        /if: startsWith\(matrix\.profileId, 'runner-'\) \|\| matrix\.suiteId == 'openrouter-model-breadth'/gu,
+      ),
+    ).toHaveLength(2);
     expect(testJob).toContain("Download immutable remote provider pack");
     expect(testJob).toContain(
       "needs.build_runner_artifacts.outputs.build_artifact_name",
@@ -423,6 +590,70 @@ describe("public repository paid workflow security", () => {
     expect(testJob).not.toContain("build:typescript");
     expect(testJob).not.toContain("build:runner-binaries");
     expect(testJob).not.toContain("build-provider-pack.mjs");
+  });
+
+  it("uses the reviewed AWS Chrome channel without weakening the local executable override", async () => {
+    const config = await readFile(
+      path.join(repositoryRoot, "tests/runner-e2e/playwright.config.ts"),
+      "utf8",
+    );
+
+    expect(config).toContain(
+      "process.env.PAPERCLIP_PLAYWRIGHT_CHANNEL?.trim()",
+    );
+    expect(config).toContain("{ channel: playwrightChannel }");
+    expect(config).toContain(
+      "process.env.PAPERCLIP_RUNNER_E2E_CHROMIUM_EXECUTABLE?.trim()",
+    );
+    expect(config).toContain(
+      "PAPERCLIP_PLAYWRIGHT_CHANNEL and PAPERCLIP_RUNNER_E2E_CHROMIUM_EXECUTABLE are mutually exclusive",
+    );
+  });
+
+  it("binds rerun evidence and Pages artifacts to the exact workflow attempt", async () => {
+    const workflow = await readFile(
+      path.join(repositoryRoot, ".github/workflows/runner-full-stack-e2e.yml"),
+      "utf8",
+    );
+    const reportStart = workflow.indexOf("  report:");
+    const publisherStart = workflow.indexOf("  publish_history:", reportStart);
+    const report = workflow.slice(reportStart, publisherStart);
+    const publisher = workflow.slice(publisherStart);
+
+    expect(report).toContain("actions: read");
+    expect(report).toContain(
+      '"repos/$REPOSITORY/actions/runs/$RUN_ID/jobs?filter=all&per_page=100"',
+    );
+    expect(report).toContain("gh api --paginate --slurp");
+    expect(report).toContain(
+      '"repos/$REPOSITORY/actions/runs/$RUN_ID/attempts/$attempt"',
+    );
+    expect(report).toContain("--jq '{run_attempt, run_started_at}'");
+    expect(report).toContain("pattern: runner-e2e-${{ github.run_id }}-*-*");
+    expect(report).not.toContain(
+      "pattern: runner-e2e-${{ github.run_id }}-${{ github.run_attempt }}-*",
+    );
+    expect(report.match(/merge-multiple: false/g)).toHaveLength(2);
+    expect(report).toContain("Select latest workflow attempt per cell");
+    expect(report).toContain("tests/runner-e2e/select-rerun-artifacts.ts");
+    expect(report).toContain(
+      "PAPERCLIP_RUNNER_E2E_REPORT_ROOT: ${{ github.workspace }}/selected-runner-e2e",
+    );
+    expect(
+      report.indexOf("Select latest workflow attempt per cell"),
+    ).toBeLessThan(report.indexOf("Collect blob reports"));
+    expect(publisher).toContain(
+      'echo "name=github-pages-${{ github.run_id }}-${{ github.run_attempt }}"',
+    );
+    expect(publisher).toContain(
+      "pages_artifact_name: ${{ steps.pages_artifact_name.outputs.name }}",
+    );
+    expect(publisher).toContain(
+      "name: ${{ steps.pages_artifact_name.outputs.name }}",
+    );
+    expect(publisher).toContain(
+      "artifact_name: ${{ needs.publish_history.outputs.pages_artifact_name }}",
+    );
   });
 
   it("uses environment-scoped OIDC for a no-delete history publisher", async () => {

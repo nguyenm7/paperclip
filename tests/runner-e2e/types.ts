@@ -174,6 +174,7 @@ export interface MatrixJob {
 
 export type FailureClass =
   | "candidate_failure"
+  | "provider_variance"
   | "transient_infrastructure"
   | "permanent_infrastructure"
   | "secret_leak"

@@ -259,6 +259,7 @@ async function renderForm(
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
+  const onSave = vi.fn();
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -274,7 +275,7 @@ async function renderForm(
             <AgentConfigForm
               mode="edit"
               agent={makeAgent(agentOverrides)}
-              onSave={vi.fn()}
+              onSave={onSave}
               hidePromptTemplate
               content={options.content}
               showAdapterTypeField={false}
@@ -287,7 +288,7 @@ async function renderForm(
   });
 
   await flushReact();
-  return { container, root };
+  return { container, root, onSave };
 }
 
 async function renderCreateForm(
@@ -722,6 +723,84 @@ describe("AgentConfigForm environment selector", () => {
 
     expect(result.container.textContent).not.toContain("Environment override");
     expect(result.container.querySelector("select")).toBeNull();
+  });
+
+  it("renders GPT-6 Astra and its model-specific reasoning efforts", async () => {
+    mockAgentsApi.adapterModels.mockResolvedValue([
+      { id: "gpt-5.6-sol", label: "gpt-5.6-sol" },
+      { id: "gpt-6-astra", label: "gpt-6-astra" },
+    ]);
+    const result = await renderForm(
+      [makeEnvironment({ id: "local-1", name: "Local", driver: "local" })],
+      {
+        adapterConfig: {
+          model: "gpt-6-astra",
+          modelReasoningEffort: "ultra",
+        },
+      },
+    );
+    roots.push(result.root);
+
+    expect(result.container.textContent).toContain("gpt-6-astra");
+    const effortButton = Array.from(result.container.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Ultra");
+    expect(effortButton).not.toBeUndefined();
+
+    await act(async () => {
+      effortButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    const effortChoices = Array.from(document.body.querySelectorAll("button"))
+      .map((button) => button.textContent?.replace(/\s+/g, "").trim());
+    expect(effortChoices).toContain("Maxmax");
+    expect(effortChoices).toContain("Ultraultra");
+    expect(effortChoices).not.toContain("Minimalminimal");
+  });
+
+  it("removes a legacy incompatible effort when the model changes to Astra", async () => {
+    mockAgentsApi.adapterModels.mockResolvedValue([
+      { id: "gpt-5.6-sol", label: "gpt-5.6-sol" },
+      { id: "gpt-6-astra", label: "gpt-6-astra" },
+    ]);
+    const result = await renderForm(
+      [makeEnvironment({ id: "local-1", name: "Local", driver: "local" })],
+      {
+        adapterConfig: {
+          model: "gpt-5.6-sol",
+          reasoningEffort: "minimal",
+        },
+      },
+    );
+    roots.push(result.root);
+
+    const modelButton = Array.from(result.container.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "gpt-5.6-sol");
+    expect(modelButton).not.toBeUndefined();
+    await act(async () => {
+      modelButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    const astraOption = Array.from(document.body.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "gpt-6-astra");
+    expect(astraOption).not.toBeUndefined();
+    await act(async () => {
+      astraOption!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    const saveButton = Array.from(result.container.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Save");
+    expect(saveButton).not.toBeUndefined();
+    await act(async () => {
+      saveButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(result.onSave).toHaveBeenCalledWith({
+      adapterConfig: { model: "gpt-6-astra" },
+      replaceAdapterConfig: true,
+    });
   });
 
   it("keeps secret access out of the main Configuration content", async () => {
@@ -1441,6 +1520,19 @@ describe("AgentConfigForm environment selector", () => {
 
     expect(mockClipboard.copyTextToClipboard).toHaveBeenCalledWith("WXYZ-1234");
     expect(mockClipboard.copyTextToClipboard).toHaveBeenCalledWith("https://auth.example.test/device");
+
+    // Code above URL, and the numbering agrees. Opening the page is what leaves
+    // this screen for a form that wants the code from it, so the code is read
+    // while it is still in front of you. The panel used to run the other way.
+    const labels = [...result.container.querySelectorAll("div")]
+      .map((el) => el.textContent?.trim())
+      .filter((t) => t === "1. Code" || t === "2. Authentication URL");
+    expect(labels).toEqual(["1. Code", "2. Authentication URL"]);
+
+    const codeIndex = result.container.textContent!.indexOf("WXYZ-1234");
+    const urlIndex = result.container.textContent!.indexOf("https://auth.example.test/device");
+    expect(codeIndex).toBeGreaterThan(-1);
+    expect(urlIndex).toBeGreaterThan(codeIndex);
   });
 
   it("keeps the code and URL visible after a later poll returns no prompt", async () => {
@@ -1509,6 +1601,36 @@ describe("AgentConfigForm environment selector", () => {
     expect(login?.disabled).toBe(false);
     expect(findButton(result.container, "Cancel")).toBeFalsy();
     expect(result.container.textContent).not.toContain("WXYZ-1234");
+  });
+
+  it("releases an active login session when the panel unmounts", async () => {
+    // The server holds a one-per-owner reservation until the session reaches a
+    // terminal state, so a panel that disappears mid-login would leave the owner
+    // unable to start another until it expires.
+    //
+    // Reachable in the settings form only by navigating away, which is why this
+    // went unnoticed. The connect step unmounts the panel routinely — Cancel
+    // closes the canvas, switching source remounts it under a new key, closing
+    // the wizard drops it — so the cleanup is what keeps an immediate retry
+    // possible. Deliberately not pushed to `roots`: this test does the unmount
+    // itself, and that unmount is the thing under test.
+    mockAgentsApi.testEnvironment.mockResolvedValue(AUTH_MISSING_RESULT);
+    const result = await renderCodexSandbox();
+
+    await runTest(result.container);
+    await startLogin(result.container);
+    expect(findButton(result.container, "Cancel"), "the login should be active").toBeTruthy();
+
+    mockAgentsApi.cancelAdapterAuthLogin.mockClear();
+    await act(async () => {
+      result.root.unmount();
+    });
+
+    expect(mockAgentsApi.cancelAdapterAuthLogin).toHaveBeenCalledWith(
+      "company-1",
+      "codex_local",
+      "session-1",
+    );
   });
 
   it("announces the login state through a polite live region", async () => {

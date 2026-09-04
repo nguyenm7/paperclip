@@ -201,7 +201,49 @@ function adapterConfigHasAnthropicApiKey(config: Record<string, unknown>): boole
  */
 const MODEL_SOURCE_BRAND_MARKS: Record<string, string> = {
   claude_local: "/brands/claude-color.svg",
-  codex_local: "/brands/codex-color.svg",
+};
+
+/**
+ * What the connect step calls each source.
+ *
+ * Deliberately not the display registry's label, which ten other surfaces read.
+ * This step asks which *provider* you are signing in with — the panel under the
+ * row says "Sign in to Anthropic" and "Sign in to OpenAI" — while the agent
+ * config screens name the tool that runs ("Codex CLI was not found on this
+ * host"). One rename in the registry would make that message say OpenAI, which
+ * is vaguer, not clearer.
+ *
+ * It is a tension worth naming rather than hiding: DESIGN.md asks for one name
+ * per concept, and this is two names for one adapter. The concepts are
+ * different — vendor here, tool there — but if the product decides otherwise,
+ * this map is the thing to delete.
+ */
+const MODEL_SOURCE_NAMES: Record<string, string> = {
+  claude_local: "Claude",
+  codex_local: "OpenAI",
+};
+
+/**
+ * OpenAI's blossom, inline rather than served from `/brands`.
+ *
+ * The supplied asset is a white fill, which was fine while this row only ever
+ * sat on a dark tile. It follows the reader's system setting now, and white on
+ * the light tile is invisible. Inlining lets the path take
+ * `currentColor` and be legible in both, which an `<img>` cannot do.
+ */
+function OpenAiBlossom({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 716 716" className={className} fill="none" aria-hidden>
+      <path
+        fill="currentColor"
+        d="M508.749 317.399C516.777 287.314 508.991 253.884 485.389 230.282C461.788 206.681 428.36 198.895 398.273 206.923C376.231 184.928 343.39 174.956 311.148 183.596C278.906 192.234 255.45 217.292 247.36 247.361C217.291 255.451 192.233 278.91 183.595 311.149C174.957 343.391 184.927 376.232 206.924 398.274C198.896 428.359 206.683 461.789 230.284 485.391C253.885 508.992 287.313 516.779 317.401 508.75C339.442 530.745 372.286 540.717 404.525 532.079C436.767 523.441 460.223 498.384 468.313 468.315C498.383 460.224 523.44 436.766 532.078 404.526C540.716 372.285 530.747 339.443 508.749 317.402V317.399ZM470.899 244.776C486.892 260.77 493.488 282.601 490.687 303.412L415.577 260.046C412.411 258.218 408.509 258.218 405.345 260.046L317.401 310.82V277.526C317.401 275.191 318.652 273.005 320.676 271.837L387.644 233.174C414.178 218.353 448.346 222.223 470.901 244.776H470.899ZM357.837 311.144L398.275 334.491V381.185L357.837 404.532L317.398 381.185V334.491L357.837 311.144ZM264.776 269.693C265.207 239.305 285.644 211.649 316.453 203.393C338.3 197.54 360.505 202.744 377.127 215.573L302.014 258.937C298.848 260.764 296.898 264.144 296.898 267.798V369.346L268.065 352.699C266.043 351.531 264.776 349.353 264.776 347.017V269.691V269.693ZM203.391 316.454C209.244 294.608 224.854 277.978 244.276 269.999V356.73C244.276 360.384 246.226 363.763 249.392 365.591L337.337 416.365L308.503 433.013C306.481 434.181 303.961 434.188 301.939 433.02L234.971 394.357C208.868 378.789 195.138 347.261 203.391 316.454ZM244.775 470.9C228.781 454.906 222.186 433.075 224.986 412.264L300.096 455.63C303.263 457.457 307.164 457.457 310.328 455.63L398.273 404.856V438.149C398.273 440.485 397.022 442.671 394.997 443.839L328.029 482.502C301.495 497.322 267.327 493.452 244.772 470.9H244.775ZM450.897 445.982C450.466 476.371 430.029 504.027 399.22 512.283C377.373 518.136 355.168 512.932 338.547 500.102L413.659 456.738C416.826 454.911 418.775 451.532 418.775 447.877V346.329L447.609 362.977C449.631 364.145 450.897 366.323 450.897 368.659V445.985V445.982ZM512.282 399.221C506.429 421.068 490.819 437.697 471.397 445.676V358.946C471.397 355.292 469.448 351.912 466.281 350.085L378.336 299.311L407.17 282.663C409.192 281.495 411.712 281.487 413.734 282.655L480.702 321.318C506.805 336.887 520.536 368.415 512.282 399.221Z"
+      />
+    </svg>
+  );
+}
+
+const MODEL_SOURCE_INLINE_MARKS: Record<string, ComponentType<{ className?: string }>> = {
+  codex_local: OpenAiBlossom,
 };
 
 /**
@@ -228,6 +270,8 @@ function ModelSourceMark({
   type: string;
   Fallback: ComponentType<{ className?: string }>;
 }) {
+  const Inline = MODEL_SOURCE_INLINE_MARKS[type];
+  if (Inline) return <Inline className="size-full" />;
   const brand = MODEL_SOURCE_BRAND_MARKS[type];
   if (!brand) return <Fallback className="size-full" />;
   return <img src={brand} alt="" className="size-full" />;
@@ -626,6 +670,27 @@ function OnboardingWizardInner({
   const [credentialMode, setCredentialMode] = useState<CredentialMode>(
     (saved?.credentialMode as CredentialMode) ?? "subscription",
   );
+  /**
+   * Whether Connect has been pressed for the current source.
+   *
+   * The step's footer button is what starts the sign-in now, so this is the
+   * whole of the difference between the card being absent and the card running:
+   * the panel is mounted with `autoStart` the moment this is true, and it
+   * cancels back to false. Deliberately not in the draft — a login is a live
+   * server session with a deadline on it, and restoring a wizard an hour later
+   * into "connecting" would be describing a session that is long gone.
+   */
+  const [loginStarted, setLoginStarted] = useState(false);
+  /**
+   * Whether that sign-in reached its success state.
+   *
+   * Only the displayed-code login ever sits here to be read: the browser-code
+   * login advances the step from its own success, so nothing gets the chance
+   * to render this. It exists because OpenAI's login finishes in another tab,
+   * with nothing to type back — so the step has to wait, and the footer button
+   * is where the waiting shows.
+   */
+  const [loginConnected, setLoginConnected] = useState(false);
   /**
    * The key itself, held only for as long as the wizard is open. It is written
    * into the adapter config at hire time and never into the draft — a draft is
@@ -1093,6 +1158,56 @@ function OnboardingWizardInner({
     sourceSelected && !adapterEnvLoading && !missionUnresolvedForHire;
 
   /**
+   * Whether this step has a sign-in to do before it can hire.
+   *
+   * The same four conditions the card itself renders on, named once so the
+   * footer button and the card cannot disagree about whether a login is
+   * happening. When it is false — an API key, a source already signed in on the
+   * sandbox, no sandbox to sign in against — Connect goes straight to the hire,
+   * exactly as it did before.
+   */
+  const connectStepNeedsLogin = Boolean(
+    credentialMode !== "api" &&
+      showAdapterLoginPanel &&
+      createdCompanyId &&
+      resolvedLoginEnvironmentId,
+  );
+
+  /**
+   * Whether the source's login ends by taking a code back from the customer.
+   *
+   * This is what splits the two waits, and it is a real difference rather than
+   * a cosmetic one. The browser-code login finishes here, in the field on the
+   * card, so the button is busy and says so. The displayed-code login finishes
+   * somewhere else entirely — another tab, possibly another device — so the
+   * button is not busy, it is waiting, and a spinner would be claiming work
+   * this screen is not doing.
+   */
+  const loginSubmitsBrowserCode =
+    adapterCaps.login?.panelMode === "submitted_browser_code";
+
+  // Connect is pressed, the login is running, and it has not succeeded yet.
+  const connectStepLoggingIn =
+    connectStepNeedsLogin && loginStarted && !loginConnected;
+
+  /**
+   * What the step's primary action does, for both the button and Cmd+Enter.
+   *
+   * One function rather than the condition written twice. The keyboard path
+   * has drifted from the button here before — the comment on its `step === 4`
+   * branch is about exactly that — and the gap it left was a hire that skipped
+   * a check. This one would be worse: Cmd+Enter would hire before the sign-in
+   * it is meant to start, against a source with no credential.
+   */
+  function handleConnectStepPrimary() {
+    if (connectStepNeedsLogin && !loginStarted) {
+      setLoginStarted(true);
+      return;
+    }
+    void handleGiveHeartbeat();
+  }
+
+  /**
    * When the input canvas is open: exactly when a source has been chosen.
    *
    * The card is the answer to the tile that was just pressed, so an untouched
@@ -1108,7 +1223,32 @@ function OnboardingWizardInner({
    * unanswered, and the visible tiles are the thing to press. `showAdapterLoginPanel`
    * still decides what goes *inside* the canvas — only not whether it exists.
    */
-  const canvasOpen = sourceSelected;
+  /**
+   * The one thing that can be wrong here before anything is pressed: there is
+   * no sandbox to sign in against, so Connect cannot get anywhere. Worth saying
+   * on arrival rather than after a press that goes nowhere.
+   *
+   * Its two neighbours in the old canvas are not worth the same. "Checking this
+   * source's credentials…" narrated a request nothing was waiting on, and "this
+   * source is already signed in" answered a question the customer had not asked
+   * yet — both were written for a canvas that opened on selection, and the
+   * press is what opens it now.
+   */
+  const connectStepHasNoSandbox =
+    credentialMode !== "api" && !canShowAdapterLogin && !authSignalUndecided;
+
+  /**
+   * Open once there is something in it: a key field, a sign-in that has been
+   * started, or the news that no sign-in is possible.
+   *
+   * It no longer opens on selection alone. The card is the sign-in itself now,
+   * and a sign-in starts when Connect is pressed — so between picking a tile
+   * and pressing the button there is nothing to put here, and the step is the
+   * question and the button, which is what the design draws.
+   */
+  const canvasOpen =
+    sourceSelected &&
+    (credentialMode === "api" || loginStarted || connectStepHasNoSandbox);
 
   // The default (or a saved) adapterType can name an adapter the server has
   // since disabled — e.g. a cloud sandbox registry without claude_local. The
@@ -1179,6 +1319,16 @@ function OnboardingWizardInner({
     adapterEnvResultAppliedStoredLoginRef.current = false;
     setAdapterEnvError(null);
   }, [step, adapterType, model, command, args, url, credentialMode, apiKey]);
+
+  // A login belongs to one source in one credential mode. Switching either
+  // means the card on screen is answering a question nobody asked any more, so
+  // the step goes back to offering Connect. The panel is keyed on the adapter
+  // as well, so it unmounts on the same change and releases its server session
+  // on the way out.
+  useEffect(() => {
+    setLoginStarted(false);
+    setLoginConnected(false);
+  }, [adapterType, credentialMode]);
 
   const selectedModel = (adapterModels ?? []).find((m) => m.id === model);
   const hasAnthropicApiKeyOverrideCheck =
@@ -2057,8 +2207,16 @@ function OnboardingWizardInner({
       // the condition out here again is what let this path hire against a
       // source the tile row had never shown, after the button was gated and
       // this was not.
-      else if (step === 4 && agentName.trim() && connectStepReady)
-        handleGiveHeartbeat();
+      // Also gated on `connectStepLoggingIn`, the way the button is: a sign-in
+      // that is already running has nothing for this to do, and re-entering it
+      // would start a second server session.
+      else if (
+        step === 4 &&
+        agentName.trim() &&
+        connectStepReady &&
+        !connectStepLoggingIn
+      )
+        handleConnectStepPrimary();
       else if (step === 5) handleLaunchToDashboard();
     }
   }
@@ -2175,7 +2333,7 @@ function OnboardingWizardInner({
                 // tiles stretch and the name field sits under a question far
                 // narrower than itself.
                 isAgentArcStep || step === 1
-                  ? "w-(--sz-560px) max-w-full px-8 py-10 sm:px-(--sz-68px) sm:py-11"
+                  ? "w-(--sz-560px) max-w-full px-8 py-10 sm:px-(--sz-64px) sm:py-11"
                   : "w-full max-w-md px-8 py-12",
               )}
             >
@@ -2644,7 +2802,7 @@ function OnboardingWizardInner({
                     <Input
                       id="onboarding-agent-name"
                       className="h-(--sz-44px) rounded-lg border-transparent bg-muted shadow-none dark:bg-muted"
-                      placeholder="e.g. Chief of staff, Designer, Ron..."
+                      placeholder="e.g. Chief of staff"
                       value={agentName}
                       onChange={(e) => setAgentName(e.target.value)}
                       autoFocus
@@ -2675,7 +2833,18 @@ function OnboardingWizardInner({
                       label="Model source"
                       sources={recommendedAdapters.map((opt) => ({
                         id: opt.type,
-                        label: opt.label,
+                        // The vendor name where this step has one, the registry's
+                        // tool name where it does not. `MODEL_SOURCE_NAMES` was
+                        // added with the reasoning above it and then never read,
+                        // so the row went on showing "Claude Code" and "Codex"
+                        // — the tool names — under a heading asking which
+                        // provider you are signing in to.
+                        //
+                        // The fallback is what keeps the row rendering if the
+                        // registry ever marks a third adapter `recommended`:
+                        // an unnamed source gets its tool name rather than
+                        // nothing.
+                        label: MODEL_SOURCE_NAMES[opt.type] ?? opt.label,
                         icon: <ModelSourceMark type={opt.type} Fallback={opt.icon} />,
                       }))}
                       mode={credentialMode}
@@ -2742,17 +2911,36 @@ function OnboardingWizardInner({
                     ) : showAdapterLoginPanel &&
                       createdCompanyId &&
                       resolvedLoginEnvironmentId ? (
-                      /* Shows as soon as the cheap auth signal reports no ready
-                         credential, well before any adapter environment test
-                         runs. Reuses the same panel the agent configuration
-                         form shows after a test — see AdapterLoginPanel in
-                         AgentConfigForm.tsx. No "Use saved login" control: the
-                         hire step already applies a stored login on its own. */
+                      /* The same panel the agent configuration form shows after
+                         a test — see AdapterLoginPanel in AgentConfigForm.tsx —
+                         in the connect step's chrome and driven by the step's
+                         own footer button. `autoStart` is that button: mounting
+                         only happens once Connect is pressed, so the press has
+                         already been taken by the time the panel exists.
+
+                         No "Use saved login" control: the hire step already
+                         applies a stored login on its own. */
                       <AdapterLoginPanel
                         key={`${adapterType}:${resolvedLoginEnvironmentId}`}
                         companyId={createdCompanyId}
                         adapterType={adapterType}
                         environmentId={resolvedLoginEnvironmentId}
+                        chrome="onboarding"
+                        autoStart
+                        onCancel={() => setLoginStarted(false)}
+                        onConnected={() => {
+                          setLoginConnected(true);
+                          // The browser-code login ends here, on this screen,
+                          // so the step moves on by itself — there is no
+                          // success state to sit on, and one would be a screen
+                          // whose only content is that you may continue.
+                          //
+                          // The displayed-code login does not: it is still
+                          // running in another tab when this fires, and the
+                          // customer's attention is there. It waits for the
+                          // press, which is what the enabled Next is for.
+                          if (loginSubmitsBrowserCode) void handleGiveHeartbeat();
+                        }}
                         onStored={() => {
                           queryClient.invalidateQueries({
                             queryKey: queryKeys.agents.authSignal(
@@ -2764,20 +2952,18 @@ function OnboardingWizardInner({
                         }}
                       />
                     ) : (
-                      /* No panel to show, and the two reasons for that are not
-                         the same news. Saying either is better than an empty
-                         card — the canvas is open because a source is selected,
-                         and a blank one reads as something that failed to load —
-                         but they must not be conflated: telling someone with no
-                         sandbox that they are "already signed in" on it is
-                         false, and it hides the one thing actually blocking
-                         them. */
+                      /* The canvas only opens without a panel for one reason
+                         now — `connectStepHasNoSandbox` — and it is the reason
+                         worth saying out loud, because it is the one that makes
+                         Connect a dead press.
+
+                         Its two former neighbours are gone with the canvas that
+                         opened on selection: "already signed in" reassured
+                         against a question nobody had asked, and "checking…"
+                         narrated a request the customer was not waiting on.
+                         Neither survives a canvas that opens on a press. */
                       <p className="text-xs text-muted-foreground">
-                        {authSignalUndecided
-                          ? "Checking this source's credentials…"
-                          : canShowAdapterLogin
-                            ? "This source is already signed in on the managed sandbox."
-                            : "No managed sandbox is available to sign in against yet."}
+                        No managed sandbox is available to sign in against yet.
                       </p>
                     )}
                   </ConnectInputCanvas>
@@ -2975,16 +3161,37 @@ function OnboardingWizardInner({
                       ? "Continue"
                       : step === 5
                         ? "Get started"
-                        : "Next"
+                        : step === 4
+                          ? // "Connect" is the step's own verb, and it is what
+                            // starts the sign-in rather than what follows it.
+                            //
+                            // It becomes "Next" for the displayed-code login
+                            // once that is running: at that point the sign-in
+                            // is happening somewhere else, the button is not
+                            // the thing doing it, and offering to "Connect" a
+                            // second time would read as a retry.
+                            connectStepLoggingIn && !loginSubmitsBrowserCode
+                            ? "Next"
+                            : "Connect"
+                          : "Next"
                   }
                   loadingLabel={
                     step === 1
                       ? "Creating..."
                       : step === 4
-                        ? "Connecting..."
+                        ? "Connecting"
                         : "Launching..."
                   }
-                  loading={step === 3 ? false : loading}
+                  // The browser-code login is finished on this screen, so the
+                  // button is genuinely busy for its duration and shows it. The
+                  // displayed-code login is not — see `loginSubmitsBrowserCode`
+                  // — so it stays a still, disabled Next instead of spinning
+                  // against work happening in another tab.
+                  loading={
+                    step === 3
+                      ? false
+                      : loading || (connectStepLoggingIn && loginSubmitsBrowserCode)
+                  }
                   primaryDisabled={
                     step === 1
                       ? !companyName.trim() || loading
@@ -2997,7 +3204,11 @@ function OnboardingWizardInner({
                             // it, and be hired against whatever the draft
                             // happened to carry. See `connectStepReady`, which
                             // Cmd+Enter asks as well.
-                            !connectStepReady || loading
+                            !connectStepReady ||
+                            loading ||
+                            // A sign-in is running and has not landed. Nothing
+                            // to press until it does.
+                            connectStepLoggingIn
                           : loading || launchStateIncomplete
                   }
                   onPrimary={() => {
@@ -3005,7 +3216,10 @@ function OnboardingWizardInner({
                       if (skipsMissionStep) void handleCreateCompany();
                       else setStep(2);
                     } else if (step === 3) setStep(4);
-                    else if (step === 4) handleGiveHeartbeat();
+                    // One button, two jobs — start the sign-in, or hire — and
+                    // Cmd+Enter has to do the same thing. See
+                    // `handleConnectStepPrimary`.
+                    else if (step === 4) handleConnectStepPrimary();
                     else handleLaunchToDashboard();
                   }}
                 />

@@ -33,6 +33,7 @@ import { redactSensitiveText } from "../../redaction.js";
 import { isUniqueViolation } from "../../db-errors.js";
 import { logActivity } from "../activity-log.js";
 import { appendHeartbeatRunEvent } from "../heartbeat-run-events.js";
+import { emitAgentTaskRun } from "../agent-task-run-telemetry.js";
 import { budgetService } from "../budgets.js";
 import { issueRecoveryActionService } from "../issue-recovery-actions.js";
 import { issueTreeControlService } from "../issue-tree-control.js";
@@ -790,7 +791,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
   }
 
   async function hasActiveExecutionPath(companyId: string, issueId: string, agentId?: string | null) {
-    const [run, deferredWake] = await Promise.all([
+    const [run, deferredWake, nativeRecovery] = await Promise.all([
       db
         .select({ id: heartbeatRuns.id })
         .from(heartbeatRuns)
@@ -817,9 +818,35 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         )
         .limit(1)
         .then((rows) => rows[0] ?? null),
+      db
+        .select({ id: nativeRunFinalizations.runId })
+        .from(nativeRunFinalizations)
+        .innerJoin(
+          heartbeatRuns,
+          eq(heartbeatRuns.id, nativeRunFinalizations.runId),
+        )
+        .where(
+          and(
+            eq(nativeRunFinalizations.companyId, companyId),
+            eq(nativeRunFinalizations.issueId, issueId),
+            isNull(nativeRunFinalizations.resultId),
+            agentId ? eq(heartbeatRuns.agentId, agentId) : sql`true`,
+            or(
+              inArray(nativeRunFinalizations.recoveryState, [
+                "awaiting_evidence",
+                "awaiting_runner_reattach",
+                "resuming_session",
+                "bootstrap_incomplete",
+              ]),
+              eq(nativeRunFinalizations.phase, "retryable_failure"),
+            ),
+          ),
+        )
+        .limit(1)
+        .then((rows) => rows[0] ?? null),
     ]);
 
-    return Boolean(run || deferredWake);
+    return Boolean(run || deferredWake || nativeRecovery);
   }
 
   async function hasPendingWakeInteraction(companyId: string, issueId: string) {
@@ -1568,6 +1595,9 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       return updatedRun;
     });
     if (!finalizedRun) return { kind: "skipped" as const };
+    // Telemetry is best-effort background work; it must not delay the
+    // watchdog fold below, so fire it and do not await it.
+    void emitAgentTaskRun(db, finalizedRun);
 
     if (input.existingEvaluation && !isTerminalIssueStatus(input.existingEvaluation.status)) {
       await issuesSvc.update(input.existingEvaluation.id, { status: "done" });
@@ -3451,6 +3481,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
             eq(issues.status, "in_review"),
           ),
           opts?.issueCreatedAtGte ? gte(issues.createdAt, opts.issueCreatedAtGte) : undefined,
+          isNull(issues.hiddenAt),
         ),
       );
 
@@ -4628,6 +4659,9 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       return { terminalized: false, status: current?.status ?? run.status };
     }
 
+    // Telemetry is best-effort background work; it must not delay clearing
+    // the stale lock below, so fire it and do not await it.
+    void emitAgentTaskRun(db, updated);
     runningProcesses.delete(run.id);
     // The run update above already committed the terminal status. The audit
     // event is best-effort: if the insert fails, the caller must still treat

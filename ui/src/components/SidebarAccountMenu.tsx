@@ -9,7 +9,7 @@ import {
   UserRound,
   UserRoundPen,
 } from "lucide-react";
-import type { DeploymentMode, ProductFeedbackCapability, ServerGitInfo } from "@paperclipai/shared";
+import type { DeploymentMode, ProductFeedbackCapability } from "@paperclipai/shared";
 import { Link } from "@/lib/router";
 import { authApi } from "@/api/auth";
 import { queryKeys } from "@/lib/queryKeys";
@@ -21,30 +21,26 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn, SIDEBAR_RAIL_HIDDEN_LABEL } from "../lib/utils";
 import { ThemeToggle } from "./ThemeToggle";
 import { SidebarServerInfo } from "./SidebarServerInfo";
-import { Badge } from "@/components/ui/badge";
 import { ProductFeedbackDialog } from "./ProductFeedbackDialog";
 
 const PROFILE_SETTINGS_PATH = "/company/settings/instance/profile";
 const DOCS_URL = "https://docs.paperclip.ing/";
 const FEEDBACK_URL = "https://paperclip.ing/feedback";
-const SOURCE_REPOSITORY_URL = "https://github.com/paperclipai/paperclip";
-const SOURCE_VERSION_RE = /\+\d+\.git\.([0-9a-f]{7,40})(?:\.dirty)?$/i;
 
 interface SidebarAccountMenuProps {
   companyId?: string | null;
   deploymentMode?: DeploymentMode;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
-  serverGit?: ServerGitInfo;
-  version?: string | null;
   /** Contextual navigation occupies a full sidebar even if the saved global nav mode is collapsed. */
   forceExpanded?: boolean;
   productFeedback?: ProductFeedbackCapability;
+  /** App version forwarded to the product feedback payload; the menu itself no longer displays it. */
+  version?: string | null;
 }
 
 interface MenuActionProps {
   label: string;
-  description: string;
   icon: LucideIcon;
   onClick?: () => void;
   href?: string;
@@ -73,24 +69,22 @@ function deriveUserSlug(name: string | null | undefined, email: string | null | 
   return "me";
 }
 
-function sourceVersionSha(version: string): string | null {
-  const sourceVersion = version.match(SOURCE_VERSION_RE);
-  return sourceVersion?.[1] ?? null;
-}
-
-function MenuAction({ label, description, icon: Icon, onClick, href, external = false }: MenuActionProps) {
+function MenuAction({
+  label,
+  icon: Icon,
+  onClick,
+  href,
+  external = false,
+}: MenuActionProps) {
   const className =
-    "flex w-full items-start gap-3 rounded-xl px-3 py-3 text-left transition-colors hover:bg-accent/60";
+    "flex h-(--profile-popover-row-height) w-full items-center gap-(--profile-popover-row-gap) rounded-lg px-2.5 text-left text-(length:--text-compact) font-medium leading-(--profile-popover-label-line-height) text-foreground transition-colors hover:bg-accent";
 
   const content = (
     <>
-      <span className="mt-0.5 rounded-lg border border-border bg-background/70 p-2 text-muted-foreground">
+      <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
         <Icon className="size-4" />
       </span>
-      <span className="min-w-0 flex-1">
-        <span className="block text-sm font-medium text-foreground">{label}</span>
-        <span className="block text-xs text-muted-foreground">{description}</span>
-      </span>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
     </>
   );
 
@@ -122,10 +116,9 @@ export function SidebarAccountMenu({
   deploymentMode,
   open: controlledOpen,
   onOpenChange,
-  serverGit,
-  version,
   forceExpanded = false,
   productFeedback,
+  version,
 }: SidebarAccountMenuProps) {
   const [internalOpen, setInternalOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
@@ -145,15 +138,8 @@ export function SidebarAccountMenu({
   const displayName = session?.user.name?.trim() || "Board";
   const secondaryLabel =
     session?.user.email?.trim() || (deploymentMode === "authenticated" ? "Signed in" : "Local workspace board");
-  const accountBadge = deploymentMode === "authenticated" ? "Account" : "Local";
   const initials = deriveInitials(displayName);
   const profileHref = `/u/${deriveUserSlug(session?.user.name, session?.user.email, session?.user.id)}`;
-  const sourceSha = version ? sourceVersionSha(version) : null;
-  const sourceFullSha =
-    sourceSha && serverGit?.available && serverGit.fullSha.toLowerCase().startsWith(sourceSha.toLowerCase())
-      ? serverGit.fullSha
-      : sourceSha;
-  const sourceBranch = sourceSha && serverGit?.available ? serverGit.branchName : null;
   const nativeFeedbackEnabled = Boolean(companyId) && productFeedback?.enabled === true;
 
   function closeNavigationChrome() {
@@ -173,7 +159,7 @@ export function SidebarAccountMenu({
             <button
               type="button"
               className={cn(
-                "flex min-w-0 items-center gap-2.5 rounded-lg text-left text-(length:--text-compact) font-medium text-foreground/80 transition-colors hover:bg-background hover:text-foreground",
+                "flex min-w-0 items-center gap-2.5 rounded-lg text-left text-(length:--text-compact) font-medium text-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
                 rail ? "w-full px-3 py-2" : "flex-1 px-2 py-1.5",
               )}
               aria-label="Open account menu"
@@ -189,114 +175,72 @@ export function SidebarAccountMenu({
             side="top"
             align="start"
             sideOffset={10}
-            className="w-(--sz-277px) max-w-(--sz-calc-24) overflow-hidden rounded-t-2xl rounded-b-none border-border p-0 shadow-2xl"
+            className="min-h-(--profile-popover-min-height) w-(--profile-popover-width) max-w-(--sz-calc-24) overflow-hidden rounded-xl border-border bg-popover p-0 shadow-(--shadow-profile-popover)"
             onCloseAutoFocus={(event) => {
               if (openingFeedbackRef.current) event.preventDefault();
             }}
           >
-            <div className="h-24 bg-(image:--gradient-extract-25)" />
-            <div className="-mt-8 px-4 pb-4">
-              <div className="flex items-start gap-3">
-                <div className="rounded-2xl border-4 border-popover bg-popover p-0.5 shadow-sm">
-                  <Avatar size="lg">
-                    {session?.user.image ? <AvatarImage src={session.user.image} alt={displayName} /> : null}
-                    <AvatarFallback>{initials}</AvatarFallback>
-                  </Avatar>
-                </div>
-                <div className="min-w-0 flex-1 pt-1">
-                  <div className="flex items-center gap-2">
-                    <h2 className="truncate text-base font-semibold text-foreground">{displayName}</h2>
-                    <Badge variant="ghost" className="bg-accent text-(length:--text-nano) font-semibold uppercase tracking-wide text-muted-foreground">
-                      {accountBadge}
-                    </Badge>
-                  </div>
-                  <p className="truncate text-sm text-muted-foreground">{secondaryLabel}</p>
-                  {sourceSha && sourceFullSha ? (
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {sourceBranch ? (
-                        <a
-                          href={`${SOURCE_REPOSITORY_URL}/tree/${encodeURIComponent(sourceBranch)}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="block truncate transition-colors hover:text-foreground"
-                        >
-                          {sourceBranch}
-                        </a>
-                      ) : null}
-                      <p>
-                        Paperclip{" "}
-                        <a
-                          href={`${SOURCE_REPOSITORY_URL}/commit/${sourceFullSha}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="transition-colors hover:text-foreground"
-                        >
-                          {sourceSha.slice(0, 7)}
-                        </a>
-                      </p>
-                    </div>
-                  ) : version ? (
-                    <p className="mt-1 text-xs text-muted-foreground">Paperclip v{version}</p>
-                  ) : null}
-                </div>
+            <div className="flex h-(--profile-popover-header-height) shrink-0 items-center gap-2.5 px-3.5">
+              <Avatar className="size-9">
+                {session?.user.image ? <AvatarImage src={session.user.image} alt={displayName} /> : null}
+                <AvatarFallback className="text-xs text-foreground">{initials}</AvatarFallback>
+              </Avatar>
+              <div className="min-w-0 flex-1">
+                <h2 className="truncate text-sm font-semibold leading-(--profile-popover-label-line-height) text-foreground">
+                  {displayName}
+                </h2>
+                <p className="truncate text-(length:--text-micro) leading-(--profile-popover-meta-line-height) text-muted-foreground">
+                  {secondaryLabel}
+                </p>
               </div>
+            </div>
 
-              <div className="mt-4 space-y-1">
-                <MenuAction
-                  label="Settings"
-                  description="Manage company and instance settings."
-                  icon={Settings}
-                  href="/company/settings"
-                  onClick={closeNavigationChrome}
-                />
-                <MenuAction
-                  label="View profile"
-                  description="Open your activity, task, and usage ledger."
-                  icon={UserRound}
-                  href={profileHref}
-                  onClick={closeNavigationChrome}
-                />
-                <MenuAction
-                  label="Edit profile"
-                  description="Update your display name and avatar."
-                  icon={UserRoundPen}
-                  href={PROFILE_SETTINGS_PATH}
-                  onClick={closeNavigationChrome}
-                />
-                <MenuAction
-                  label="Documentation"
-                  description="Open Paperclip docs in a new tab."
-                  icon={BookOpen}
-                  href={DOCS_URL}
-                  external
-                  onClick={() => setOpen(false)}
-                />
-                <ThemeToggle variant="menu-action" onAfterToggle={() => setOpen(false)} />
-                {deploymentMode === "authenticated" ? (
-                  <button
-                    type="button"
-                    className={cn(
-                      "flex w-full items-start gap-3 rounded-xl px-3 py-3 text-left transition-colors hover:bg-destructive/10",
-                      signOutMutation.isPending && "cursor-not-allowed opacity-60",
-                    )}
-                    onClick={handleSignOut}
-                    disabled={signOutMutation.isPending}
-                  >
-                    <span className="mt-0.5 rounded-lg border border-border bg-background/70 p-2 text-muted-foreground">
-                      <LogOut className="size-4" />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-sm font-medium text-foreground">
-                        {signOutMutation.isPending ? "Signing out..." : "Sign out"}
-                      </span>
-                      <span className="block text-xs text-muted-foreground">
-                        End this browser session.
-                      </span>
-                    </span>
-                  </button>
-                ) : null}
-                <SidebarServerInfo />
-              </div>
+            <div className="flex flex-1 flex-col gap-0.5 border-t border-border px-2.5 pb-2.5 pt-2">
+              <MenuAction
+                label="Settings"
+                icon={Settings}
+                href="/company/settings"
+                onClick={closeNavigationChrome}
+              />
+              <MenuAction
+                label="View profile"
+                icon={UserRound}
+                href={profileHref}
+                onClick={closeNavigationChrome}
+              />
+              <MenuAction
+                label="Edit profile"
+                icon={UserRoundPen}
+                href={PROFILE_SETTINGS_PATH}
+                onClick={closeNavigationChrome}
+              />
+              <MenuAction
+                label="Documentation"
+                icon={BookOpen}
+                href={DOCS_URL}
+                external
+                onClick={() => setOpen(false)}
+              />
+              <ThemeToggle variant="compact-menu-action" onAfterToggle={() => setOpen(false)} />
+              {deploymentMode === "authenticated" ? (
+                <button
+                  type="button"
+                  className={cn(
+                    "flex h-(--profile-popover-row-height) w-full items-center gap-(--profile-popover-row-gap) rounded-lg px-2.5 text-left text-(length:--text-compact) font-medium leading-(--profile-popover-label-line-height) text-foreground transition-colors hover:bg-destructive/10",
+                    signOutMutation.isPending && "cursor-not-allowed opacity-60",
+                  )}
+                  onClick={handleSignOut}
+                  disabled={signOutMutation.isPending}
+                >
+                  <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
+                    <LogOut className="size-4" />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {signOutMutation.isPending ? "Signing out..." : "Sign out"}
+                  </span>
+                </button>
+              ) : null}
+              <SidebarServerInfo />
             </div>
           </PopoverContent>
         </Popover>
@@ -307,7 +251,7 @@ export function SidebarAccountMenu({
                 <button
                   type="button"
                   aria-label="Share feedback"
-                  className="flex size-8 shrink-0 items-center justify-center rounded-lg text-foreground/80 transition-colors hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground/50 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   onClick={() => {
                     openingFeedbackRef.current = true;
                     setFeedbackOpen(true);
@@ -321,7 +265,7 @@ export function SidebarAccountMenu({
                   target="_blank"
                   rel="noreferrer"
                   aria-label="Share feedback"
-                  className="flex size-8 shrink-0 items-center justify-center rounded-lg text-foreground/80 transition-colors hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground/50 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <Flag className="h-4 w-4" aria-hidden="true" />
                 </a>

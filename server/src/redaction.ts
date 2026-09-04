@@ -318,6 +318,7 @@ const NATIVE_RUN_SPAN_NAMES = new Set([
   "provider.turn.queue",
   "runner.artifact.discover",
   "runner.artifact.prepare",
+  "runner.prp.authenticate",
   "runner.prp.route.register",
   "runner.runtime.stage",
   "runner.session.bootstrap",

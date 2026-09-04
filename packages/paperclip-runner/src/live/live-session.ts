@@ -1448,7 +1448,11 @@ export class CapabilityLiveSession {
     return this.snapshot();
   }
 
-  async sendMessage(message: string): Promise<CapabilityLiveTurnResult> {
+  async sendMessage(
+    message: string,
+    /** Launch-only diagnostics may opt out; qualification campaigns must not. */
+    options: { allowMissingUsage?: boolean } = {},
+  ): Promise<CapabilityLiveTurnResult> {
     const value = message.trim();
     if (value.length === 0) throw new Error("Capability live messages cannot be empty");
     if (this.#status === "suspended" || this.#transport === null) {
@@ -1650,7 +1654,10 @@ export class CapabilityLiveSession {
         },
       });
     }
-    await this.#captureTurnUsage(result.turnId, result.status !== "completed");
+    await this.#captureTurnUsage(
+      result.turnId,
+      result.status !== "completed" || options.allowMissingUsage === true,
+    );
     await this.#persist();
     await this.#afterTurnSettled();
     return { ...result, snapshot: this.snapshot() };

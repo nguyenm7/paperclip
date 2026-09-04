@@ -219,6 +219,57 @@ describe("live workflow executor infrastructure failures", () => {
     }
   });
 
+  it("keeps launch-only smoke exceptions explicit and rejects a wrong marker", async () => {
+    liveSessionMocks.snapshot.mockReturnValue({
+      sessionId: "session-smoke-marker",
+      authority: {},
+      mockState: JSON.stringify({ tasks: [] }),
+      transcript: [
+        {
+          id: "assistant-smoke-marker",
+          role: "assistant",
+          text: "a different response",
+        },
+      ],
+      evidence: [],
+      authorizationRecords: [],
+      attempts: [],
+      usageLedger: [],
+      stateHistory: [],
+      workspaceDiffs: [],
+    });
+    const candidate = RUNNER_LIVE_CANDIDATE_SLOTS[0]!.candidates[0]!;
+    const entry: RunnerLiveScheduleEntry = {
+      executionId: "local-smoke-marker",
+      caseId: "final-response",
+      candidateId: candidate.id,
+      slotId: candidate.slotId,
+      repetition: 1,
+      providerTrace: "raw",
+      budget: candidate.budget,
+    };
+
+    const observation = await executeLiveRunnerWorkflow({
+      entry,
+      candidate,
+      evalCase: runnerWorkflowCase(entry.caseId),
+      allowMissingUsage: true,
+      expectedAssistantText: "PAPERCLIP_LOCAL_PROVIDER_SMOKE_OK",
+      promptOverride: "Return the smoke marker.",
+    });
+
+    expect(liveSessionMocks.sendMessage).toHaveBeenCalledWith(
+      "Return the smoke marker.",
+      { allowMissingUsage: true },
+    );
+    expect(observation.presentation.checks).toContainEqual(
+      expect.objectContaining({
+        id: "expected-assistant-text",
+        passed: false,
+      }),
+    );
+  });
+
   it("fails the candidate budget and stops before a paid continuation", async () => {
     liveSessionMocks.snapshot.mockReturnValue({
       sessionId: "session-budget-test",

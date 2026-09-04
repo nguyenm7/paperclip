@@ -395,11 +395,18 @@ describe("ACPX runtime host", () => {
       dependencies,
     );
     expect(host.identity()).toMatchObject({
-      schema: "paperclip.runner.acpx-identity.v1",
+      schema: "paperclip.runner.acpx-identity.v2",
       acpxRecordId: "record-1",
       requestedModel: "gpt-5.6-sol",
       permissionMode: "approve-reads",
     });
+    const lifetimeFenceCandidates =
+      host.identity().providerLifetimeFenceCandidates;
+    expect(lifetimeFenceCandidates).toHaveLength(3);
+    expect(new Set(lifetimeFenceCandidates).size).toBe(3);
+    expect(
+      lifetimeFenceCandidates.every((port) => port >= 49_152 && port <= 65_535),
+    ).toBe(true);
     expect(capturedEnvironment.OPENAI_API_KEY).toBe("launch-secret");
     expect(host.persistedEnvironment().OPENAI_API_KEY).toBeUndefined();
     expect(host.persistedEnvironment().HTTPS_PROXY).toBeUndefined();
@@ -544,7 +551,7 @@ describe("ACPX runtime host", () => {
     const fixture = await hostFixture();
     let selected = false;
     const setModel = vi.fn(async (model: string) => {
-      expect(model).toBe("claude-sonnet-5");
+      expect(model).toBe("sonnet");
       selected = true;
     });
     const runtime = runtimePort({
@@ -596,6 +603,7 @@ describe("ACPX runtime host", () => {
             requestedModel: "claude-sonnet-5",
             effectiveModel: "claude-sonnet-5",
             permissionMode: "approve-reads",
+            providerLifetimeFenceCandidates: [60_001, 60_002, 60_003],
           },
         },
         fixture.dependencies({ openRuntime }),
@@ -719,6 +727,8 @@ describe("ACPX runtime host", () => {
         code: "ENOENT",
       });
     });
+    // File removal precedes kernel lease release. Wait for the lease itself so
+    // this assertion cannot race between those two ordered cleanup steps.
     const contender = await waitForAcpxOperation(() =>
       stageManagedCodexCredential({
         agentHomeDirectory: credentialHome,
@@ -1222,6 +1232,7 @@ describe("ACPX runtime host", () => {
       path: string;
       mode: "inline_json";
       lifetimeFenceFds: readonly [number, number];
+      lifetimeFenceCandidates: readonly [number, number, number];
       activateLifetimeOwner(pid: number): Promise<void>;
       close(): Promise<void>;
     }>();
@@ -1267,6 +1278,7 @@ describe("ACPX runtime host", () => {
       path: lateCredentialPath,
       mode: "inline_json",
       lifetimeFenceFds: [42, 43],
+      lifetimeFenceCandidates: [60_001, 60_002, 60_003],
       activateLifetimeOwner: async () => undefined,
       close: lateCredentialClose,
     });
@@ -1411,6 +1423,7 @@ describe("ACPX runtime host", () => {
             path: join(fixture.root, "auth.json"),
             mode: "inline_json",
             lifetimeFenceFds: [42, 43],
+            lifetimeFenceCandidates: [60_001, 60_002, 60_003],
             activateLifetimeOwner: async () => undefined,
             close: credentialClose,
           }),

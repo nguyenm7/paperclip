@@ -29,10 +29,10 @@ describe("runner E2E catalog", () => {
     expect(localIntegrityTasks).toHaveLength(2);
     expect(openRouterBreadthTasks).toHaveLength(3);
     expect(runnerSuites.map((suite) => suite.expectedMatrixSize)).toEqual([
-      42, 14, 11,
+      42, 14, 10,
     ]);
-    expect(validateRunnerCatalog()).toHaveLength(67);
-    expect(new Set(runnerMatrix.map((entry) => entry.id)).size).toBe(67);
+    expect(validateRunnerCatalog()).toHaveLength(66);
+    expect(new Set(runnerMatrix.map((entry) => entry.id)).size).toBe(66);
     expect(
       runnerMatrix.filter((entry) => entry.suite.id === "core-compatibility"),
     ).toHaveLength(42);
@@ -45,26 +45,36 @@ describe("runner E2E catalog", () => {
       runnerMatrix.filter(
         (entry) => entry.suite.id === "openrouter-model-breadth",
       ),
-    ).toHaveLength(11);
+    ).toHaveLength(10);
     expect(
       runnerMatrix.reduce(
         (total, execution) => total + execution.task.expectedRunCount,
         0,
       ),
-    ).toBe(116);
+    ).toBe(114);
   });
 
   it("derives the qualified local native OpenCode profiles from the ranked snapshot", () => {
     expect(openRouterBreadthExcludedModelIds).toEqual(["xiaomi/mimo-v2.5"]);
     expect(openRouterBreadthExcludedExecutionIds).toEqual([
       "openrouter-model-breadth.openrouter-deepseek-deepseek-v4-flash-0731.local.plan-approve-complete",
+      "openrouter-model-breadth.openrouter-tencent-hy3.local.plan-approve-complete",
     ]);
     expect(
-      runnerMatrix.some(
-        (execution) =>
-          execution.id === openRouterBreadthExcludedExecutionIds[0],
+      openRouterBreadthExcludedExecutionIds.every(
+        (excludedExecutionId) =>
+          !runnerMatrix.some(
+            (execution) => execution.id === excludedExecutionId,
+          ),
       ),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      runnerMatrix
+        .filter(
+          (execution) => execution.profile.id === "openrouter-tencent-hy3",
+        )
+        .map((execution) => execution.task.id),
+    ).toEqual(["hello-complete", "question-resume-complete"]);
     expect(
       openRouterBreadthProfiles.map((profile) => profile.ranking?.rank),
     ).toEqual([1, 3, 4, 5]);
@@ -105,16 +115,103 @@ describe("runner E2E catalog", () => {
       expectedRunCount: 2,
     });
     expect(localQuestion?.buildPrompt("nonce")).toContain("ask_user_questions");
+    expect(localQuestion?.buildPrompt("nonce")).toContain(
+      "do not spell, quote, repeat, announce, or include PAPERCLIP_E2E_QUESTION_DONE_nonce",
+    );
+    expect(localQuestion?.buildPrompt("nonce")).toContain(
+      "refer to it only as “the terminal marker.”",
+    );
+    expect(localQuestion?.buildPrompt("nonce")).toContain(
+      'API_ORIGIN="${PAPERCLIP_API_URL%/}"; API_ORIGIN="${API_ORIGIN%/api}"',
+    );
+    expect(localQuestion?.buildPrompt("nonce")).toContain(
+      '"idempotencyKey":"question-nonce"',
+    );
+    expect(localQuestion?.buildPrompt("nonce")).toContain(
+      'PATCH $API_ORIGIN/api/issues/$PAPERCLIP_TASK_ID with exactly {"status":"in_review"}',
+    );
+    expect(localQuestion?.buildPrompt("nonce")).toContain(
+      "Do not include `reviewInteractionId`",
+    );
+    expect(localQuestion?.buildPrompt("nonce")).toContain(
+      "retry only that PATCH and never POST the interaction again",
+    );
+    expect(localQuestion?.buildPrompt("nonce")).toContain(
+      "make exactly one completion write",
+    );
+    const legacyQuestionExitInstruction =
+      "In a legacy runner, after those two writes succeed, end the current response and heartbeat immediately. Do not wait, sleep, poll, or fetch the interaction; `wake_assignee` will start a new heartbeat after the user answers.";
+    expect(localQuestion?.buildPrompt("nonce")).toContain(
+      legacyQuestionExitInstruction,
+    );
     expect(restartQuestion).toMatchObject({
       flow: "question_resume_completion",
       expectedRunCount: 2,
       restartServerBeforeQuestionAnswer: true,
     });
+    expect(restartQuestion?.buildPrompt("nonce")).toContain(
+      legacyQuestionExitInstruction,
+    );
     expect(plan).toMatchObject({
       flow: "plan_approval_completion",
       expectedRunCount: 2,
     });
     expect(plan?.buildPrompt("nonce")).toContain("exactly two numbered steps");
+  });
+
+  it("emits native terminal text after the terminal tool succeeds", () => {
+    const message = runnerTasks.find((task) => task.id === "message-marker");
+    const ask = runnerTasks.find((task) => task.id === "ask-question");
+    const plan = runnerTasks.find((task) => task.id === "plan-revise-accept");
+    const question = localIntegrityTasks.find(
+      (task) => task.id === "structured-question-resume",
+    );
+    const breadthTasks = openRouterBreadthTasks.map((task) =>
+      task.buildPrompt("nonce"),
+    );
+
+    for (const prompt of [
+      message?.buildPrompt("nonce"),
+      ask?.buildPrompt("nonce"),
+      plan?.buildPrompt("nonce"),
+      question?.buildPrompt("nonce"),
+      ...breadthTasks,
+    ]) {
+      expect(prompt).toContain("then emit exactly");
+      expect(prompt!.indexOf("paperclip_finish exactly once")).toBeLessThan(
+        prompt!.indexOf("then emit exactly"),
+      );
+      expect(prompt).toContain("Wait for that tool call to succeed");
+    }
+
+    for (const taskId of [
+      "question-resume-complete",
+      "plan-approve-complete",
+    ]) {
+      const prompt = openRouterBreadthTasks
+        .find((task) => task.id === taskId)
+        ?.buildPrompt("nonce");
+      expect(prompt).toContain(
+        "do not spell, quote, repeat, announce, or include",
+      );
+      expect(prompt).toContain("refer to it only as “the terminal marker.”");
+    }
+
+    const breadthHello = openRouterBreadthTasks
+      .find((task) => task.id === "hello-complete")
+      ?.buildPrompt("nonce");
+    expect(breadthHello).toContain(
+      "Your first response action must be the paperclip_finish tool call",
+    );
+    expect(breadthHello).toContain(
+      "Do not emit any assistant text, acknowledgement, or preamble before calling it",
+    );
+
+    const nativeAsk = ask?.buildPrompt("nonce");
+    expect(nativeAsk).toContain("paperclip_finish must be your only tool call");
+    expect(nativeAsk).toContain(
+      "never call report_progress or any other tool before or after it",
+    );
   });
 
   it("uses only declared secret references in generated payloads", () => {
@@ -215,6 +312,15 @@ describe("runner E2E catalog", () => {
     });
     expect(task!.buildPrompt("nonce")).toContain("request_confirmation");
     expect(task!.buildPrompt("nonce")).toContain("baseRevisionId");
+    expect(task!.buildPrompt("nonce")).toContain(
+      "do not spell, quote, repeat, announce, or include PAPERCLIP_E2E_PLAN_DONE_nonce",
+    );
+    expect(task!.buildPrompt("nonce")).toContain(
+      'summary:"PAPERCLIP_E2E_PLAN_DONE_nonce"',
+    );
+    expect(task!.buildPrompt("nonce")).toContain(
+      "one atomic issue PATCH with status `done` and that exact comment",
+    );
     expect(task!.buildRevisionRequest?.("nonce")).toContain("baseRevisionId");
   });
 
@@ -269,7 +375,7 @@ describe("runner E2E selectors", () => {
     const selected = selectRunnerExecutions(
       parseRunnerSelectors(["--suite", "openrouter-model-breadth"]),
     );
-    expect(selected).toHaveLength(11);
+    expect(selected).toHaveLength(10);
     expect(
       selected.every(
         (entry) =>
@@ -306,9 +412,10 @@ describe("runner E2E selectors", () => {
     const jobs = buildMatrixJobs(
       selectRunnerExecutions(parseRunnerSelectors(["--all"])),
     );
-    expect(jobs).toHaveLength(67);
+    expect(jobs).toHaveLength(66);
     expect(jobs.filter((job) => job.needsDaytona)).toHaveLength(21);
-    expect(new Set(jobs.map((job) => job.executionId)).size).toBe(67);
+    expect(jobs.filter((job) => !job.needsDaytona)).toHaveLength(45);
+    expect(new Set(jobs.map((job) => job.executionId)).size).toBe(66);
     expect(
       jobs.every((job) =>
         runnerMatrix.some(

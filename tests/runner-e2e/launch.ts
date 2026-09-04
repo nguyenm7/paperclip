@@ -2,7 +2,6 @@ import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { createRequire } from "node:module";
-import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -22,7 +21,11 @@ import { renderRunnerE2EDashboard } from "./dashboard.js";
 import { packageEvidence } from "./evidence.js";
 import { classifyFailure, shouldRetryFailure } from "./failure-classifier.js";
 import { buildRunnerCampaign } from "./history.js";
-import { resolvePaperclipRunnerBinaryForHarness } from "./harness-env.js";
+import {
+  buildRunnerE2EProcessEnvironment,
+  resolvePaperclipRemoteRunnerBinaryForHarness,
+  resolvePaperclipRunnerBinaryForHarness,
+} from "./harness-env.js";
 import { assertEmbeddedDatabaseIsolation } from "./instance-isolation.js";
 import {
   assertSecretFree,
@@ -37,6 +40,7 @@ import {
   RunnerSelectorError,
   selectRunnerExecutions,
 } from "./selectors.js";
+import { resolveRunnerE2ESource } from "./source.js";
 import {
   CREDENTIAL_NAMES,
   type MatrixExecution,
@@ -46,6 +50,7 @@ import {
   reapNewDetachedDarwinSharedMemory,
   snapshotDarwinSharedMemory,
 } from "./shared-memory.js";
+import { reserveRunnerE2EServerPort } from "./ports.js";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const localEnvPath = path.join(repositoryRoot, ".env.runner-e2e.local");
@@ -155,21 +160,6 @@ async function loadLocalEnvironment(target: NodeJS.ProcessEnv) {
     }
     target[match[1]] = value;
   }
-}
-
-async function reservePort() {
-  const server = createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string")
-    throw new Error("Failed to reserve a loopback port");
-  await new Promise<void>((resolve, reject) =>
-    server.close((error) => (error ? reject(error) : resolve())),
-  );
-  return address.port;
 }
 
 async function prepareProviderPath(
@@ -292,16 +282,7 @@ function syntheticResult(
     executionId: execution.id,
     suiteId: execution.suite.id,
     suiteDefinitionHash: execution.suiteDefinitionHash,
-    source: {
-      sha: process.env.GITHUB_SHA ?? null,
-      ref: process.env.GITHUB_REF ?? null,
-      workflowRunUrl:
-        process.env.GITHUB_SERVER_URL &&
-        process.env.GITHUB_REPOSITORY &&
-        process.env.GITHUB_RUN_ID
-          ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
-          : null,
-    },
+    source: resolveRunnerE2ESource(),
     ...(execution.profile.ranking
       ? { rankingSnapshot: execution.profile.ranking }
       : {}),
@@ -388,7 +369,7 @@ async function runAttempt(input: {
       instanceId,
       "config.json",
     );
-    const port = await reservePort();
+    const port = await reserveRunnerE2EServerPort();
     await Promise.all([
       mkdir(paperclipHome, { recursive: true }),
       mkdir(workspace, { recursive: true }),
@@ -410,8 +391,12 @@ async function runAttempt(input: {
       betterAuthSecret,
     ]);
     attemptSecrets = credentials;
+    const runnerBinary = resolvePaperclipRunnerBinaryForHarness(
+      executions,
+      repositoryRoot,
+    );
     const childEnv: NodeJS.ProcessEnv = {
-      ...process.env,
+      ...buildRunnerE2EProcessEnvironment(process.env, executions),
       PATH: providerPath,
       PAPERCLIP_RUNNER_E2E_EXECUTION_IDS: JSON.stringify(
         executions.map((candidate) => candidate.id),
@@ -422,10 +407,9 @@ async function runAttempt(input: {
       PAPERCLIP_RUNNER_E2E_PRIVATE_DIR: privateDir,
       PAPERCLIP_RUNNER_E2E_WORKSPACE: workspace,
       PAPERCLIP_RUNNER_E2E_SERVER_LOG: path.join(privateDir, "server.log"),
-      PAPERCLIP_RUNNER_BINARY: resolvePaperclipRunnerBinaryForHarness(
-        executions,
-        repositoryRoot,
-      ),
+      PAPERCLIP_RUNNER_BINARY: runnerBinary,
+      PAPERCLIP_RUNNER_REMOTE_BINARY_PATH:
+        resolvePaperclipRemoteRunnerBinaryForHarness(executions, runnerBinary),
       // Vite's optimized dependency cache embeds revision query strings. A
       // private per-attempt cache prevents an earlier cell or local rebuild
       // from producing `504 Outdated Optimize Dep` during browser bootstrap.
@@ -770,7 +754,7 @@ async function runExecutionWithRetry(input: {
   }
   if (cancelled) throw new Error("Runner E2E campaign cancelled");
   console.warn(
-    `Retrying ${execution.id} in a fresh isolated harness after transient infrastructure failure`,
+    `Retrying ${execution.id} in a fresh isolated harness after ${firstResult.failureClass.replaceAll("_", " ")}`,
   );
   const [retryResult] = await runAttempt({
     executions: [execution],

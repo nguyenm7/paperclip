@@ -660,10 +660,9 @@ export function Layout() {
             <SidebarAccountMenu
               companyId={selectedCompanyId}
               deploymentMode={health?.deploymentMode}
-              serverGit={health?.serverInfo?.git}
-              version={health?.version}
               forceExpanded={replacesPrimarySidebar}
               productFeedback={health?.features?.productFeedback}
+              version={health?.version}
             />
           </div>
         ) : (
@@ -687,10 +686,9 @@ export function Layout() {
             <SidebarAccountMenu
               companyId={selectedCompanyId}
               deploymentMode={health?.deploymentMode}
-              serverGit={health?.serverInfo?.git}
-              version={health?.version}
               forceExpanded={replacesPrimarySidebar}
               productFeedback={health?.features?.productFeedback}
+              version={health?.version}
             />
           </SidebarShell>
         )}

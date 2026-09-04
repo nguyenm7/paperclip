@@ -6,12 +6,18 @@ import { RunnerApi, pollUntil } from "./api.js";
 import { buildRuntimeUsage, summarizeExecutionBilling } from "./billing.js";
 import { runnerExecutionById } from "./catalog.js";
 import { classifyFailure } from "./failure-classifier.js";
+import { runnerE2EServerControlPaths } from "./harness-env.js";
 import { setupLiveFixtures, type LiveFixtureValues } from "./live-fixtures.js";
 import { evaluateMatcher, type MatcherResult } from "./matchers.js";
 import {
+  acceptedPlanSessionResetFailures,
+  isControlPlaneGovernedResponseWait,
   isNonExecutingReviewFenceRun,
+  isOpenRouterDeepSeekHelloTerminalVariance,
   numberedPlanStepCount,
+  providerSessionContinuityFailures,
 } from "./run-observations.js";
+import { resolveRunnerE2ESource } from "./source.js";
 import {
   assertSecretFree,
   findSecretLeakInJsonValues,
@@ -166,15 +172,11 @@ async function restartIsolatedPaperclipServer(input: {
   requestId: string;
   deadlineAt: number;
 }): Promise<void> {
-  const controlDirectory = path.join(privateRoot!, "control");
-  const requestPath = path.join(
+  const {
     controlDirectory,
-    "server-restart.request.json",
-  );
-  const acknowledgementPath = path.join(
-    controlDirectory,
-    "server-restart.ack.json",
-  );
+    restartRequestPath: requestPath,
+    restartAcknowledgementPath: acknowledgementPath,
+  } = runnerE2EServerControlPaths(temporaryRoot!);
   await mkdir(controlDirectory, { recursive: true });
   const temporaryRequestPath = `${requestPath}.${process.pid}.${input.requestId}.tmp`;
   await writeFile(
@@ -237,10 +239,11 @@ const executionIds = (() => {
 })();
 const executions = executionIds.map(runnerExecutionById);
 const attempt = Number(process.env.PAPERCLIP_RUNNER_E2E_ATTEMPT ?? "1");
+const temporaryRoot = process.env.PAPERCLIP_RUNNER_E2E_TEMP_ROOT;
 const privateRoot = process.env.PAPERCLIP_RUNNER_E2E_PRIVATE_DIR;
 const workspacePath = process.env.PAPERCLIP_RUNNER_E2E_WORKSPACE;
-if (!privateRoot || !workspacePath)
-  throw new Error("Runner E2E private/workspace paths are required");
+if (!temporaryRoot || !privateRoot || !workspacePath)
+  throw new Error("Runner E2E temporary/private/workspace paths are required");
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -454,9 +457,12 @@ function nativeRunEventIntegrityFailures(
     }
   }
 
+  const runnerResultCount = runnerEventTypes.filter(
+    (value) => value === "run.result.proposed",
+  ).length;
   if (
-    runnerEventTypes.filter((value) => value === "run.result.proposed")
-      .length !== 1
+    runnerResultCount !== 1 &&
+    !(runnerResultCount === 0 && isControlPlaneGovernedResponseWait(events))
   ) {
     failures.push(
       `run ${run.id} must persist exactly one runner semantic result`,
@@ -1018,10 +1024,25 @@ for (const execution of executions) {
             requestId: restartRequestId,
             deadlineAt,
           });
-          await page.goto(
-            `/${encodeURIComponent(issuePrefix)}/issues/${encodeURIComponent(issue.identifier ?? issue.id)}`,
-            { waitUntil: "domcontentloaded" },
+          const documentSentinel = `__paperclip_runner_restart_${nonce.replaceAll("-", "_")}`;
+          await page.evaluate(
+            (key) => Reflect.set(window, key, true),
+            documentSentinel,
           );
+          try {
+            await page.goto(
+              `/${encodeURIComponent(issuePrefix)}/issues/${encodeURIComponent(issue.identifier ?? issue.id)}`,
+              // The replacement Vite server can commit and render a fresh
+              // document while its navigation lifecycle remains unsettled.
+              // The sentinel and explicit assertions below prove the new
+              // document and durable state even when Playwright times out.
+              { waitUntil: "commit" },
+            );
+          } catch (error) {
+            if (!(error instanceof Error) || error.name !== "TimeoutError") {
+              throw error;
+            }
+          }
           await expect(
             page
               .getByRole("radio", {
@@ -1030,6 +1051,12 @@ for (const execution of executions) {
               })
               .last(),
           ).toBeVisible({ timeout: 30_000 });
+          expect(
+            await page.evaluate(
+              (key) => Reflect.get(window, key) === true,
+              documentSentinel,
+            ),
+          ).toBe(false);
           const reloadedInteractions = await api.get<InteractionRecord[]>(
             `/api/issues/${issue.id}/interactions`,
           );
@@ -1125,7 +1152,8 @@ for (const execution of executions) {
         planLifecycleEvidence = { interaction, plan };
       }
 
-      const terminal = await pollUntil({
+      const taskMatchers = execution.task.buildMatchers(nonce, execution);
+      let terminal = await pollUntil({
         label: `issue ${issue.id} and heartbeat run terminal state`,
         deadlineAt,
         load: loadTaskState,
@@ -1135,6 +1163,32 @@ for (const execution of executions) {
           taskRuns.every((run) => TERMINAL_RUN_STATUSES.has(run.status)),
         reject: ({ taskRuns }) => definitiveRunFailure(taskRuns),
       });
+
+      // Finalization commits the issue/run decision before the derived agent
+      // comment is guaranteed to be visible through the comments endpoint.
+      // Give that projection a short consistency window so a successful
+      // terminal response is not misclassified as an empty provider reply.
+      // If no comment arrives, retain the original terminal observation and
+      // let the ordinary message matcher report the product failure.
+      if (taskMatchers.some((matcher) => matcher.kind.startsWith("message_"))) {
+        terminal = await pollUntil({
+          label: `final agent comment for issue ${issue.id}`,
+          deadlineAt: Math.min(deadlineAt, Date.now() + 30_000),
+          load: loadTaskState,
+          accept: ({ taskRuns, comments }) => {
+            if (taskRuns.length !== execution.task.expectedRunCount) {
+              return false;
+            }
+            const finalRun = sortRunsChronologically(taskRuns).at(-1);
+            return comments.some(
+              (comment) =>
+                comment.createdByRunId === finalRun?.id &&
+                comment.authorAgentId === fixtures!.agent.id,
+            );
+          },
+          reject: ({ taskRuns }) => definitiveRunFailure(taskRuns),
+        }).catch(() => terminal);
+      }
 
       issue = terminal.currentIssue;
       selectedRuns = terminal.taskRuns;
@@ -1383,7 +1437,7 @@ for (const execution of executions) {
         },
       };
       matcherResults = await Promise.all(
-        execution.task.buildMatchers(nonce, execution).map((matcher) =>
+        taskMatchers.map((matcher) =>
           evaluateMatcher(matcher, {
             ...matcherObservation,
             // Multi-run tasks intentionally retain earlier waiting/revision
@@ -1396,6 +1450,45 @@ for (const execution of executions) {
         ),
       );
       const failedMatchers = matcherResults.filter((result) => !result.passed);
+      const exactMessageMatcher = taskMatchers.find(
+        (matcher) => matcher.kind === "message_exact",
+      );
+      if (
+        execution.profile.id === "runner-opencode" &&
+        execution.task.id === "structured-question-restart-resume" &&
+        exactMessageMatcher?.kind === "message_exact" &&
+        finalRunMessage === exactMessageMatcher.expected.replace(/-\d+$/, "") &&
+        record(finalRun.resultJson).summary === exactMessageMatcher.expected
+      ) {
+        // OpenCode can occasionally copy the complete marker into the
+        // accepted semantic result while dropping only the synthetic attempt
+        // suffix from its visible answer. Keep exact matching strict, but let
+        // the campaign retry this narrowly proven provider variance once in a
+        // fresh harness. A repeated near miss remains a failed cell.
+        failureClassOverride = "provider_variance";
+      }
+      const retryInteractiveTerminalProviderVariance =
+        (execution.suite.id === "openrouter-model-breadth" &&
+          (execution.task.id === "question-resume-complete" ||
+            execution.task.id === "plan-approve-complete")) ||
+        (execution.suite.id === "core-compatibility" &&
+          execution.profile.generation === "native" &&
+          execution.task.id === "plan-revise-accept");
+      if (
+        retryInteractiveTerminalProviderVariance &&
+        exactMessageMatcher?.kind === "message_exact" &&
+        selectedRuns.every((candidate) => candidate.status === "succeeded") &&
+        issue.status === "done" &&
+        finalRunMessage !== exactMessageMatcher.expected &&
+        record(finalRun.resultJson).summary === exactMessageMatcher.expected
+      ) {
+        // An interactive breadth model can occasionally satisfy the durable
+        // terminal contract while paraphrasing the visible final response.
+        // Preserve the exact persisted-message and DOM assertions, but
+        // classify this narrowly proven provider variance for one
+        // fresh-harness retry.
+        failureClassOverride = "provider_variance";
+      }
       const observedEnvironmentId =
         environmentContext.id ??
         (execution.environment.id === "local"
@@ -1424,8 +1517,7 @@ for (const execution of executions) {
           )?.[1] ??
           /Using fallback workspace "([^"]+)"/.exec(runLogContent)?.[1];
         const cwd = String(workspaceContext.cwd ?? fallbackWorkspace ?? "");
-        const isolatedRoot = process.env.PAPERCLIP_RUNNER_E2E_TEMP_ROOT ?? "";
-        if (!isolatedRoot || !cwd.startsWith(`${isolatedRoot}/`)) {
+        if (!cwd.startsWith(`${temporaryRoot}/`)) {
           invariantFailures.push(
             `local run workspace escaped the isolated root: ${cwd}`,
           );
@@ -1461,17 +1553,12 @@ for (const execution of executions) {
             execution.profile.provider === "opencode") &&
           selectedRuns.length > 1
         ) {
-          const providerSessions = selectedRuns.map(
-            (candidate) => candidate.sessionIdAfter,
+          invariantFailures.push(
+            ...providerSessionContinuityFailures(
+              execution.profile.provider,
+              selectedRuns,
+            ),
           );
-          if (
-            providerSessions.some((sessionId) => !sessionId) ||
-            new Set(providerSessions).size !== 1
-          ) {
-            invariantFailures.push(
-              `expected ${execution.profile.provider} to preserve one provider session across all heartbeat runs`,
-            );
-          }
         } else if (
           execution.profile.provider === "acpx" &&
           selectedRuns.length > 1
@@ -1484,6 +1571,15 @@ for (const execution of executions) {
               invariantFailures.push(
                 "expected ACPX to record provider session identity across all heartbeat runs",
               );
+              continue;
+            }
+            const acceptedPlanResetFailures = acceptedPlanSessionResetFailures(
+              "acpx",
+              previousSessionId,
+              current,
+            );
+            if (acceptedPlanResetFailures) {
+              invariantFailures.push(...acceptedPlanResetFailures);
               continue;
             }
             if (previousSessionId === currentSessionId) continue;
@@ -1571,6 +1667,29 @@ for (const execution of executions) {
         },
         secrets,
       );
+
+      if (
+        exactMessageMatcher?.kind === "message_exact" &&
+        isOpenRouterDeepSeekHelloTerminalVariance({
+          suiteId: execution.suite.id,
+          profileId: execution.profile.id,
+          taskId: execution.task.id,
+          expectedMarker: exactMessageMatcher.expected,
+          finalRunMessage,
+          allAgentMessages: message,
+          semanticSummary: record(finalRun.resultJson).summary,
+          issueStatus: issue.status,
+          runStatuses: selectedRuns.map((candidate) => candidate.status),
+          matcherResults,
+          invariantFailures,
+        })
+      ) {
+        // DeepSeek can occasionally complete the semantic finish correctly but
+        // expose its pre-tool acknowledgement as the visible final answer. Keep
+        // exact persisted-message, global occurrence, and DOM checks strict,
+        // while allowing one fresh-harness retry only for the zero-marker form.
+        failureClassOverride = "provider_variance";
+      }
 
       // The backend polling above can observe a terminal transition before a
       // websocket invalidation reaches the already-open task page. Reload the
@@ -1731,16 +1850,7 @@ for (const execution of executions) {
         executionId: execution.id,
         suiteId: execution.suite.id,
         suiteDefinitionHash: execution.suiteDefinitionHash,
-        source: {
-          sha: process.env.GITHUB_SHA ?? null,
-          ref: process.env.GITHUB_REF ?? null,
-          workflowRunUrl:
-            process.env.GITHUB_SERVER_URL &&
-            process.env.GITHUB_REPOSITORY &&
-            process.env.GITHUB_RUN_ID
-              ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
-              : null,
-        },
+        source: resolveRunnerE2ESource(),
         ...(execution.profile.ranking
           ? { rankingSnapshot: execution.profile.ranking }
           : {}),

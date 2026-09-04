@@ -10,10 +10,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+#[cfg(test)]
+use crate::durable::QualifiedLaunchArtifact;
 use crate::durable::{redact_text, OpenCodeLaunchProfile};
 use crate::local_runner::LocalRunnerError;
 use crate::process_supervisor::{
-    SupervisedProcess, VerifiedProcessArgument, VerifiedProcessLaunch,
+    is_node_interpreter, BoundedLogBuffer, ProcessOutput, SupervisedProcess,
+    VerifiedProcessArgument, VerifiedProcessLaunch,
 };
 use crate::provider_bridge::{AuthorizedTool, DurableReplayFilter, ToolResult};
 use crate::provider_events::normalized_codex_terminal_event_type;
@@ -38,6 +41,8 @@ const OPENCODE_PROVIDER_ENVIRONMENT_KEYS: &[&str] = &[
     "PAPERCLIP_NATIVE_RUNTIME_CONTEXT_PATH",
 ];
 const TRUSTED_OPENCODE_EXECUTABLE_ARG: &str = "--paperclip-trusted-opencode-executable";
+const MAX_PROVIDER_STDERR_LINES: usize = 32;
+const MAX_PROVIDER_STDERR_BYTES: usize = 8 * 1024;
 const MAX_INSTRUCTIONS_BYTES: usize = 1024 * 1024;
 const MAX_PENDING_TOOL_REQUESTS: usize = 4_096;
 const MAX_PENDING_TOOL_REQUEST_BYTES: usize = 16 * 1024 * 1024;
@@ -48,6 +53,12 @@ const OPENCODE_RUNTIME_REQUEST_METHOD: &str = "paperclip/runtimeRequest";
 pub(crate) const MAX_SETTLED_PROVIDER_TURN_IDS: usize = 4_096;
 type QuestionOptionLabels = BTreeMap<String, BTreeMap<String, String>>;
 type QuestionSetMapping = (String, Value, QuestionOptionLabels);
+
+#[derive(Clone)]
+struct ProviderCompletionContract {
+    revision: String,
+    criterion_ids: Vec<String>,
+}
 
 fn base64_encode(input: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -489,6 +500,7 @@ enum AmbiguousTurnMessage {
 
 pub struct CodexProvider {
     process: SupervisedProcess,
+    stderr_tail: BoundedLogBuffer,
     config: CodexProviderConfig,
     authorized_tools: Vec<AuthorizedTool>,
     next_request_id: u64,
@@ -518,6 +530,7 @@ pub struct CodexProvider {
     trace: Option<ProviderTraceSink>,
     last_trace_frame_id: Option<u64>,
     opencode_launch_profile: Option<OpenCodeLaunchProfile>,
+    completion_contract: Option<ProviderCompletionContract>,
 }
 
 impl CodexProvider {
@@ -525,7 +538,14 @@ impl CodexProvider {
         config: &CodexProviderConfig,
         resume_thread_id: Option<&str>,
     ) -> Result<Self, LocalRunnerError> {
-        Self::start_with_tools_for_generation(config, std::iter::empty(), resume_thread_id, 1, None)
+        Self::start_with_tools_for_generation(
+            config,
+            std::iter::empty(),
+            resume_thread_id,
+            1,
+            None,
+            None,
+        )
     }
 
     pub fn start_with_tools(
@@ -533,7 +553,14 @@ impl CodexProvider {
         authorized_tools: impl IntoIterator<Item = AuthorizedTool>,
         resume_thread_id: Option<&str>,
     ) -> Result<Self, LocalRunnerError> {
-        Self::start_with_tools_for_generation(config, authorized_tools, resume_thread_id, 1, None)
+        Self::start_with_tools_for_generation(
+            config,
+            authorized_tools,
+            resume_thread_id,
+            1,
+            None,
+            None,
+        )
     }
 
     pub(crate) fn start_with_tools_for_generation(
@@ -542,6 +569,7 @@ impl CodexProvider {
         resume_thread_id: Option<&str>,
         process_generation: u64,
         opencode_launch_profile: Option<&OpenCodeLaunchProfile>,
+        completion_contract: Option<(&str, &[String])>,
     ) -> Result<Self, LocalRunnerError> {
         config.validate()?;
         if process_generation == 0 {
@@ -591,21 +619,7 @@ impl CodexProvider {
                     "OpenCode launch does not match the runner-owned qualified profile",
                 ));
             }
-            let command = verify_launch_artifact(&profile.command, "OpenCode proxy command")
-                .map_err(|error| LocalRunnerError::invalid(error.to_string()))?;
-            let proxy = verify_launch_artifact(&profile.proxy_script, "OpenCode proxy script")
-                .map_err(|error| LocalRunnerError::invalid(error.to_string()))?;
-            let executable =
-                verify_launch_artifact(&profile.executable, "OpenCode provider executable")
-                    .map_err(|error| LocalRunnerError::invalid(error.to_string()))?;
-            let launch = VerifiedProcessLaunch::new(
-                command,
-                vec![
-                    VerifiedProcessArgument::Artifact(proxy),
-                    VerifiedProcessArgument::Literal(TRUSTED_OPENCODE_EXECUTABLE_ARG.to_owned()),
-                    VerifiedProcessArgument::ExecutableArtifact(executable),
-                ],
-            );
+            let launch = verified_opencode_launch(profile)?;
             SupervisedProcess::spawn_verified_with_environment_keys(
                 &launch,
                 Duration::from_secs(2),
@@ -623,6 +637,10 @@ impl CodexProvider {
         };
         let mut provider = Self {
             process,
+            stderr_tail: BoundedLogBuffer::new(
+                MAX_PROVIDER_STDERR_LINES,
+                MAX_PROVIDER_STDERR_BYTES,
+            ),
             config: config.clone(),
             authorized_tools,
             next_request_id: 1,
@@ -652,6 +670,12 @@ impl CodexProvider {
             trace: ProviderTraceSink::from_environment(),
             last_trace_frame_id: None,
             opencode_launch_profile: opencode_launch_profile.cloned(),
+            completion_contract: completion_contract.map(|(revision, criterion_ids)| {
+                ProviderCompletionContract {
+                    revision: revision.to_owned(),
+                    criterion_ids: criterion_ids.to_vec(),
+                }
+            }),
         };
         let initialized = provider.request(
             "initialize",
@@ -681,6 +705,17 @@ impl CodexProvider {
         let params_object = params
             .as_object_mut()
             .expect("Codex thread parameters are an object");
+        if config.provider == "opencode" {
+            if let Some(contract) = provider.completion_contract.as_ref() {
+                params_object.insert(
+                    "completionContract".to_owned(),
+                    json!({
+                        "revision": contract.revision,
+                        "criterionIds": contract.criterion_ids,
+                    }),
+                );
+            }
+        }
         let method = if let Some(thread_id) = resume_thread_id {
             params_object.insert("threadId".to_owned(), json!(thread_id));
             "thread/resume"
@@ -840,6 +875,7 @@ impl CodexProvider {
         let completed_turn_authority = self.completed_turn_authority.clone();
         let completion_reconciliation_pending = self.completion_reconciliation_pending;
         let durable_tool_call_replays = self.durable_tool_call_replays;
+        let completion_contract = self.completion_contract.clone();
 
         // Exact turn identities may be forgotten only after the provider
         // process that could emit them is gone. Resume the same thread in a
@@ -852,6 +888,12 @@ impl CodexProvider {
             Some(&thread_id),
             next_generation,
             self.opencode_launch_profile.as_ref(),
+            completion_contract.as_ref().map(|contract| {
+                (
+                    contract.revision.as_str(),
+                    contract.criterion_ids.as_slice(),
+                )
+            }),
         )?;
         replacement.durable_tool_call_replays = durable_tool_call_replays;
         if replacement.active_provider_turn_id.is_some() {
@@ -1795,14 +1837,29 @@ impl CodexProvider {
             .map_err(ProviderRequestError::Ambiguous)?;
         loop {
             let line = self
-                .process
-                .receive_stdout_line(Duration::from_secs(30))
-                .map_err(ProviderRequestError::Ambiguous)?
-                .ok_or_else(|| {
-                    ProviderRequestError::Ambiguous(LocalRunnerError::invalid(format!(
-                        "Codex {method} response timed out"
-                    )))
-                })?;
+                .receive_provider_stdout_line(Duration::from_secs(30))
+                .map_err(ProviderRequestError::Ambiguous)?;
+            let Some(line) = line else {
+                let exit = self
+                    .process
+                    .try_wait()
+                    .map_err(ProviderRequestError::Ambiguous)?;
+                if exit.is_some() {
+                    self.drain_provider_diagnostics(Duration::from_millis(50));
+                }
+                let diagnostic_suffix = self.provider_diagnostic_suffix();
+                let message = if let Some(exit) = exit {
+                    format!(
+                        "Codex {method} process exited before responding (exitCode={:?}, signal={:?}){diagnostic_suffix}",
+                        exit.exit_code, exit.signal
+                    )
+                } else {
+                    format!("Codex {method} response timed out{diagnostic_suffix}")
+                };
+                return Err(ProviderRequestError::Ambiguous(LocalRunnerError::invalid(
+                    message,
+                )));
+            };
             let trace_frame_id = self.trace_inbound(&line);
             let message = parse_provider_message(&line).map_err(|error| {
                 if let (Some(trace), Some(frame_id)) = (self.trace.as_mut(), trace_frame_id) {
@@ -1870,6 +1927,87 @@ impl CodexProvider {
             self.pending_message_bytes = next_retained_bytes;
         }
     }
+
+    fn receive_provider_stdout_line(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<String>, LocalRunnerError> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Ok(None);
+            }
+            match self.process.recv_timeout(remaining) {
+                Ok(ProcessOutput::Stdout(line)) => return Ok(Some(line)),
+                Ok(ProcessOutput::Stderr(line)) => {
+                    self.stderr_tail.push(redact_text(&line));
+                }
+                Ok(ProcessOutput::StdoutError(message)) => {
+                    return Err(LocalRunnerError::invalid(message));
+                }
+                Ok(ProcessOutput::StdoutClosed) => return Ok(None),
+                Ok(ProcessOutput::StderrClosed) => {}
+                Err(mpsc::RecvTimeoutError::Timeout) => return Ok(None),
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(None),
+            }
+        }
+    }
+
+    fn drain_provider_diagnostics(&mut self, max_wait: Duration) {
+        let deadline = std::time::Instant::now() + max_wait;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match self.process.recv_timeout(remaining) {
+                Ok(ProcessOutput::Stderr(line)) => {
+                    self.stderr_tail.push(redact_text(&line));
+                }
+                Ok(ProcessOutput::StderrClosed)
+                | Err(mpsc::RecvTimeoutError::Timeout)
+                | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Ok(ProcessOutput::Stdout(_))
+                | Ok(ProcessOutput::StdoutError(_))
+                | Ok(ProcessOutput::StdoutClosed) => {}
+            }
+        }
+    }
+
+    fn provider_diagnostic_suffix(&self) -> String {
+        let diagnostics = self.stderr_tail.snapshot().lines.join("\n");
+        if diagnostics.is_empty() {
+            String::new()
+        } else {
+            format!(" stderrTail={diagnostics:?}")
+        }
+    }
+}
+
+fn verified_opencode_launch(
+    profile: &OpenCodeLaunchProfile,
+) -> Result<VerifiedProcessLaunch, LocalRunnerError> {
+    let command = verify_launch_artifact(&profile.command, "OpenCode proxy command")
+        .map_err(|error| LocalRunnerError::invalid(error.to_string()))?;
+    let proxy = verify_launch_artifact(&profile.proxy_script, "OpenCode proxy script")
+        .map_err(|error| LocalRunnerError::invalid(error.to_string()))?;
+    let executable = verify_launch_artifact(&profile.executable, "OpenCode provider executable")
+        .map_err(|error| LocalRunnerError::invalid(error.to_string()))?;
+    let proxy = if is_node_interpreter(&profile.command.path) {
+        VerifiedProcessArgument::CommonJsArtifact(proxy)
+    } else {
+        // Qualified test and alternate proxy commands own their ordinary
+        // argv contract. Only Node understands the runner-owned CommonJS
+        // descriptor loader flags.
+        VerifiedProcessArgument::Artifact(proxy)
+    };
+    let args = vec![
+        proxy,
+        VerifiedProcessArgument::Literal(TRUSTED_OPENCODE_EXECUTABLE_ARG.to_owned()),
+        VerifiedProcessArgument::ExecutableArtifact(executable),
+    ];
+    Ok(VerifiedProcessLaunch::new(command, args))
 }
 
 fn json_size(value: &Value, label: &str) -> Result<usize, LocalRunnerError> {
@@ -2582,6 +2720,53 @@ fn codex_question_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn qualified_artifact(path: &Path) -> QualifiedLaunchArtifact {
+        QualifiedLaunchArtifact {
+            path: path.to_owned(),
+            sha256: format!("sha256:{:x}", Sha256::digest(fs::read(path).unwrap())),
+        }
+    }
+
+    #[test]
+    fn verified_opencode_proxy_executes_the_descriptor_safe_commonjs_bundle() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "paperclip-opencode-launch-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let command = directory.join("node");
+        let proxy = directory.join("proxy.cjs");
+        let executable = directory.join("opencode");
+        fs::write(&command, b"qualified node").unwrap();
+        fs::write(&proxy, b"module.exports = {};\n").unwrap();
+        fs::write(&executable, b"qualified opencode").unwrap();
+        let profile = OpenCodeLaunchProfile {
+            command: qualified_artifact(&command),
+            proxy_script: qualified_artifact(&proxy),
+            executable: qualified_artifact(&executable),
+        };
+
+        let launch = verified_opencode_launch(&profile).unwrap();
+        assert!(matches!(
+            launch.arguments().first(),
+            Some(VerifiedProcessArgument::CommonJsArtifact(_))
+        ));
+        assert!(matches!(
+            launch.arguments().get(1),
+            Some(VerifiedProcessArgument::Literal(argument))
+                if argument == TRUSTED_OPENCODE_EXECUTABLE_ARG
+        ));
+        assert!(matches!(
+            launch.arguments().get(2),
+            Some(VerifiedProcessArgument::ExecutableArtifact(_))
+        ));
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn admits_only_exact_local_facade_provider_driver_pairs() {

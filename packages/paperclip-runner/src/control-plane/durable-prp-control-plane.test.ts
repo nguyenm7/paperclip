@@ -4,7 +4,13 @@ import {
   createHash,
   createHmac,
 } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { connect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -30,6 +36,49 @@ const identity: DurableRecoveryIdentity = {
 };
 const expectedRunnerVersion = "0.3.0";
 const expectedRunnerDigest = `sha256:${"a".repeat(64)}`;
+
+it.skipIf(process.platform === "win32")(
+  "never persists raw child stdout or stderr as durable diagnostics",
+  async () => {
+    const root = mkdtempSync(resolve(tmpdir(), "runner-diagnostics-test-"));
+    const executable = resolve(root, "noisy-runner");
+    const diagnosticsDirectory = resolve(root, "diagnostics");
+    writeFileSync(
+      executable,
+      [
+        "#!/usr/bin/env node",
+        'process.stdout.write("token=raw-stdout-secret " + "o".repeat(256 * 1024));',
+        'process.stderr.write("Authorization: Bearer raw-stderr-secret " + "e".repeat(256 * 1024));',
+      ].join("\n"),
+      { mode: 0o700 },
+    );
+    chmodSync(executable, 0o700);
+    try {
+      const handle = spawnRunner({
+        connection: { mode: "connect", connectUrl: "ws://127.0.0.1:43127" },
+        stateDirectory: resolve(root, "state"),
+        identity,
+        ticket: "bootstrap-ticket",
+        maxOutboxBytes: 256 * 1024,
+        p0ReserveBytes: 64 * 1024,
+        runnerVersion: expectedRunnerVersion,
+        runnerDigest: expectedRunnerDigest,
+        runnerBinaryPath: executable,
+        diagnosticsDirectory,
+      });
+      const result = await handle.completion;
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+
+      for (const name of ["runnerd.stdout.log", "runnerd.stderr.log"]) {
+        const filePath = resolve(diagnosticsDirectory, name);
+        expect(readFileSync(filePath, "utf8")).toBe("");
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
 
 it("pins the ACPX launch profile in runner startup arguments and restarts", () => {
   const launches: RunnerProcessLaunchSpec[] = [];
@@ -123,20 +172,22 @@ it("pins the OpenCode launch profile in runner startup arguments and restarts", 
   handle.restart("replacement-ticket");
   expect(launches).toHaveLength(2);
   for (const launch of launches) {
-    expect(launch.args).toEqual(expect.arrayContaining([
-      "--opencode-proxy-command",
-      profile.command,
-      "--opencode-proxy-command-sha256",
-      profile.commandSha256,
-      "--opencode-proxy-script",
-      profile.proxyScript,
-      "--opencode-proxy-script-sha256",
-      profile.proxyScriptSha256,
-      "--opencode-executable",
-      profile.executable,
-      "--opencode-executable-sha256",
-      profile.executableSha256,
-    ]));
+    expect(launch.args).toEqual(
+      expect.arrayContaining([
+        "--opencode-proxy-command",
+        profile.command,
+        "--opencode-proxy-command-sha256",
+        profile.commandSha256,
+        "--opencode-proxy-script",
+        profile.proxyScript,
+        "--opencode-proxy-script-sha256",
+        profile.proxyScriptSha256,
+        "--opencode-executable",
+        profile.executable,
+        "--opencode-executable-sha256",
+        profile.executableSha256,
+      ]),
+    );
   }
 });
 
@@ -190,6 +241,53 @@ it("preserves an explicit OpenCode permission mode at the runner spawn boundary"
   expect(launches[0]!.environment.PAPERCLIP_API_KEY).toBeUndefined();
   expect(launches[0]!.environment.NODE_OPTIONS).toBeUndefined();
   expect(launches[0]!.environment.PAPERCLIP_OPENCODE_COMMAND).toBeUndefined();
+});
+
+it("preserves the controller-selected ACPX provider package root", () => {
+  const launches: RunnerProcessLaunchSpec[] = [];
+  spawnRunner({
+    connection: { mode: "connect", connectUrl: "ws://127.0.0.1:43127" },
+    stateDirectory: "/tmp/paperclip-runner-test",
+    identity,
+    ticket: "bootstrap-ticket",
+    maxOutboxBytes: 256 * 1024,
+    p0ReserveBytes: 64 * 1024,
+    runnerVersion: expectedRunnerVersion,
+    runnerDigest: expectedRunnerDigest,
+    environment: {
+      PATH: "/bin",
+      PAPERCLIP_ACPX_PROVIDER_PACKAGE_ROOT: "/verified/provider-pack",
+      PAPERCLIP_ACPX_PROVIDER_PACKAGE_MANIFEST:
+        "/verified/provider-pack/package.json",
+      NODE_PATH: "/untrusted/modules",
+    },
+    processLauncher: (spec) => {
+      launches.push(spec);
+      return {
+        child: {
+          pid: 42,
+          exitCode: null,
+          signalCode: null,
+          kill: () => true,
+        },
+        completion: Promise.resolve({
+          code: 0,
+          signal: null,
+          stdout: "",
+          stderr: "",
+        }),
+      };
+    },
+  });
+
+  expect(launches).toHaveLength(1);
+  expect(launches[0]!.environment.PAPERCLIP_ACPX_PROVIDER_PACKAGE_ROOT).toBe(
+    "/verified/provider-pack",
+  );
+  expect(
+    launches[0]!.environment.PAPERCLIP_ACPX_PROVIDER_PACKAGE_MANIFEST,
+  ).toBe("/verified/provider-pack/package.json");
+  expect(launches[0]!.environment.NODE_PATH).toBeUndefined();
 });
 
 it("preserves file-backed AWS workload identity at the runner spawn boundary", () => {
@@ -920,6 +1018,65 @@ describe.sequential("DurablePrpControlPlane", () => {
         { commandId: "command-tool-1", status: "indeterminate" },
         { commandId: "command-interrupt-1", status: "pending" },
       ]);
+    } finally {
+      await controlPlane.stop();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("acknowledges terminal command results after persisting them", async () => {
+    const root = mkdtempSync(resolve(tmpdir(), "paperclip-prp-terminal-ack-"));
+    const controlPlane = new DurablePrpControlPlane({
+      stateDirectory: root,
+      identity,
+      expectedRunnerVersion,
+      expectedRunnerDigest,
+    });
+    try {
+      await controlPlane.start();
+      const command = controlPlane.queueCommand(
+        "runner.suspend",
+        {},
+        "command-suspend-1",
+      );
+      const client = await authenticate(
+        controlPlane,
+        controlPlane.issueBootstrapTicket(),
+      );
+      const terminalResult = {
+        protocol: "paperclip.runner",
+        version: 1,
+        kind: "command_result",
+        payload: {
+          commandId: command.commandId,
+          commandType: command.type,
+          controllerSeq: command.controllerSeq,
+          status: "completed",
+          result: { suspended: true },
+        },
+      };
+
+      sendSecure(client!, terminalResult);
+      await expect(receiveSecure(client!)).resolves.toMatchObject({
+        kind: "command_result_ack",
+        payload: {
+          commandId: "command-suspend-1",
+          commandType: "runner.suspend",
+          controllerSeq: command.controllerSeq,
+          status: "completed",
+        },
+      });
+      expect(controlPlane.store.state.commands).toMatchObject([
+        { commandId: "command-suspend-1", status: "completed" },
+      ]);
+
+      sendSecure(client!, terminalResult);
+      await expect(receiveSecure(client!)).resolves.toMatchObject({
+        kind: "command_result_ack",
+        payload: { commandId: "command-suspend-1" },
+      });
+      expect(controlPlane.store.state.duplicateCommandResults).toBe(1);
+      client?.socket.destroy();
     } finally {
       await controlPlane.stop();
       rmSync(root, { recursive: true, force: true });

@@ -33,7 +33,7 @@ import {
 } from "@paperclipai/db";
 import detectPort from "detect-port";
 import { createApp } from "./app.js";
-import { loadConfig } from "./config.js";
+import { applyManagedCloudProductFeedbackFloor, loadConfig } from "./config.js";
 import { logger } from "./middleware/logger.js";
 import {
   StartupRefusalError,
@@ -91,6 +91,7 @@ import {
 } from "./services/adapter-registry-bootstrap.js";
 import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-share-client.js";
 import { createHttpProductFeedbackRelay } from "./services/product-feedback-relay.js";
+import { isCloudManagedInstance } from "./services/cloud-instance.js";
 import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runtime-api.js";
 import { isLoopbackHost, rewriteLoopbackUrlPort } from "./url-utils.js";
 import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
@@ -819,6 +820,10 @@ export async function startServer(): Promise<StartedServer> {
   // document parsed fail-closed above (`plugins.autoInstall`). Absent env means
   // self-hosted: createApp falls back to its built-in kubernetes-only default.
   const managedPluginAutoInstall = managedConfig?.plugins.autoInstall ?? null;
+  const productFeedback = applyManagedCloudProductFeedbackFloor(
+    config.productFeedback,
+    isCloudManagedInstance(),
+  );
   const app = await createApp(db as any, {
     uiMode,
     serverPort: listenPort,
@@ -849,8 +854,8 @@ export async function startServer(): Promise<StartedServer> {
     authPublicBaseUrl: config.authPublicBaseUrl,
     authReady,
     companyDeletionEnabled: config.companyDeletionEnabled,
-    productFeedback: config.productFeedback,
-    productFeedbackRelay: config.productFeedback.enabled
+    productFeedback,
+    productFeedbackRelay: productFeedback.enabled
       ? createHttpProductFeedbackRelay()
       : undefined,
     pluginMigrationDb: pluginMigrationDb as any,

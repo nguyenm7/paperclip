@@ -93,6 +93,13 @@ export interface Config {
   productFeedback: ProductFeedbackCapability;
 }
 
+export function applyManagedCloudProductFeedbackFloor(
+  capability: ProductFeedbackCapability,
+  cloudManaged: boolean,
+): ProductFeedbackCapability {
+  return cloudManaged ? { ...capability, enabled: false } : capability;
+}
+
 function detectTailnetBindHost(): string | undefined {
   const explicit = process.env.PAPERCLIP_TAILNET_BIND_HOST?.trim();
   if (explicit) return explicit;

@@ -88,13 +88,16 @@ describe("POST /api/product-feedback", () => {
   });
 
   it("is absent while the capability is disabled", async () => {
+    const relay = { submit: vi.fn() };
     const response = await request(createApp({
       capability: { ...enabledCapability, enabled: false },
+      relay,
     })).post("/api/product-feedback").send(validRequest);
 
     expect(response.status).toBe(404);
     expect(response.body.code).toBe("product_feedback_disabled");
     expect(response.headers["cache-control"]).toBe("no-store");
+    expect(relay.submit).not.toHaveBeenCalled();
   });
 
   it("fails closed without a server-bound relay and preserves a safe retry message", async () => {

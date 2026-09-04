@@ -154,8 +154,7 @@ export function SidebarAccountMenu({
       ? serverGit.fullSha
       : sourceSha;
   const sourceBranch = sourceSha && serverGit?.available ? serverGit.branchName : null;
-  const nativeFeedbackEnabled =
-    Boolean(companyId) && productFeedback?.enabled === true && productFeedback.posthog !== undefined;
+  const nativeFeedbackEnabled = Boolean(companyId) && productFeedback?.enabled === true;
 
   function closeNavigationChrome() {
     setOpen(false);
@@ -304,21 +303,29 @@ export function SidebarAccountMenu({
         {!rail ? (
           <Tooltip>
             <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-label="Share feedback"
-                className="flex size-8 shrink-0 items-center justify-center rounded-lg text-foreground/80 transition-colors hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                onClick={() => {
-                  if (!nativeFeedbackEnabled) {
-                    window.open(FEEDBACK_URL, "_blank", "noopener,noreferrer");
-                    return;
-                  }
-                  openingFeedbackRef.current = true;
-                  setFeedbackOpen(true);
-                }}
-              >
-                <Flag className="h-4 w-4" aria-hidden="true" />
-              </button>
+              {nativeFeedbackEnabled ? (
+                <button
+                  type="button"
+                  aria-label="Share feedback"
+                  className="flex size-8 shrink-0 items-center justify-center rounded-lg text-foreground/80 transition-colors hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={() => {
+                    openingFeedbackRef.current = true;
+                    setFeedbackOpen(true);
+                  }}
+                >
+                  <Flag className="h-4 w-4" aria-hidden="true" />
+                </button>
+              ) : (
+                <a
+                  href={FEEDBACK_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label="Share feedback"
+                  className="flex size-8 shrink-0 items-center justify-center rounded-lg text-foreground/80 transition-colors hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <Flag className="h-4 w-4" aria-hidden="true" />
+                </a>
+              )}
             </TooltipTrigger>
             <TooltipContent side="top">Share feedback</TooltipContent>
           </Tooltip>

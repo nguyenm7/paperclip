@@ -1,6 +1,10 @@
 import { useRef, useState, type FormEvent } from "react";
 import { AlertCircle, CheckCircle2, ChevronDown, LoaderCircle } from "lucide-react";
-import type { DeploymentMode, ProductFeedbackCapability } from "@paperclipai/shared";
+import {
+  PRODUCT_FEEDBACK_SCHEMA_VERSION,
+  type DeploymentMode,
+  type ProductFeedbackCapability,
+} from "@paperclipai/shared";
 import { productFeedbackApi, ProductFeedbackApiError } from "@/api/productFeedback";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -23,7 +27,6 @@ import {
   readProductFeedbackDiagnostics,
   recordProductFeedbackDiagnostic,
 } from "@/lib/product-feedback-diagnostics";
-import type { ProductFeedbackCapture } from "@/lib/product-feedback-posthog";
 
 type FeedbackStatus = "editing" | "submitting" | "error" | "success";
 
@@ -35,8 +38,7 @@ interface ProductFeedbackDialogProps {
   knownEmail?: string | null;
   appVersion?: string | null;
   companyId: string;
-  requestGrant?: typeof productFeedbackApi.requestGrant;
-  captureEvent?: ProductFeedbackCapture;
+  submitFeedback?: typeof productFeedbackApi.submit;
 }
 
 function validEmail(value: string): boolean {
@@ -51,8 +53,7 @@ export function ProductFeedbackDialog({
   knownEmail,
   appVersion = null,
   companyId,
-  requestGrant = productFeedbackApi.requestGrant,
-  captureEvent,
+  submitFeedback = productFeedbackApi.submit,
 }: ProductFeedbackDialogProps) {
   const accountEmail = deploymentMode === "authenticated" ? knownEmail?.trim() || null : null;
   const [feedback, setFeedback] = useState("");
@@ -64,7 +65,6 @@ export function ProductFeedbackDialog({
   const feedbackRef = useRef<HTMLTextAreaElement>(null);
   const submissionIdRef = useRef(globalThis.crypto.randomUUID());
 
-  const posthog = capability.posthog;
   const maxLength = capability.limits.feedbackMaxLength;
   const trimmedFeedback = feedback.trim();
   const selectedEmail = followUpConsent
@@ -74,25 +74,15 @@ export function ProductFeedbackDialog({
   const emailInvalid = followUpConsent && !validEmail(selectedEmail);
   const submitting = status === "submitting";
 
-  function eventContext() {
+  function submissionContext() {
     const userAgent = navigator.userAgent;
     return {
-      capability,
-      distinctId: submissionIdRef.current,
       routeTemplate: normalizeFeedbackRoute(window.location.pathname),
       appVersion,
       deploymentMode,
       browser: getBrowserSummary(userAgent),
       operatingSystem: getOperatingSystemSummary(userAgent),
     };
-  }
-
-  async function capture(
-    ...args: Parameters<ProductFeedbackCapture>
-  ): Promise<void> {
-    if (captureEvent) return captureEvent(...args);
-    const { captureProductFeedbackPosthogEvent } = await import("@/lib/product-feedback-posthog");
-    return captureProductFeedbackPosthogEvent(...args);
   }
 
   function resetForNextSubmission() {
@@ -119,24 +109,24 @@ export function ProductFeedbackDialog({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (feedbackInvalid || emailInvalid || !posthog || submitting) return;
+    if (feedbackInvalid || emailInvalid || submitting) return;
 
     setStatus("submitting");
     setErrorMessage(null);
     try {
-      const grant = await requestGrant({
+      const diagnostics = readProductFeedbackDiagnostics();
+      await submitFeedback({
         companyId,
+        schemaVersion: PRODUCT_FEEDBACK_SCHEMA_VERSION,
         submissionId: submissionIdRef.current,
+        submittedAt: new Date().toISOString(),
+        feedback: trimmedFeedback,
         followUpConsent,
         ...(followUpConsent ? { reporterEmail: selectedEmail } : {}),
-      });
-      const diagnostics = readProductFeedbackDiagnostics();
-      await capture("survey sent", {
-        ...eventContext(),
-        feedback: trimmedFeedback,
-        grant,
-        diagnostics,
-        clientTimestamp: new Date().toISOString(),
+        context: {
+          ...submissionContext(),
+          diagnostics,
+        },
       });
       clearProductFeedbackDiagnostics();
       setStatus("success");
@@ -150,7 +140,7 @@ export function ProductFeedbackDialog({
     }
   }
 
-  if (!capability.enabled || !posthog) return null;
+  if (!capability.enabled) return null;
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -274,13 +264,13 @@ export function ProductFeedbackDialog({
                 <li>Paperclip version, deployment mode, and page route without query details</li>
                 <li>Browser and operating-system family with major version</li>
                 <li>Up to five recent sanitized Paperclip error codes</li>
-                <li>A random submission ID, short-lived contact grant, and anonymous installation reference</li>
+                <li>A random submission ID used to make retries safe</li>
               </ul>
             </details>
 
             <p className="text-xs leading-relaxed text-muted-foreground">
               Submitting sends this feedback and the diagnostic details listed here to Paperclip&apos;s feedback
-              systems. Your email is sent through a separate contact grant and is never sent to PostHog.
+              systems. If you consent to follow-up, your email is encrypted separately and is never sent to PostHog.
             </p>
 
             {errorMessage ? (

@@ -344,31 +344,24 @@ describe("SidebarAccountMenu", () => {
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
-          <SidebarAccountMenu
-            companyId="11111111-1111-4111-8111-111111111111"
-            deploymentMode="local_trusted"
-            open
-            productFeedback={{
-              enabled: true,
-              provider: "posthog",
-              posthog: {
-                apiHost: "https://us.i.posthog.com",
-                projectToken: "phc_public_test_token",
-                surveyId: "survey-123",
-                questionId: "question-456",
-              },
-              limits: { feedbackMaxLength: 5_000, diagnosticCount: 5 },
-            }}
-          />
+          <TooltipProvider>
+            <SidebarAccountMenu
+              companyId="11111111-1111-4111-8111-111111111111"
+              deploymentMode="local_trusted"
+              open
+              productFeedback={{
+                enabled: true,
+                limits: { feedbackMaxLength: 5_000, diagnosticCount: 5 },
+              }}
+            />
+          </TooltipProvider>
         </QueryClientProvider>,
       );
     });
     await flushReact();
 
     expect(document.body.querySelector('a[href="https://paperclip.ing/feedback"]')).toBeNull();
-    const feedbackButton = Array.from(document.body.querySelectorAll("button")).find(
-      (button) => button.textContent?.includes("Feedback"),
-    );
+    const feedbackButton = document.body.querySelector<HTMLButtonElement>('button[aria-label="Share feedback"]');
     await act(() => feedbackButton?.click());
     await flushReact();
 

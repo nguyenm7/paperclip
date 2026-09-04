@@ -7,22 +7,14 @@ import { Button } from "@/components/ui/button";
 
 const capability: ProductFeedbackCapability = {
   enabled: true,
-  provider: "posthog",
-  posthog: {
-    apiHost: "https://us.i.posthog.com",
-    projectToken: "phc_storybook_public_token",
-    surveyId: "survey-story",
-    questionId: "question-story",
-  },
   limits: { feedbackMaxLength: 5_000, diagnosticCount: 5 },
 };
 
-const localValidationGrant = {
-  grantToken: "storybook-single-use-grant",
-  submissionMode: "local_validation" as const,
-  validationRunId: "storybook-validation",
-  opaqueInstallationId: "storybook-installation",
-  expiresAt: "2026-09-02T00:00:00.000Z",
+const receipt = {
+  ok: true as const,
+  duplicate: false,
+  submissionId: "708db09f-1a29-4dd6-ad62-99b19b6902b4",
+  receiptId: "808db09f-1a29-4dd6-ad62-99b19b6902b4",
 };
 
 function FeedbackStory(props: ComponentProps<typeof ProductFeedbackDialog>) {
@@ -55,8 +47,7 @@ const meta = {
     companyId: "11111111-1111-4111-8111-111111111111",
     knownEmail: "owner@example.com",
     appVersion: "2026.901.0",
-    captureEvent: async () => undefined,
-    requestGrant: async () => localValidationGrant,
+    submitFeedback: async () => receipt,
   },
   render: (args) => <FeedbackStory {...args} />,
 } satisfies Meta<typeof ProductFeedbackDialog>;
@@ -87,15 +78,15 @@ export const ChangedAccountEmail: Story = {
 
 export const Submitting: Story = {
   args: {
-    requestGrant: async () => new Promise<never>(() => undefined),
+    submitFeedback: async () => new Promise<never>(() => undefined),
   },
   play: enterFeedbackAndSubmit,
 };
 
 export const Retry: Story = {
   args: {
-    requestGrant: async () => {
-      throw new Error("The local grant broker is unavailable");
+    submitFeedback: async () => {
+      throw new Error("The feedback relay is unavailable");
     },
   },
   play: async () => {

@@ -4,9 +4,16 @@ import pino from "pino";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@paperclipai/db";
-import type { ProductFeedbackCapability } from "@paperclipai/shared";
+import {
+  PRODUCT_FEEDBACK_SCHEMA_VERSION,
+  type ProductFeedbackCapability,
+} from "@paperclipai/shared";
 import { createHttpLogger } from "../middleware/logger.js";
-import { productFeedbackRoutes, type ProductFeedbackGrantBroker } from "../routes/product-feedback.js";
+import { productFeedbackRoutes } from "../routes/product-feedback.js";
+import {
+  ProductFeedbackRelayError,
+  type ProductFeedbackRelay,
+} from "../services/product-feedback-relay.js";
 
 const mockLogActivity = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
@@ -15,23 +22,22 @@ vi.mock("../services/activity-log.js", () => ({
 }));
 
 const companyId = "11111111-1111-4111-8111-111111111111";
+const receipt = {
+  ok: true as const,
+  duplicate: false,
+  submissionId: "708db09f-1a29-4dd6-ad62-99b19b6902b4",
+  receiptId: "808db09f-1a29-4dd6-ad62-99b19b6902b4",
+};
 
 const enabledCapability: ProductFeedbackCapability = {
   enabled: true,
-  provider: "posthog",
-  posthog: {
-    apiHost: "https://us.i.posthog.com",
-    projectToken: "phc_public_test_token",
-    surveyId: "survey-id",
-    questionId: "question-id",
-  },
   limits: { feedbackMaxLength: 5_000, diagnosticCount: 5 },
 };
 
 function createApp(input: {
   capability?: ProductFeedbackCapability;
   actor?: Partial<Express.Request["actor"]>;
-  broker?: ProductFeedbackGrantBroker;
+  relay?: ProductFeedbackRelay;
   logStream?: PassThrough;
 } = {}) {
   const app = express();
@@ -53,50 +59,53 @@ function createApp(input: {
   app.use("/api", productFeedbackRoutes({
     db: {} as Db,
     capability: input.capability ?? enabledCapability,
-    broker: input.broker,
+    relay: input.relay,
   }));
   return app;
 }
 
 const validRequest = {
   companyId,
-  submissionId: "708db09f-1a29-4dd6-ad62-99b19b6902b4",
+  schemaVersion: PRODUCT_FEEDBACK_SCHEMA_VERSION,
+  submissionId: receipt.submissionId,
+  submittedAt: "2026-09-03T12:00:00.000Z",
+  feedback: "Please make review status clearer.",
   followUpConsent: true,
   reporterEmail: "reporter@example.com",
+  context: {
+    routeTemplate: "/company/issues",
+    appVersion: "2026.9.3",
+    deploymentMode: "local_trusted",
+    browser: "Chrome 151",
+    operatingSystem: "macOS 15",
+    diagnostics: [],
+  },
 };
 
-describe("POST /api/product-feedback/grant", () => {
+describe("POST /api/product-feedback", () => {
   beforeEach(() => {
     mockLogActivity.mockClear();
   });
 
   it("is absent while the capability is disabled", async () => {
     const response = await request(createApp({
-      capability: { ...enabledCapability, enabled: false, posthog: undefined },
-    })).post("/api/product-feedback/grant").send(validRequest);
+      capability: { ...enabledCapability, enabled: false },
+    })).post("/api/product-feedback").send(validRequest);
 
     expect(response.status).toBe(404);
-    expect(response.body).toEqual({
-      code: "product_feedback_disabled",
-      error: "Product feedback is not enabled.",
-    });
+    expect(response.body.code).toBe("product_feedback_disabled");
     expect(response.headers["cache-control"]).toBe("no-store");
   });
 
-  it("fails closed without a server-bound broker and preserves a safe retry message", async () => {
-    const response = await request(createApp())
-      .post("/api/product-feedback/grant")
-      .send(validRequest);
+  it("fails closed without a server-bound relay and preserves a safe retry message", async () => {
+    const response = await request(createApp()).post("/api/product-feedback").send(validRequest);
 
     expect(response.status).toBe(503);
-    expect(response.body).toEqual({
-      code: "product_feedback_grant_unavailable",
-      error: "Feedback delivery is not available on this instance yet. Your draft is still here.",
-    });
+    expect(response.body.code).toBe("product_feedback_unavailable");
     expect(JSON.stringify(response.body)).not.toContain("reporter@example.com");
   });
 
-  it("redacts reporter email from HTTP error logs on the fail-closed path", async () => {
+  it("redacts reporter email and feedback text from HTTP error logs", async () => {
     const logStream = new PassThrough();
     let output = "";
     logStream.on("data", (chunk) => {
@@ -104,104 +113,88 @@ describe("POST /api/product-feedback/grant", () => {
     });
 
     const response = await request(createApp({ logStream }))
-      .post("/api/product-feedback/grant")
-      .send({ ...validRequest, reporterEmail: "privacy-canary@example.test" });
+      .post("/api/product-feedback")
+      .send({
+        ...validRequest,
+        reporterEmail: "privacy-canary@example.test",
+        feedback: "private feedback canary",
+      });
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(response.status).toBe(503);
     expect(output).toContain("[REDACTED]");
     expect(output).not.toContain("privacy-canary@example.test");
+    expect(output).not.toContain("private feedback canary");
   });
 
-  it("rejects browser-selectable trust and malformed contact input", async () => {
+  it("rejects unknown trust fields and malformed context", async () => {
     const response = await request(createApp())
-      .post("/api/product-feedback/grant")
-      .send({
-        ...validRequest,
-        followUpConsent: false,
-        trusted: true,
-      });
+      .post("/api/product-feedback")
+      .send({ ...validRequest, trusted: true });
 
     expect(response.status).toBe(400);
-    expect(response.body.code).toBe("invalid_product_feedback_grant_request");
+    expect(response.body.code).toBe("invalid_product_feedback_request");
   });
 
   it("requires contact data exactly when follow-up consent is enabled", async () => {
-    const missingEmail = await request(createApp())
-      .post("/api/product-feedback/grant")
-      .send({
-        submissionId: validRequest.submissionId,
-        followUpConsent: true,
-      });
+    const { reporterEmail: _email, ...withoutEmail } = validRequest;
+    const missingEmail = await request(createApp()).post("/api/product-feedback").send(withoutEmail);
     const unexpectedEmail = await request(createApp())
-      .post("/api/product-feedback/grant")
-      .send({
-        ...validRequest,
-        followUpConsent: false,
-      });
+      .post("/api/product-feedback")
+      .send({ ...validRequest, followUpConsent: false });
 
     expect(missingEmail.status).toBe(400);
-    expect(missingEmail.body.code).toBe("invalid_product_feedback_grant_request");
     expect(unexpectedEmail.status).toBe(400);
-    expect(unexpectedEmail.body.code).toBe("invalid_product_feedback_grant_request");
   });
 
-  it("requires a board session", async () => {
-    const response = await request(createApp({ actor: { type: "agent", source: "api_key" } }))
-      .post("/api/product-feedback/grant")
+  it("requires a board session and conceals out-of-scope companies", async () => {
+    const relay = { submit: vi.fn() };
+    const forbidden = await request(createApp({ actor: { type: "agent", source: "api_key" }, relay }))
+      .post("/api/product-feedback")
+      .send(validRequest);
+    const concealed = await request(createApp({ actor: { companyIds: [], source: "session" }, relay }))
+      .post("/api/product-feedback")
       .send(validRequest);
 
-    expect(response.status).toBe(403);
-    expect(response.body.code).toBe("board_session_required");
+    expect(forbidden.status).toBe(403);
+    expect(concealed.status).toBe(404);
+    expect(relay.submit).not.toHaveBeenCalled();
   });
 
-  it("conceals companies outside the board actor's scope", async () => {
-    const issueGrant = vi.fn();
-    const response = await request(createApp({
-      actor: { companyIds: [], source: "session" },
-      broker: { issueGrant },
-    }))
-      .post("/api/product-feedback/grant")
+  it("relays the strict payload without the local company id and logs only safe metadata", async () => {
+    const submit = vi.fn().mockResolvedValue(receipt);
+    const response = await request(createApp({ relay: { submit } }))
+      .post("/api/product-feedback")
       .send(validRequest);
 
-    expect(response.status).toBe(404);
-    expect(response.body.code).toBe("company_not_found");
-    expect(issueGrant).not.toHaveBeenCalled();
-    expect(mockLogActivity).not.toHaveBeenCalled();
-  });
-
-  it("hands contact data only to the authenticated server broker", async () => {
-    const issueGrant = vi.fn().mockResolvedValue({
-      grantToken: "single-use-grant",
-      submissionMode: "production_feedback",
-      opaqueInstallationId: "installation-ref",
-      expiresAt: "2026-09-02T00:00:00.000Z",
-    });
-
-    const response = await request(createApp({
-      actor: { source: "session" },
-      broker: { issueGrant },
-    })).post("/api/product-feedback/grant").send(validRequest);
-
-    expect(response.status).toBe(201);
-    expect(issueGrant).toHaveBeenCalledWith({
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual(receipt);
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
       submissionId: validRequest.submissionId,
-      followUpConsent: true,
-      reporterEmail: "reporter@example.com",
-    });
+      feedback: validRequest.feedback,
+      reporterEmail: validRequest.reporterEmail,
+    }));
+    expect(submit.mock.calls[0]?.[0]).not.toHaveProperty("companyId");
     expect(mockLogActivity).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       companyId,
-      action: "product_feedback.grant_requested",
+      action: "product_feedback.submission_requested",
       entityType: "product_feedback_submission",
       entityId: validRequest.submissionId,
-      details: { provider: "posthog", followUpConsent: true },
+      details: expect.objectContaining({
+        destination: "paperclip_telemetry_backend",
+        followUpConsent: true,
+        diagnosticCount: 0,
+      }),
     }));
-    expect(JSON.stringify(mockLogActivity.mock.calls)).not.toContain("reporter@example.com");
-    expect(response.body).toEqual({
-      grantToken: "single-use-grant",
-      submissionMode: "production_feedback",
-      opaqueInstallationId: "installation-ref",
-      expiresAt: "2026-09-02T00:00:00.000Z",
-    });
+    expect(JSON.stringify(mockLogActivity.mock.calls)).not.toContain(validRequest.reporterEmail);
+    expect(JSON.stringify(mockLogActivity.mock.calls)).not.toContain(validRequest.feedback);
+  });
+
+  it("preserves rate-limit semantics without exposing downstream response bodies", async () => {
+    const relay = { submit: vi.fn().mockRejectedValue(new ProductFeedbackRelayError(429)) };
+    const response = await request(createApp({ relay })).post("/api/product-feedback").send(validRequest);
+
+    expect(response.status).toBe(429);
+    expect(response.body.code).toBe("product_feedback_rate_limited");
   });
 });

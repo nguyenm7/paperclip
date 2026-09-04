@@ -1132,43 +1132,27 @@ node --test scripts/smoke/posthog-live.test.mjs
 
 ## Product feedback canary
 
-The Paperclip-owned feedback dialog is disabled by default. When it is disabled,
-the account menu keeps the existing `https://paperclip.ing/feedback` action.
-An operator can advertise the canary with a public PostHog project token and a
-specific survey/question pair:
+The Paperclip-owned feedback dialog is enabled by default for the OSS product.
+It replaces the external feedback link with a single, Paperclip-native question
+and an explicit follow-up choice. Operators can disable the dialog and retain
+the existing `https://paperclip.ing/feedback` fallback:
 
 ```sh
-PAPERCLIP_PRODUCT_FEEDBACK_ENABLED=true \
-PAPERCLIP_PRODUCT_FEEDBACK_POSTHOG_API_HOST=https://us.i.posthog.com \
-PAPERCLIP_PRODUCT_FEEDBACK_POSTHOG_PROJECT_TOKEN=phc_public_project_token \
-PAPERCLIP_PRODUCT_FEEDBACK_SURVEY_ID=survey-id \
-PAPERCLIP_PRODUCT_FEEDBACK_QUESTION_ID=question-id \
-PAPERCLIP_PRODUCT_FEEDBACK_BROKER_ENDPOINT=https://feedback.example.com/v1/grants \
-PAPERCLIP_PRODUCT_FEEDBACK_BROKER_ISSUER_ID=paperclip-local-canary \
-PAPERCLIP_PRODUCT_FEEDBACK_BROKER_ISSUER_SECRET=replace-with-at-least-32-random-characters \
+PAPERCLIP_PRODUCT_FEEDBACK_ENABLED=false \
 pnpm dev
 ```
 
-The project token is browser-visible PostHog configuration, not a privileged
-personal API key. Never put a PostHog personal API key, Asana credential, or
-reporter email in these settings.
+The browser submits only to Paperclip's same-origin API. The server validates
+board and company access, strips the local company identifier, and relays the
+strict payload to `https://telemetry.paperclip.ing/product-feedback`. PostHog
+configuration and credentials live only in the private telemetry backend; they
+are not part of the OSS config, health response, browser bundle, or request.
 
-Without all three broker settings, enabling the capability only exposes and
-exercises the native dialog: submission returns `503` and the browser keeps the
-draft. When they are configured, the server HMAC-signs the exact grant request
-to the HTTPS endpoint; the issuer secret never reaches the browser. The
-capture-only client sends no reporter email and does not initialize PostHog's
-autocapture, replay, heatmaps, popup surveys, or person enrichment.
-
-The signed receiver is a separately launched gateway under
-`server/src/product-feedback`; it shares the server dependency graph to avoid
-unreviewed lockfile churn, but its public ingress must not be mounted into the
-main Paperclip Express process. PostHog remains the feedback source of truth and
-the receiver stores only encrypted follow-up contact plus a verified receipt.
-See that directory's README and `.env.example` for database isolation,
-retention, edge-rate-limit, Event Destination, validation-window, and secret
-setup. Asana, Slack, and agent execution are intentionally outside this intake
-foundation.
+The submitted diagnostic context is intentionally coarse: Paperclip version,
+deployment mode, a reviewed route category, browser/OS family, and at most five
+sanitized error codes. Screenshots, session replay, query strings, customer
+environment access, issue content, and other free-form context are not
+collected. If the relay fails, the dialog preserves the draft for retry.
 
 ## OpenClaw Docker UI One-Command Script
 

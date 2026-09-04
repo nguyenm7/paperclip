@@ -160,27 +160,19 @@ describe("GET /health", () => {
     });
   });
 
-  it("advertises the disabled-by-default product feedback capability", async () => {
+  it("advertises the product feedback capability without provider credentials", async () => {
     const res = await request(createApp(createHealthyDb())).get("/health");
 
     expect(res.status).toBe(200);
     expect(res.body.features.productFeedback).toEqual({
       enabled: false,
-      provider: "posthog",
       limits: { feedbackMaxLength: 5_000, diagnosticCount: 5 },
     });
   });
 
-  it("advertises operator-supplied PostHog survey configuration on self-hosted instances", async () => {
+  it("advertises enabled product feedback on self-hosted instances", async () => {
     const productFeedback = {
       enabled: true,
-      provider: "posthog" as const,
-      posthog: {
-        apiHost: "https://us.i.posthog.com",
-        projectToken: "phc_public_test_token",
-        surveyId: "survey-123",
-        questionId: "question-456",
-      },
       limits: { feedbackMaxLength: 5_000, diagnosticCount: 5 },
     };
     const res = await request(createApp(createHealthyDb(), testServerInfo, undefined, {}, productFeedback))

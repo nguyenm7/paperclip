@@ -45,10 +45,10 @@ const SENSITIVE_KEYS = new Set<string>([
   "private_key",
   "privatekey",
   "paperclip_capability",
-  // Product-feedback follow-up contact is intentionally separated from the
-  // PostHog event, but the same-origin grant route can still fail with a 4xx or
-  // 5xx. HTTP error logging copies request bodies, so redact this PII at the
-  // centralized boundary as well.
+  // Product-feedback text and follow-up contact can pass through the
+  // same-origin relay route. HTTP error logging copies request bodies, so
+  // redact both at the centralized boundary.
+  "feedback",
   "reporteremail",
   "reporter_email",
   "reporter-email",

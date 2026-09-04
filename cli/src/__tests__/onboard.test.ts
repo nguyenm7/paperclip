@@ -232,7 +232,7 @@ describe("onboard", () => {
     expect(raw.server.exposure).toBe("private");
     expect(raw.server.bind).toBe("loopback");
     expect(raw.server.host).toBe("127.0.0.1");
-    expect(raw.productFeedback).toEqual({ enabled: false });
+    expect(raw.productFeedback).toEqual({ enabled: true });
   });
 
   it("creates instance-root config and data paths for a fresh PAPERCLIP_HOME", async () => {

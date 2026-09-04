@@ -1,27 +1,25 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
 import {
-  productFeedbackGrantRequestSchema,
-  productFeedbackGrantSchema,
-  type ProductFeedbackBrokerRequest,
+  productFeedbackSubmissionRequestSchema,
   type ProductFeedbackCapability,
-  type ProductFeedbackGrant,
+  type ProductFeedbackRelayRequest,
 } from "@paperclipai/shared";
 import { logActivity } from "../services/activity-log.js";
+import {
+  ProductFeedbackRelayError,
+  type ProductFeedbackRelay,
+} from "../services/product-feedback-relay.js";
 import { getActorInfo, hasCompanyAccess } from "./authz.js";
-
-export interface ProductFeedbackGrantBroker {
-  issueGrant(request: ProductFeedbackBrokerRequest): Promise<ProductFeedbackGrant>;
-}
 
 export function productFeedbackRoutes(opts: {
   db: Db;
   capability: ProductFeedbackCapability;
-  broker?: ProductFeedbackGrantBroker;
+  relay?: ProductFeedbackRelay;
 }) {
   const router = Router();
 
-  router.post("/product-feedback/grant", async (req, res) => {
+  router.post("/product-feedback", async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
 
     if (!opts.capability.enabled) {
@@ -37,11 +35,11 @@ export function productFeedbackRoutes(opts: {
       return;
     }
 
-    const parsed = productFeedbackGrantRequestSchema.safeParse(req.body);
+    const parsed = productFeedbackSubmissionRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({
-        code: "invalid_product_feedback_grant_request",
-        error: "The feedback contact request is invalid.",
+        code: "invalid_product_feedback_request",
+        error: "The feedback request is invalid.",
       });
       return;
     }
@@ -50,22 +48,22 @@ export function productFeedbackRoutes(opts: {
       return;
     }
 
-    // The open-source product intentionally ships without a production broker
-    // credential or browser-selectable trust flag. An operator may advertise
-    // and exercise the dialog locally, but submission stays closed until the
-    // isolated grant broker is bound by the production host.
-    if (!opts.broker) {
+    if (!opts.relay) {
       res.status(503).json({
-        code: "product_feedback_grant_unavailable",
+        code: "product_feedback_unavailable",
         error: "Feedback delivery is not available on this instance yet. Your draft is still here.",
       });
       return;
     }
 
-    const brokerRequest: ProductFeedbackBrokerRequest = {
+    const relayRequest: ProductFeedbackRelayRequest = {
+      schemaVersion: parsed.data.schemaVersion,
       submissionId: parsed.data.submissionId,
+      submittedAt: parsed.data.submittedAt,
+      feedback: parsed.data.feedback,
       followUpConsent: parsed.data.followUpConsent,
       ...(parsed.data.reporterEmail ? { reporterEmail: parsed.data.reporterEmail } : {}),
+      context: parsed.data.context,
     };
 
     try {
@@ -77,20 +75,24 @@ export function productFeedbackRoutes(opts: {
         agentId: actor.agentId,
         runId: actor.runId,
         agentApiKeyId: actor.agentApiKeyId,
-        action: "product_feedback.grant_requested",
+        action: "product_feedback.submission_requested",
         entityType: "product_feedback_submission",
         entityId: parsed.data.submissionId,
         details: {
-          provider: "posthog",
+          destination: "paperclip_telemetry_backend",
           followUpConsent: parsed.data.followUpConsent,
+          diagnosticCount: parsed.data.context.diagnostics.length,
         },
       });
-      const grant = productFeedbackGrantSchema.parse(await opts.broker.issueGrant(brokerRequest));
-      res.status(201).json(grant);
-    } catch {
-      res.status(502).json({
-        code: "product_feedback_grant_failed",
-        error: "Feedback delivery could not start. Your draft is still here. Try again.",
+      const receipt = await opts.relay.submit(relayRequest);
+      res.status(202).json(receipt);
+    } catch (error) {
+      const status = error instanceof ProductFeedbackRelayError && error.status === 429 ? 429 : 502;
+      res.status(status).json({
+        code: status === 429 ? "product_feedback_rate_limited" : "product_feedback_delivery_failed",
+        error: status === 429
+          ? "Too many feedback requests. Your draft is still here. Try again shortly."
+          : "Feedback could not be sent. Your draft is still here. Try again.",
       });
     }
   });

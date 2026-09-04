@@ -27,10 +27,28 @@ describe("paperclip config schema", () => {
     expect(parsed.logging.logDir).toBe("~/.paperclip/instances/default/logs");
     expect(parsed.storage.localDisk.baseDir).toBe("~/.paperclip/instances/default/data/storage");
     expect(parsed.secrets.localEncrypted.keyFilePath).toBe("~/.paperclip/instances/default/secrets/master.key");
+    expect(parsed.productFeedback).toEqual({ enabled: true });
+  });
+
+  it("retains an explicit product feedback disable setting", () => {
+    const parsed = paperclipConfigSchema.parse({
+      $meta: {
+        version: 1,
+        updatedAt: "2026-09-01T00:00:00.000Z",
+        source: "configure",
+      },
+      database: { mode: "embedded-postgres" },
+      logging: { mode: "file" },
+      server: {},
+      productFeedback: {
+        enabled: false,
+      },
+    });
+
     expect(parsed.productFeedback).toEqual({ enabled: false });
   });
 
-  it("retains public operator-supplied product feedback survey configuration", () => {
+  it("does not require analytics-provider configuration when feedback is enabled", () => {
     const parsed = paperclipConfigSchema.parse({
       $meta: {
         version: 1,
@@ -42,40 +60,10 @@ describe("paperclip config schema", () => {
       server: {},
       productFeedback: {
         enabled: true,
-        posthogApiHost: "https://us.i.posthog.com",
-        posthogProjectToken: "phc_public_test_token",
-        surveyId: "survey-123",
-        questionId: "question-456",
       },
     });
 
-    expect(parsed.productFeedback).toEqual({
-      enabled: true,
-      posthogApiHost: "https://us.i.posthog.com",
-      posthogProjectToken: "phc_public_test_token",
-      surveyId: "survey-123",
-      questionId: "question-456",
-    });
-  });
-
-  it("rejects privileged PostHog credentials in browser-visible feedback configuration", () => {
-    expect(() => paperclipConfigSchema.parse({
-      $meta: {
-        version: 1,
-        updatedAt: "2026-09-01T00:00:00.000Z",
-        source: "configure",
-      },
-      database: { mode: "embedded-postgres" },
-      logging: { mode: "file" },
-      server: {},
-      productFeedback: {
-        enabled: true,
-        posthogApiHost: "https://us.i.posthog.com",
-        posthogProjectToken: "phx_privileged_personal_api_key",
-        surveyId: "survey-123",
-        questionId: "question-456",
-      },
-    })).toThrow("must be a public PostHog project token beginning with phc_");
+    expect(parsed.productFeedback).toEqual({ enabled: true });
   });
 
   it("retains extension keys at the top level and every nested config boundary", () => {

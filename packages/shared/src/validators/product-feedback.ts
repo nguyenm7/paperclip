@@ -2,55 +2,53 @@ import { z } from "zod";
 import {
   PRODUCT_FEEDBACK_DIAGNOSTIC_LIMIT,
   PRODUCT_FEEDBACK_MAX_LENGTH,
+  PRODUCT_FEEDBACK_SCHEMA_VERSION,
 } from "../types/product-feedback.js";
 
 export const productFeedbackCapabilitySchema = z.object({
   enabled: z.boolean(),
-  provider: z.literal("posthog"),
-  posthog: z.object({
-    apiHost: z.string().url().refine((value) => {
-      const parsed = new URL(value);
-      return parsed.protocol === "https:"
-        && !parsed.username
-        && !parsed.password
-        && (parsed.host === "us.i.posthog.com" || parsed.host === "eu.i.posthog.com");
-    }, "must be an approved PostHog ingest origin"),
-    projectToken: z.string().regex(/^phc_[A-Za-z0-9_-]+$/),
-    surveyId: z.string().min(1),
-    questionId: z.string().min(1),
-  }).strict().optional(),
   limits: z.object({
     feedbackMaxLength: z.number().int().positive().max(PRODUCT_FEEDBACK_MAX_LENGTH),
     diagnosticCount: z.number().int().nonnegative().max(PRODUCT_FEEDBACK_DIAGNOSTIC_LIMIT),
   }).strict(),
 }).strict();
 
-const productFeedbackContactRequestSchema = z.object({
-  submissionId: z.string().uuid(),
-  followUpConsent: z.boolean(),
-  reporterEmail: z.string().trim().email().max(320).optional(),
-}).strict().superRefine((value, ctx) => {
-  if (value.followUpConsent && value.reporterEmail === undefined) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "reporterEmail is required when followUpConsent is enabled",
-      path: ["reporterEmail"],
-    });
-  } else if (!value.followUpConsent && value.reporterEmail !== undefined) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "reporterEmail requires followUpConsent",
-      path: ["reporterEmail"],
-    });
-  }
-});
+const safeTokenSchema = z.string().regex(/^[a-z0-9][a-z0-9_.-]{0,79}$/i);
+const routeTemplateSchema = z.string().min(1).max(240).regex(/^\/[A-Za-z0-9/_:.-]*$/);
+const diagnosticSummarySchema = z.string().trim().min(1).max(100).regex(/^[A-Za-z0-9 ._()/-]+$/);
+const appVersionSchema = z.string().min(1).max(100).regex(/^[A-Za-z0-9.+_-]+$/);
 
-export const productFeedbackGrantRequestSchema = z.object({
+export const productFeedbackDiagnosticSchema = z.object({
+  code: safeTokenSchema,
+  component: safeTokenSchema,
+  routeTemplate: routeTemplateSchema,
+  timestamp: z.string().datetime(),
+}).strict();
+
+export const productFeedbackContextSchema = z.object({
+  routeTemplate: routeTemplateSchema,
+  appVersion: appVersionSchema.nullable(),
+  deploymentMode: z.enum(["local_trusted", "authenticated"]),
+  browser: diagnosticSummarySchema,
+  operatingSystem: diagnosticSummarySchema,
+  diagnostics: z.array(productFeedbackDiagnosticSchema).max(PRODUCT_FEEDBACK_DIAGNOSTIC_LIMIT),
+}).strict();
+
+const productFeedbackSubmissionBaseSchema = z.object({
   companyId: z.string().uuid(),
+  schemaVersion: z.literal(PRODUCT_FEEDBACK_SCHEMA_VERSION),
   submissionId: z.string().uuid(),
+  submittedAt: z.string().datetime(),
+  feedback: z.string().trim().min(1).max(PRODUCT_FEEDBACK_MAX_LENGTH),
   followUpConsent: z.boolean(),
   reporterEmail: z.string().trim().email().max(320).optional(),
-}).strict().superRefine((value, ctx) => {
+  context: productFeedbackContextSchema,
+}).strict();
+
+function validateFollowUpConsent(
+  value: { followUpConsent: boolean; reporterEmail?: string },
+  ctx: z.RefinementCtx,
+) {
   if (value.followUpConsent && value.reporterEmail === undefined) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -64,18 +62,22 @@ export const productFeedbackGrantRequestSchema = z.object({
       path: ["reporterEmail"],
     });
   }
-});
+}
 
-export const productFeedbackBrokerRequestSchema = productFeedbackContactRequestSchema;
+export const productFeedbackSubmissionRequestSchema = productFeedbackSubmissionBaseSchema
+  .superRefine(validateFollowUpConsent);
 
-export const productFeedbackGrantSchema = z.object({
-  grantToken: z.string().min(1).max(4096),
-  submissionMode: z.enum(["local_validation", "production_feedback"]),
-  validationRunId: z.string().min(1).max(200).optional(),
-  opaqueInstallationId: z.string().min(1).max(200),
-  expiresAt: z.string().datetime(),
-});
+export const productFeedbackRelayRequestSchema = productFeedbackSubmissionBaseSchema
+  .omit({ companyId: true })
+  .superRefine(validateFollowUpConsent);
+
+export const productFeedbackReceiptSchema = z.object({
+  ok: z.literal(true),
+  duplicate: z.boolean(),
+  submissionId: z.string().uuid(),
+  receiptId: z.string().uuid(),
+}).strict();
 
 export const productFeedbackBodySchema = z.string().trim().min(1).max(PRODUCT_FEEDBACK_MAX_LENGTH);
 
-export type ProductFeedbackGrantRequestInput = z.infer<typeof productFeedbackGrantRequestSchema>;
+export type ProductFeedbackSubmissionRequestInput = z.infer<typeof productFeedbackSubmissionRequestSchema>;

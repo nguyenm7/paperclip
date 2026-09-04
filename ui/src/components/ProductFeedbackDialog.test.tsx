@@ -30,14 +30,14 @@ vi.mock("@/components/ui/dialog", () => ({
 
 const capability: ProductFeedbackCapability = {
   enabled: true,
-  provider: "posthog",
-  posthog: {
-    apiHost: "https://us.i.posthog.com",
-    projectToken: "phc_public_test_token",
-    surveyId: "survey-123",
-    questionId: "question-456",
-  },
   limits: { feedbackMaxLength: 5_000, diagnosticCount: 5 },
+};
+
+const receipt = {
+  ok: true as const,
+  duplicate: false,
+  submissionId: "708db09f-1a29-4dd6-ad62-99b19b6902b4",
+  receiptId: "808db09f-1a29-4dd6-ad62-99b19b6902b4",
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -97,7 +97,6 @@ describe("ProductFeedbackDialog", () => {
   });
 
   it("defaults follow-up on and confirms a known authenticated email", async () => {
-    const captureEvent = vi.fn().mockResolvedValue(undefined);
     await act(() => root.render(
       <ProductFeedbackDialog
         open
@@ -106,17 +105,13 @@ describe("ProductFeedbackDialog", () => {
         companyId="11111111-1111-4111-8111-111111111111"
         deploymentMode="authenticated"
         knownEmail="owner@example.com"
-        captureEvent={captureEvent}
       />,
     ));
     await flush();
 
-    expect(document.body.textContent).toContain("Share feedback");
     expect(document.body.textContent).toContain("We’ll use owner@example.com");
-    const consent = document.body.querySelector('[role="checkbox"]');
-    expect(consent?.getAttribute("aria-checked")).toBe("true");
+    expect(document.body.querySelector('[role="checkbox"]')?.getAttribute("aria-checked")).toBe("true");
     expect(document.body.querySelector('input[type="email"]')).toBeNull();
-    expect(captureEvent).not.toHaveBeenCalled();
   });
 
   it("moves focus to the feedback field when the dialog opens", async () => {
@@ -127,7 +122,6 @@ describe("ProductFeedbackDialog", () => {
         capability={capability}
         companyId="11111111-1111-4111-8111-111111111111"
         deploymentMode="local_trusted"
-        captureEvent={vi.fn().mockResolvedValue(undefined)}
       />,
     ));
     await flush();
@@ -144,7 +138,6 @@ describe("ProductFeedbackDialog", () => {
       capability,
       companyId: "11111111-1111-4111-8111-111111111111",
       deploymentMode: "authenticated" as const,
-      captureEvent: vi.fn().mockResolvedValue(undefined),
     };
     await act(() => root.render(<ProductFeedbackDialog {...props} knownEmail={null} />));
     await flush();
@@ -156,9 +149,8 @@ describe("ProductFeedbackDialog", () => {
       .toBe("owner@example.com");
   });
 
-  it("keeps the draft and offers retry when the server grant fails closed", async () => {
-    const requestGrant = vi.fn().mockRejectedValue(new Error("unavailable"));
-    const captureEvent = vi.fn().mockResolvedValue(undefined);
+  it("keeps the draft and offers retry when same-origin delivery fails", async () => {
+    const submitFeedback = vi.fn().mockRejectedValue(new Error("unavailable"));
     await act(() => root.render(
       <ProductFeedbackDialog
         open
@@ -166,8 +158,7 @@ describe("ProductFeedbackDialog", () => {
         capability={capability}
         companyId="11111111-1111-4111-8111-111111111111"
         deploymentMode="local_trusted"
-        requestGrant={requestGrant}
-        captureEvent={captureEvent}
+        submitFeedback={submitFeedback}
       />,
     ));
     await flush();
@@ -179,25 +170,18 @@ describe("ProductFeedbackDialog", () => {
     await act(() => findButton("Send feedback")?.click());
     await flush(3);
 
-    expect(requestGrant).toHaveBeenCalledWith(expect.objectContaining({
+    expect(submitFeedback).toHaveBeenCalledWith(expect.objectContaining({
+      feedback: "Please keep this draft",
       followUpConsent: true,
       reporterEmail: "reporter@example.com",
     }));
     expect(document.body.textContent).toContain("Your draft is still here. Try again.");
     expect((document.body.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Please keep this draft");
     expect(findButton("Try again")).toBeDefined();
-    expect(captureEvent).not.toHaveBeenCalledWith("survey sent", expect.anything());
   });
 
-  it("sends contact only to the grant boundary and reports success after survey capture", async () => {
-    const requestGrant = vi.fn().mockResolvedValue({
-      grantToken: "single-use-grant",
-      submissionMode: "local_validation",
-      validationRunId: "validation-run-1",
-      opaqueInstallationId: "installation-ref",
-      expiresAt: "2026-09-02T00:00:00.000Z",
-    });
-    const captureEvent = vi.fn().mockResolvedValue(undefined);
+  it("submits the strict payload through the same-origin API and resets after success", async () => {
+    const submitFeedback = vi.fn().mockResolvedValue(receipt);
     const onOpenChange = vi.fn();
     await act(() => root.render(
       <ProductFeedbackDialog
@@ -206,8 +190,8 @@ describe("ProductFeedbackDialog", () => {
         capability={capability}
         companyId="11111111-1111-4111-8111-111111111111"
         deploymentMode="local_trusted"
-        requestGrant={requestGrant}
-        captureEvent={captureEvent}
+        appVersion="2026.9.3"
+        submitFeedback={submitFeedback}
       />,
     ));
     await flush();
@@ -217,18 +201,18 @@ describe("ProductFeedbackDialog", () => {
     await act(() => findButton("Send feedback")?.click());
     await flush(3);
 
-    const sentCall = captureEvent.mock.calls.find(([event]) => event === "survey sent");
-    expect(requestGrant).toHaveBeenCalledOnce();
-    expect(requestGrant).toHaveBeenCalledWith(expect.objectContaining({
+    expect(submitFeedback).toHaveBeenCalledOnce();
+    expect(submitFeedback).toHaveBeenCalledWith(expect.objectContaining({
       companyId: "11111111-1111-4111-8111-111111111111",
-    }));
-    expect(sentCall).toBeDefined();
-    expect(document.body.textContent).toContain("Feedback sent");
-    expect(sentCall?.[1]).toMatchObject({
+      schemaVersion: "paperclip-product-feedback-v2",
       feedback: "A private product note",
-      grant: { grantToken: "single-use-grant" },
-    });
-    expect(JSON.stringify(sentCall?.[1])).not.toContain("reporter@example.com");
+      reporterEmail: "reporter@example.com",
+      context: expect.objectContaining({
+        appVersion: "2026.9.3",
+        deploymentMode: "local_trusted",
+      }),
+    }));
+    expect(document.body.textContent).toContain("Feedback sent");
 
     await act(() => findButton("Done")?.click());
     expect(onOpenChange).toHaveBeenCalledWith(false);

@@ -31,7 +31,6 @@ import {
   resolveDefaultStorageDir,
   resolveHomeAwarePath,
 } from "./home-paths.js";
-import type { ProductFeedbackBrokerConfig } from "./services/product-feedback-broker.js";
 
 const PAPERCLIP_ENV_FILE_PATH = resolvePaperclipEnvPath();
 if (existsSync(PAPERCLIP_ENV_FILE_PATH)) {
@@ -92,42 +91,6 @@ export interface Config {
   companyDeletionEnabled: boolean;
   telemetryEnabled: boolean;
   productFeedback: ProductFeedbackCapability;
-  productFeedbackBroker: ProductFeedbackBrokerConfig | null;
-}
-
-function normalizeProductFeedbackApiHost(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed) return undefined;
-  const parsed = new URL(trimmed);
-  if (parsed.protocol !== "https:") {
-    throw new Error("productFeedback.posthogApiHost must use https");
-  }
-  if (parsed.username || parsed.password) {
-    throw new Error("productFeedback.posthogApiHost must not contain credentials");
-  }
-  if (parsed.host !== "us.i.posthog.com" && parsed.host !== "eu.i.posthog.com") {
-    throw new Error("productFeedback.posthogApiHost must be an approved PostHog ingest origin");
-  }
-  return parsed.origin;
-}
-
-function normalizeProductFeedbackProjectToken(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed) return undefined;
-  if (!/^phc_[A-Za-z0-9_-]+$/.test(trimmed)) {
-    throw new Error("productFeedback.posthogProjectToken must be a public phc_ project token");
-  }
-  return trimmed;
-}
-
-function normalizeProductFeedbackBrokerEndpoint(value: string): string {
-  const parsed = new URL(value);
-  if (parsed.protocol !== "https:") throw new Error("productFeedback.brokerEndpoint must use https");
-  if (parsed.username || parsed.password) {
-    throw new Error("productFeedback.brokerEndpoint must not contain credentials");
-  }
-  parsed.hash = "";
-  return parsed.toString();
 }
 
 function detectTailnetBindHost(): string | undefined {
@@ -291,57 +254,13 @@ export function loadConfig(): Config {
       : deploymentMode === "local_trusted";
   const productFeedbackEnabled = process.env.PAPERCLIP_PRODUCT_FEEDBACK_ENABLED !== undefined
     ? process.env.PAPERCLIP_PRODUCT_FEEDBACK_ENABLED === "true"
-    : (fileConfig?.productFeedback.enabled ?? false);
-  const productFeedbackPosthog = {
-    apiHost: productFeedbackEnabled
-      ? normalizeProductFeedbackApiHost(
-          process.env.PAPERCLIP_PRODUCT_FEEDBACK_POSTHOG_API_HOST
-            ?? fileConfig?.productFeedback.posthogApiHost,
-        )
-      : undefined,
-    projectToken: productFeedbackEnabled
-      ? normalizeProductFeedbackProjectToken(
-          process.env.PAPERCLIP_PRODUCT_FEEDBACK_POSTHOG_PROJECT_TOKEN
-            ?? fileConfig?.productFeedback.posthogProjectToken,
-        )
-      : undefined,
-    surveyId: process.env.PAPERCLIP_PRODUCT_FEEDBACK_SURVEY_ID?.trim()
-      || fileConfig?.productFeedback.surveyId,
-    questionId: process.env.PAPERCLIP_PRODUCT_FEEDBACK_QUESTION_ID?.trim()
-      || fileConfig?.productFeedback.questionId,
-  };
-  if (productFeedbackEnabled && Object.values(productFeedbackPosthog).some((value) => !value)) {
-    throw new Error(
-      "Product feedback is enabled but its PostHog API host, project token, survey ID, or question ID is missing",
-    );
-  }
+    : (fileConfig?.productFeedback.enabled ?? true);
   const productFeedback: ProductFeedbackCapability = {
     enabled: productFeedbackEnabled,
-    provider: "posthog",
-    ...(productFeedbackEnabled ? { posthog: productFeedbackPosthog as NonNullable<ProductFeedbackCapability["posthog"]> } : {}),
     limits: {
       ...DISABLED_PRODUCT_FEEDBACK_CAPABILITY.limits,
     },
   };
-  const productFeedbackBrokerRaw = {
-    endpoint: process.env.PAPERCLIP_PRODUCT_FEEDBACK_BROKER_ENDPOINT?.trim(),
-    issuerId: process.env.PAPERCLIP_PRODUCT_FEEDBACK_BROKER_ISSUER_ID?.trim(),
-    issuerSecret: process.env.PAPERCLIP_PRODUCT_FEEDBACK_BROKER_ISSUER_SECRET?.trim(),
-  };
-  const configuredBrokerValues = Object.values(productFeedbackBrokerRaw).filter(Boolean).length;
-  if (configuredBrokerValues > 0 && configuredBrokerValues !== 3) {
-    throw new Error("Product feedback broker endpoint, issuer ID, and issuer secret must be configured together");
-  }
-  if (productFeedbackBrokerRaw.issuerSecret && productFeedbackBrokerRaw.issuerSecret.length < 32) {
-    throw new Error("productFeedback.brokerIssuerSecret must contain at least 32 characters");
-  }
-  const productFeedbackBroker: ProductFeedbackBrokerConfig | null = configuredBrokerValues === 3
-    ? {
-        endpoint: normalizeProductFeedbackBrokerEndpoint(productFeedbackBrokerRaw.endpoint!),
-        issuerId: productFeedbackBrokerRaw.issuerId!,
-        issuerSecret: productFeedbackBrokerRaw.issuerSecret!,
-      }
-    : null;
   const databaseBackupEnabled =
     process.env.PAPERCLIP_DB_BACKUP_ENABLED !== undefined
       ? process.env.PAPERCLIP_DB_BACKUP_ENABLED === "true"
@@ -448,6 +367,5 @@ export function loadConfig(): Config {
     companyDeletionEnabled,
     telemetryEnabled: fileConfig?.telemetry?.enabled ?? true,
     productFeedback,
-    productFeedbackBroker,
   };
 }

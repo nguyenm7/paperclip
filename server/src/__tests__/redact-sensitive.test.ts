@@ -32,14 +32,16 @@ describe("redactSensitive", () => {
     }
   });
 
-  it("redacts product-feedback reporter email fields", () => {
+  it("redacts product-feedback text and reporter email fields", () => {
     const out = redactSensitive({
+      feedback: "private feedback canary",
       reporterEmail: "privacy-canary@example.test",
       reporter_email: "privacy-canary-legacy@example.test",
       "reporter-email": "privacy-canary-hyphenated@example.test",
       followUpConsent: true,
     }) as Record<string, unknown>;
 
+    expect(out.feedback).toBe("[REDACTED]");
     expect(out.reporterEmail).toBe("[REDACTED]");
     expect(out.reporter_email).toBe("[REDACTED]");
     expect(out["reporter-email"]).toBe("[REDACTED]");

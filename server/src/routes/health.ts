@@ -349,7 +349,7 @@ export function healthRoutes(
       features: {
         companyDeletionEnabled: opts.companyDeletionEnabled,
         productFeedback: cloud
-          ? { ...productFeedback, enabled: false, posthog: undefined }
+          ? { ...productFeedback, enabled: false }
           : productFeedback,
       },
       serverInfo,

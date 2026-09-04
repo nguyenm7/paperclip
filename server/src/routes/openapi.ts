@@ -244,8 +244,8 @@ import {
   claudeOAuthTokenStatusResponseSchema,
   startAdapterAuthSessionRequestSchema,
   // Product feedback
-  productFeedbackGrantRequestSchema,
-  productFeedbackGrantSchema,
+  productFeedbackSubmissionRequestSchema,
+  productFeedbackReceiptSchema,
 } from "@paperclipai/shared";
 import {
   COMPANY_IMPORT_TRANSFERS_API_PATH,
@@ -1316,15 +1316,16 @@ registry.registerPath({
 
 registry.registerPath({
   method: "post",
-  path: "/api/product-feedback/grant",
+  path: "/api/product-feedback",
   tags: ["product-feedback"],
-  summary: "Request a short-lived product feedback submission grant",
-  request: { body: jsonBody(productFeedbackGrantRequestSchema) },
+  summary: "Submit explicit in-product feedback",
+  request: { body: jsonBody(productFeedbackSubmissionRequestSchema) },
   responses: {
-    201: r.ok(productFeedbackGrantSchema),
+    202: r.ok(productFeedbackReceiptSchema),
     400: r.badRequest,
     403: r.forbidden,
     404: r.notFound,
+    429: r.tooManyRequests,
     502: r.serverError,
     503: r.serverError,
   },

@@ -77,7 +77,7 @@ function defaultConfig(): PaperclipConfig {
       enabled: true,
     },
     productFeedback: {
-      enabled: false,
+      enabled: true,
     },
     storage: defaultStorageConfig(),
     secrets: defaultSecretsConfig(),

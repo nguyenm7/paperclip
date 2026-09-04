@@ -713,7 +713,7 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
       enabled: true,
     },
     productFeedback: {
-      enabled: false,
+      enabled: true,
     },
     storage,
     secrets,

@@ -107,25 +107,8 @@ export const updatesConfigSchema = z.object({
   checkEnabled: z.boolean().default(true),
 }).passthrough().prefault({});
 
-const productFeedbackPosthogHostSchema = z.string().url().refine((value) => {
-  const parsed = new URL(value);
-  return parsed.protocol === "https:"
-    && !parsed.username
-    && !parsed.password
-    && (parsed.host === "us.i.posthog.com" || parsed.host === "eu.i.posthog.com");
-}, "must be an approved HTTPS PostHog ingest origin without credentials");
-
-const productFeedbackPosthogProjectTokenSchema = z.string().trim().regex(
-  /^phc_[A-Za-z0-9_-]+$/,
-  "must be a public PostHog project token beginning with phc_",
-);
-
 export const productFeedbackConfigSchema = z.object({
-  enabled: z.boolean().default(false),
-  posthogApiHost: productFeedbackPosthogHostSchema.optional(),
-  posthogProjectToken: productFeedbackPosthogProjectTokenSchema.optional(),
-  surveyId: z.string().trim().min(1).optional(),
-  questionId: z.string().trim().min(1).optional(),
+  enabled: z.boolean().default(true),
 }).passthrough().prefault({});
 
 export const paperclipConfigSchema = z

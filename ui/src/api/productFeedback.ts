@@ -1,8 +1,8 @@
 import {
   API,
-  productFeedbackGrantSchema,
-  type ProductFeedbackGrant,
-  type ProductFeedbackGrantRequest,
+  productFeedbackReceiptSchema,
+  type ProductFeedbackReceipt,
+  type ProductFeedbackSubmissionRequest,
 } from "@paperclipai/shared";
 
 export class ProductFeedbackApiError extends Error {
@@ -17,8 +17,8 @@ export class ProductFeedbackApiError extends Error {
 }
 
 export const productFeedbackApi = {
-  requestGrant: async (input: ProductFeedbackGrantRequest): Promise<ProductFeedbackGrant> => {
-    const response = await fetch(API.productFeedbackGrant, {
+  submit: async (input: ProductFeedbackSubmissionRequest): Promise<ProductFeedbackReceipt> => {
+    const response = await fetch(API.productFeedback, {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -30,11 +30,11 @@ export const productFeedbackApi = {
     } | null;
     if (!response.ok) {
       throw new ProductFeedbackApiError(
-        payload?.error ?? "Feedback delivery could not start. Your draft is still here.",
-        payload?.code ?? "product_feedback_grant_failed",
+        payload?.error ?? "Feedback could not be sent. Your draft is still here.",
+        payload?.code ?? "product_feedback_delivery_failed",
         response.status,
       );
     }
-    return productFeedbackGrantSchema.parse(payload);
+    return productFeedbackReceiptSchema.parse(payload);
   },
 };

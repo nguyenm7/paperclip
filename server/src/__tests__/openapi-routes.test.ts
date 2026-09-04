@@ -203,15 +203,19 @@ describe("openapi routes", () => {
               type: "object",
               properties: {
                 enabled: { type: "boolean" },
-                provider: { type: "string", enum: ["posthog"] },
               },
-              required: expect.arrayContaining(["enabled", "provider", "limits"]),
+              required: expect.arrayContaining(["enabled", "limits"]),
             },
           },
           required: expect.arrayContaining(["companyDeletionEnabled", "productFeedback"]),
         },
       },
     });
+    expect(res.body.paths["/api/product-feedback"].post).toMatchObject({
+      summary: "Submit explicit in-product feedback",
+      responses: { "202": expect.any(Object), "429": expect.any(Object) },
+    });
+    expect(res.body.paths["/api/product-feedback/grant"]).toBeUndefined();
     expect(res.body.paths["/mcp/gateways/{gatewayPublicId}"].post.security).toEqual([]);
     expect(res.body.paths["/api/mcp/gateways/{gatewayPublicId}"]).toBeUndefined();
     expect(res.body.paths["/api/companies"].post.responses["201"]).toBeDefined();

@@ -79,7 +79,8 @@ import { inboxDismissalRoutes } from "./routes/inbox-dismissals.js";
 import { instanceSettingsRoutes } from "./routes/instance-settings.js";
 import { instanceSettingsService } from "./services/instance-settings.js";
 import { openApiRoutes } from "./routes/openapi.js";
-import { productFeedbackRoutes, type ProductFeedbackGrantBroker } from "./routes/product-feedback.js";
+import { productFeedbackRoutes } from "./routes/product-feedback.js";
+import type { ProductFeedbackRelay } from "./services/product-feedback-relay.js";
 import {
   instanceDatabaseBackupRoutes,
   type InstanceDatabaseBackupService,
@@ -318,7 +319,7 @@ export async function createApp(
     authReady: boolean;
     companyDeletionEnabled: boolean;
     productFeedback?: ProductFeedbackCapability;
-    productFeedbackBroker?: ProductFeedbackGrantBroker;
+    productFeedbackRelay?: ProductFeedbackRelay;
     instanceId?: string;
     hostVersion?: string;
     localPluginDir?: string;
@@ -441,7 +442,7 @@ export async function createApp(
   api.use(productFeedbackRoutes({
     db,
     capability: productFeedback,
-    broker: opts.productFeedbackBroker,
+    relay: opts.productFeedbackRelay,
   }));
   api.use("/cloud", cloudRoutes());
   api.use("/companies", companyRoutes(db, opts.storageService));

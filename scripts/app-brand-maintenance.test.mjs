@@ -56,3 +56,28 @@ test("failed artwork batches restore every previous destination", (t) => {
   assert.equal(fs.readFileSync(second, "utf8"), "second-old");
   assert.deepEqual(fs.readdirSync(directory).sort(), ["first.svg", "second.svg"]);
 });
+
+test("backup cleanup failures preserve committed artwork", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-brand-cleanup-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const target = path.join(directory, "icon.svg");
+  fs.writeFileSync(target, "old");
+  const fsApi = {
+    ...fs,
+    unlinkSync(file) {
+      if (file.endsWith(".bak")) throw new Error("simulated cleanup failure");
+      return fs.unlinkSync(file);
+    },
+  };
+
+  const cleanupErrors = applyFileBatchAtomically(
+    [{ target, bytes: Buffer.from("new") }],
+    { fsApi, transactionId: "cleanup-test" },
+  );
+  assert.equal(fs.readFileSync(target, "utf8"), "new");
+  assert.equal(cleanupErrors.length, 1);
+  assert.equal(
+    fs.readFileSync(`${target}.paperclip-cleanup-test.bak`, "utf8"),
+    "old",
+  );
+});

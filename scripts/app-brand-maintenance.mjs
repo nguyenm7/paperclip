@@ -37,9 +37,6 @@ export function applyFileBatchAtomically(changes, options = {}) {
       }
     }
 
-    for (const entry of prepared) {
-      if (entry.existed && fsApi.existsSync(entry.backup)) fsApi.unlinkSync(entry.backup);
-    }
   } catch (error) {
     const rollbackErrors = [];
     for (const entry of [...prepared].reverse()) {
@@ -54,4 +51,16 @@ export function applyFileBatchAtomically(changes, options = {}) {
     const suffix = rollbackErrors.length ? ` Rollback errors: ${rollbackErrors.join("; ")}` : "";
     throw new Error(`Connector artwork import failed; the previous batch was restored.${suffix}`, { cause: error });
   }
+
+  // Cleanup happens only after the transaction is committed. A cleanup error
+  // must never enter rollback after another backup has already been removed.
+  const cleanupErrors = [];
+  for (const entry of prepared) {
+    try {
+      if (entry.existed && fsApi.existsSync(entry.backup)) fsApi.unlinkSync(entry.backup);
+    } catch (error) {
+      cleanupErrors.push(`${entry.backup}: ${error.message}`);
+    }
+  }
+  return cleanupErrors;
 }

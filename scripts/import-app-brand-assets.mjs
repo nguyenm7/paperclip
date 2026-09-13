@@ -27,5 +27,10 @@ for (const [asset, bytes] of pending) {
   changed++;
   changes.push({ target, bytes });
 }
-if (args.includes("--apply")) applyFileBatchAtomically(changes);
+if (args.includes("--apply")) {
+  const cleanupErrors = applyFileBatchAtomically(changes);
+  if (cleanupErrors.length) {
+    console.warn(`Artwork applied, but ${cleanupErrors.length} backup file(s) could not be removed:\n${cleanupErrors.join("\n")}`);
+  }
+}
 console.log(`${args.includes("--apply") ? "Applied" : "Dry run"}: ${count} identities validated; ${changed} asset files ${args.includes("--apply") ? "updated" : "would change"}.`);

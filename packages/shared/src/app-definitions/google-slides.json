@@ -9,7 +9,8 @@
   ],
   "featured": true,
   "branding": {
-    "logoUrl": "/brands/apps/google-slides.svg"
+    "logoUrl": "/brands/apps/google-slides.svg",
+    "darkLogoUrl": "/brands/apps/google-slides.svg"
   },
   "urlPatterns": [
     "https://slidesmcp.googleapis.com/*",

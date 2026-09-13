@@ -9,7 +9,7 @@
   "featured": false,
   "branding": {
     "logoUrl": "/brands/apps/miro.svg",
-    "darkLogoUrl": "/brands/apps/miro-dark.svg"
+    "darkLogoUrl": "/brands/apps/miro.svg"
   },
   "urlPatterns": [
     "https://mcp.miro.com/*"

@@ -9,7 +9,7 @@
   "featured": false,
   "branding": {
     "logoUrl": "/brands/apps/agentmail.svg",
-    "darkLogoUrl": "/brands/apps/agentmail-dark.svg"
+    "darkLogoUrl": "/brands/apps/agentmail.svg"
   },
   "urlPatterns": [
     "https://console.agentmail.to/*"

@@ -50,3 +50,26 @@ describe("local app brand assets", () => {
     }
   });
 });
+
+import { resolveLocalAppBrandAssets } from "./app-brand-assets";
+
+describe("brand lookup", () => {
+  const registry = { schemaVersion: 1, providers: [{
+    slug: "google-people", provider: "Google People", aliases: ["Google Contacts"],
+    localAsset: "/brands/apps/google-people.svg",
+  }, {
+    slug: "google-workspace-search", provider: "Google Workspace Search",
+    localAsset: "/brands/apps/google-people.svg",
+  }] };
+  it.each(["google-people", "Google People", "  GOOGLE CONTACTS "])("resolves stable keys, names and explicit aliases: %s", (key) => {
+    expect(resolveLocalAppBrandAssets(registry, key)).toEqual({ light: "/brands/apps/google-people.svg", dark: "/brands/apps/google-people.svg" });
+  });
+  it("permits intentional shared art without merging provider identities", () => {
+    expect(resolveLocalAppBrandAssets(registry, "google-workspace-search")).toEqual(resolveLocalAppBrandAssets(registry, "google-people"));
+    expect(registry.providers.map((row) => row.slug)).toEqual(["google-people", "google-workspace-search"]);
+  });
+  it("rejects a nonlocal manifest path and does not guess owner-qualified names", () => {
+    expect(resolveLocalAppBrandAssets({ schemaVersion: 1, providers: [{ slug: "custom", provider: "Custom", localAsset: "https://remote.example/logo.svg" }] }, "custom")).toBeNull();
+    expect(resolveLocalAppBrandAssets(registry, "Alice's Google People")).toBeNull();
+  });
+});

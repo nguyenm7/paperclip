@@ -8,7 +8,8 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/mem0.svg"
+    "logoUrl": "/brands/apps/mem0.svg",
+    "darkLogoUrl": "/brands/apps/mem0.svg"
   },
   "urlPatterns": [
     "https://mcp.mem0.ai/*"

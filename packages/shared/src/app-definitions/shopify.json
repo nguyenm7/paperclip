@@ -8,7 +8,8 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/shopify.svg"
+    "logoUrl": "/brands/apps/shopify.svg",
+    "darkLogoUrl": "/brands/apps/shopify.svg"
   },
   "urlPatterns": [
     "https://*.myshopify.com/api/ucp/mcp",

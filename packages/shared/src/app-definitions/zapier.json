@@ -8,7 +8,8 @@
   ],
   "featured": true,
   "branding": {
-    "logoUrl": "/brands/apps/zapier.svg"
+    "logoUrl": "/brands/apps/zapier.svg",
+    "darkLogoUrl": "/brands/apps/zapier.svg"
   },
   "urlPatterns": [
     "https://mcp.zapier.com/*"

@@ -9,7 +9,8 @@
   ],
   "featured": true,
   "branding": {
-    "logoUrl": "/brands/apps/gmail.svg"
+    "logoUrl": "/brands/apps/gmail.svg",
+    "darkLogoUrl": "/brands/apps/gmail.svg"
   },
   "urlPatterns": [
     "https://gmailmcp.googleapis.com/*"

@@ -8,7 +8,8 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/airtable.svg"
+    "logoUrl": "/brands/apps/airtable.svg",
+    "darkLogoUrl": "/brands/apps/airtable.svg"
   },
   "urlPatterns": [
     "https://mcp.airtable.com/*"

@@ -8,7 +8,8 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/stripe.svg"
+    "logoUrl": "/brands/apps/stripe.svg",
+    "darkLogoUrl": "/brands/apps/stripe.svg"
   },
   "urlPatterns": [
     "https://mcp.stripe.com/*"

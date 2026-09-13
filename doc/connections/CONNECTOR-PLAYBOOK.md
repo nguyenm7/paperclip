@@ -5,6 +5,8 @@ and shipping Paperclip app connections.
 
 Status: canonical end-to-end authoring guide for Apps v2 catalog connections.
 
+For connector artwork, follow [Connector icons](./CONNECTOR-ICONS.md): fixed gray Paperclip frames, authentic vendor artwork, explicit theme variants, optical fit and exact provenance. Brand-library additions do not activate connectors. Use the shared registry/resolver and branding generator; do not introduce per-screen logos or outer-surface overrides.
+
 This runbook is the repeatable, agent-executable procedure for adding a vendor
 to the Apps catalog as data, not as a plugin. It follows the accepted
 connections framework in [PAP-13211](/PAP/issues/PAP-13211), the first-30

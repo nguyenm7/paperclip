@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { mergeCanonicalBranding } from "./app-brand-maintenance.mjs";
 const root = process.cwd();
 const corpus =
   process.env.PAPERCLIP_CONTENT_TEMPLATES ??
@@ -37,7 +38,11 @@ if (process.argv.includes("--branding-only")) {
     const target = path.join(out, filename);
     const before = fs.readFileSync(target, "utf8");
     const app = JSON.parse(before);
-    const branding = JSON.stringify(brandingFor(app.slug), null, 2).replace(/\n/g, "\n  ");
+    const branding = JSON.stringify(
+      mergeCanonicalBranding(app.branding, brandingFor(app.slug)),
+      null,
+      2,
+    ).replace(/\n/g, "\n  ");
     if (!/"branding"\s*:\s*\{[^{}]*\}/.test(before)) throw new Error(`${app.slug}: expected a flat branding object`);
     const after = before.replace(/"branding"\s*:\s*\{[^{}]*\}/, () => `"branding": ${branding}`);
     if (before !== after) {

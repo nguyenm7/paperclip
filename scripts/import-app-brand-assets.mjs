@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { validateManifest } from "./app-brand-validation.mjs";
+import { applyFileBatchAtomically } from "./app-brand-maintenance.mjs";
 
 const args = process.argv.slice(2);
 const sourceArg = args.indexOf("--source-dir");
@@ -19,10 +20,12 @@ const count = validateManifest(manifest, (asset, provenance) => {
   return bytes;
 });
 let changed = 0;
+const changes = [];
 for (const [asset, bytes] of pending) {
   const target = path.join(root, "ui/public", asset);
   if (fs.existsSync(target) && fs.readFileSync(target).equals(bytes)) continue;
   changed++;
-  if (args.includes("--apply")) fs.writeFileSync(target, bytes);
+  changes.push({ target, bytes });
 }
+if (args.includes("--apply")) applyFileBatchAtomically(changes);
 console.log(`${args.includes("--apply") ? "Applied" : "Dry run"}: ${count} identities validated; ${changed} asset files ${args.includes("--apply") ? "updated" : "would change"}.`);

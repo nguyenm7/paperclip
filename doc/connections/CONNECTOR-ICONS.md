@@ -24,6 +24,6 @@ node --test scripts/app-brand-validation.test.mjs
 pnpm exec vitest run ui/src/lib/app-brand-assets.test.ts ui/src/pages/apps/AppLogo.brand-assets.test.tsx packages/shared/src/app-definitions.test.ts
 ```
 
-CI runs the structural artwork check. Review the Storybook canonical icon registry
+Run the structural artwork check locally. Review the Storybook canonical icon registry
 in light and dark themes at 24–48px, then inspect affected product surfaces. Check
 contrast, optical size, native details, and the existing image-error fallback.

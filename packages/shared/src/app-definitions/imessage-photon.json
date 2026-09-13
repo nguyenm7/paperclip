@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/imessage-photon.png",
-    "darkLogoUrl": "/brands/apps/imessage-photon.png"
+    "logoUrl": "/brands/apps/imessage-photon.png"
   },
   "urlPatterns": [
     "https://photon.codes/*"

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { mergeCanonicalBranding } from "./app-brand-maintenance.mjs";
 const root = process.cwd();
 const corpus =
   process.env.PAPERCLIP_CONTENT_TEMPLATES ??
@@ -23,36 +22,12 @@ const brandingFor = (slug) => {
   if (entry)
     return {
       logoUrl: entry.localAsset,
-      darkLogoUrl: entry.darkAsset ?? entry.localAsset,
+      ...(entry.darkAsset ? { darkLogoUrl: entry.darkAsset } : {}),
     };
   if (slug === "oauth-generic" || slug === "api-key-generic")
     return { logoUrl: `/brands/apps/${slug}.svg` };
   throw new Error(`${slug}: missing local branding provenance`);
 };
-// Branding can be regenerated without the external capture corpus. Preserve
-// every non-branding contract from the checked-in definitions in this mode.
-if (process.argv.includes("--branding-only")) {
-  const check = process.argv.includes("--check");
-  let changed = 0;
-  for (const filename of fs.readdirSync(out).filter((name) => name.endsWith(".json"))) {
-    const target = path.join(out, filename);
-    const before = fs.readFileSync(target, "utf8");
-    const app = JSON.parse(before);
-    const branding = JSON.stringify(
-      mergeCanonicalBranding(app.branding, brandingFor(app.slug)),
-      null,
-      2,
-    ).replace(/\n/g, "\n  ");
-    if (!/"branding"\s*:\s*\{[^{}]*\}/.test(before)) throw new Error(`${app.slug}: expected a flat branding object`);
-    const after = before.replace(/"branding"\s*:\s*\{[^{}]*\}/, () => `"branding": ${branding}`);
-    if (before !== after) {
-      changed++;
-      if (!check) fs.writeFileSync(target, after);
-    }
-  }
-  console.log(`${check ? "Checked" : "Synchronized"} app branding: ${changed} changed definitions.`);
-  process.exit(check && changed ? 1 : 0);
-}
 const field = (key, label, placeholder) => ({
   key,
   label,

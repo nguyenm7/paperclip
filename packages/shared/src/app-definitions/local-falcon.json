@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/local-falcon.png",
-    "darkLogoUrl": "/brands/apps/local-falcon.png"
+    "logoUrl": "/brands/apps/local-falcon.png"
   },
   "urlPatterns": [
     "https://mcp.localfalcon.com/*"

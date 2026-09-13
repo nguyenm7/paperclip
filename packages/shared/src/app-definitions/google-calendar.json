@@ -8,8 +8,7 @@
   ],
   "featured": true,
   "branding": {
-    "logoUrl": "/brands/apps/google-calendar.svg",
-    "darkLogoUrl": "/brands/apps/google-calendar.svg"
+    "logoUrl": "/brands/apps/google-calendar.svg"
   },
   "urlPatterns": [
     "https://calendarmcp.googleapis.com/*",

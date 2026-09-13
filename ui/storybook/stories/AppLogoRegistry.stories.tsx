@@ -23,7 +23,7 @@ function Registry() {
           <tr key={provider.slug} data-brand={provider.slug}>
             <th className="p-2 text-left font-medium">{provider.provider}</th>
             {sizes.map((size) => <td className="p-2 text-center" key={size}><AppLogo name={provider.provider} brandKey={provider.slug} size={size} allowRemoteFallback={false} /></td>)}
-            <td className="p-2 text-muted-foreground">{provider.selection.decision}{provider.selection.exception ? " · exception" : ""}{!provider.catalogVisible ? " · brand library" : ""}</td>
+            <td className="p-2 text-muted-foreground">{provider.catalogVisible ? "Catalog" : "Brand library"}</td>
           </tr>
         ))}</tbody>
       </table>

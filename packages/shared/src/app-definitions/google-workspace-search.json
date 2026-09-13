@@ -9,8 +9,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/google-workspace-search.svg",
-    "darkLogoUrl": "/brands/apps/google-workspace-search.svg"
+    "logoUrl": "/brands/apps/google-workspace-search.svg"
   },
   "urlPatterns": [
     "https://workspacemcp.googleapis.com/*"

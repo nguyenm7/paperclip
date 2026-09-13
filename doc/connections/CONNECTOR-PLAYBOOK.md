@@ -89,7 +89,7 @@ scripts/ingest-app-definitions.mjs                # human-authored definition so
 packages/shared/src/app-definitions/<slug>.json  # generated definition
 packages/shared/src/app-definitions.generated.ts # generated registry
 ui/public/brands/apps/<slug>.svg                  # official, sanitized mark
-ui/public/brands/apps/manifest.json               # branding provenance
+ui/public/brands/apps/manifest.json               # runtime branding paths
 packages/shared/src/app-definitions.test.ts       # manifest/provider assertions
 ```
 
@@ -573,15 +573,15 @@ only a runtime image-failure fallback.
    external executable content, or unsafe references.
 5. Save assets under `ui/public/brands/apps/`. Add a `-dark` variant only when
    the normal mark loses contrast in dark mode.
-6. Add the provider to `ui/public/brands/apps/manifest.json` with slug, local
-   asset, optional dark asset, official source URL, exact upstream asset URL,
-   asset type, visibility, and dark-variant requirement.
+6. Add the provider to `ui/public/brands/apps/manifest.json` with slug, name,
+   local asset, optional dark asset, visibility, and optional aliases. Keep source
+   URLs and verification notes in the review record, outside the public manifest.
 7. Let the ingestion script derive `branding.logoUrl` and `darkLogoUrl` from the
-   provenance manifest.
+   runtime manifest.
 
 The manifest test decodes PNG headers, requires at least 128 by 128 pixels,
 sanity-checks SVG markup, verifies files exist, and requires store-visible
-definitions and visible provenance entries to match exactly.
+definitions and visible manifest entries to match exactly.
 
 ### Phase 5: Author the definition at the durable source
 

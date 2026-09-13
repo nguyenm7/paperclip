@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/hugging-face.svg",
-    "darkLogoUrl": "/brands/apps/hugging-face.svg"
+    "logoUrl": "/brands/apps/hugging-face.svg"
   },
   "urlPatterns": [
     "https://huggingface.co/*"

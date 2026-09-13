@@ -308,6 +308,11 @@ jobs:
       - name: Validate Node version policy
         run: pnpm check:node-version
 
+      - name: Validate connector artwork
+        run: |
+          node scripts/check-app-brand-assets.mjs
+          node --test scripts/app-brand-validation.test.mjs
+
       - name: Reject git push in adapter/runtime code
         run: node ./scripts/check-no-git-push.mjs
 

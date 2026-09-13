@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/supabase.svg",
-    "darkLogoUrl": "/brands/apps/supabase.svg"
+    "logoUrl": "/brands/apps/supabase.svg"
   },
   "urlPatterns": [
     "https://mcp.supabase.com/*"

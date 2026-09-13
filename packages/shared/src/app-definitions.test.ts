@@ -698,7 +698,7 @@ describe("AppDefinition catalog", () => {
       expect(storeSlugs.has(slug), slug).toBe(false);
     }
   });
-  it("ships complete local branding provenance for every store-visible provider", () => {
+  it("ships matching local artwork for every store-visible provider", () => {
     const uiPublic = path.resolve(
       path.dirname(fileURLToPath(import.meta.url)),
       "../../../ui/public",
@@ -711,10 +711,6 @@ describe("AppDefinition catalog", () => {
         catalogVisible: boolean;
         localAsset: string;
         darkAsset?: string;
-        officialSourceUrl: string;
-        upstreamAssetUrl: string;
-        assetType: "svg" | "png";
-        darkVariantRequired: boolean;
       }>;
     };
     const visible = manifest.providers.filter((entry) => entry.catalogVisible);
@@ -731,15 +727,10 @@ describe("AppDefinition catalog", () => {
       expect(provenance).toBeTruthy();
       expect(provenance.localAsset).toBe(app.branding.logoUrl);
       expect(provenance.darkAsset).toBe(app.branding.darkLogoUrl);
-      expect(provenance.darkVariantRequired).toBe(
-        provenance.darkAsset !== provenance.localAsset,
-      );
-      expect(new URL(provenance.officialSourceUrl).protocol).toBe("https:");
-      expect(new URL(provenance.upstreamAssetUrl).protocol).toBe("https:");
       expect(provenance.localAsset).toMatch(/^\/brands\/apps\/.+\.(svg|png)$/);
       expect(provenance.localAsset).not.toContain("google.com/s2/favicons");
       const asset = fs.readFileSync(path.join(uiPublic, provenance.localAsset));
-      if (provenance.assetType === "png") {
+      if (provenance.localAsset.endsWith(".png")) {
         expect(asset.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
         expect(asset.readUInt32BE(16)).toBeGreaterThanOrEqual(128);
         expect(asset.readUInt32BE(20)).toBeGreaterThanOrEqual(128);

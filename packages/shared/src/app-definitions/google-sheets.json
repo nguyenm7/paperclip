@@ -9,8 +9,7 @@
   ],
   "featured": true,
   "branding": {
-    "logoUrl": "/brands/apps/google-sheets.svg",
-    "darkLogoUrl": "/brands/apps/google-sheets.svg"
+    "logoUrl": "/brands/apps/google-sheets.svg"
   },
   "urlPatterns": [
     "https://sheetsmcp.googleapis.com/*",

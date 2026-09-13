@@ -9,8 +9,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/google-chat.svg",
-    "darkLogoUrl": "/brands/apps/google-chat.svg"
+    "logoUrl": "/brands/apps/google-chat.svg"
   },
   "urlPatterns": [
     "https://chatmcp.googleapis.com/*",

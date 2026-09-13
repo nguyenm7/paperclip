@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/ticktick.svg",
-    "darkLogoUrl": "/brands/apps/ticktick.svg"
+    "logoUrl": "/brands/apps/ticktick.svg"
   },
   "urlPatterns": [
     "https://mcp.ticktick.com/*"

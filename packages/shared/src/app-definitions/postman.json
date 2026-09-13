@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/postman.svg",
-    "darkLogoUrl": "/brands/apps/postman.svg"
+    "logoUrl": "/brands/apps/postman.svg"
   },
   "urlPatterns": [
     "https://mcp.postman.com/*"

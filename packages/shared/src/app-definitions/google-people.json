@@ -9,8 +9,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/google-people.svg",
-    "darkLogoUrl": "/brands/apps/google-people.svg"
+    "logoUrl": "/brands/apps/google-people.svg"
   },
   "urlPatterns": [
     "https://people.googleapis.com/*"

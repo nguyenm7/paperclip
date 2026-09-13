@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/oreilly.svg",
-    "darkLogoUrl": "/brands/apps/oreilly.svg"
+    "logoUrl": "/brands/apps/oreilly.svg"
   },
   "urlPatterns": [
     "https://api.oreilly.com/*"

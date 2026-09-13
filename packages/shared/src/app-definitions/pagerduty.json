@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/pagerduty.svg",
-    "darkLogoUrl": "/brands/apps/pagerduty.svg"
+    "logoUrl": "/brands/apps/pagerduty.svg"
   },
   "urlPatterns": [
     "https://mcp.pagerduty.com/*"

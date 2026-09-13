@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/embat.svg",
-    "darkLogoUrl": "/brands/apps/embat.svg"
+    "logoUrl": "/brands/apps/embat.svg"
   },
   "urlPatterns": [
     "https://tellme.embat.io/*"

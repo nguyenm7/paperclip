@@ -1,2645 +1,464 @@
 {
   "schemaVersion": 1,
-  "verifiedAt": "2026-09-04",
-  "simpleIconsVersion": "16.28.0",
   "providers": [
     {
       "slug": "agentmail",
       "provider": "AgentMail",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/agentmail.svg",
-      "darkAsset": "/brands/apps/agentmail.svg",
-      "officialSourceUrl": "https://docs.agentmail.to",
-      "upstreamAssetUrl": "https://app.paper.design/file/01M274Y0NZY1HZDZZHY570TNY0/1-0/2R4-4",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "user-supplied",
-          "sourceFile": "review-board/user-supplied/agentmail.svg",
-          "sourceUrl": "https://app.paper.design/file/01M274Y0NZY1HZDZZHY570TNY0/1-0/2R4-4",
-          "sha256": "9412ea1d776ee163fc5bf863a0aaa9cdcc0e58c55a0ceadf4e390e705b96f3a0",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "user-supplied",
-          "sourceFile": "review-board/user-supplied/agentmail.svg",
-          "sourceUrl": "https://app.paper.design/file/01M274Y0NZY1HZDZZHY570TNY0/1-0/2R4-4",
-          "sha256": "9412ea1d776ee163fc5bf863a0aaa9cdcc0e58c55a0ceadf4e390e705b96f3a0",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Supplied candidate",
-        "note": "Use review-board/user-supplied/agentmail.svg for visual review in both themes. Preserve original black fill and white artwork; only a matching viewBox was added. Vendor provenance is not independently verified. Product code unchanged.",
-        "exception": true,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/agentmail.svg"
     },
     {
       "slug": "airtable",
       "provider": "Airtable",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/airtable.svg",
-      "officialSourceUrl": "https://airtable.com/newsroom",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/0VWGMR53Z8KPB77701B83M0N9E.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/airtable.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "user-supplied",
-          "sourceFile": "paper/airtable-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/0VWGMR53Z8KPB77701B83M0N9E.svg",
-          "sha256": "6f4737902d988649cd49ac2402823a43e51dcbdc3d0fe332684cd587a9e74276",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "user-supplied",
-          "sourceFile": "paper/airtable-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/0VWGMR53Z8KPB77701B83M0N9E.svg",
-          "sha256": "6f4737902d988649cd49ac2402823a43e51dcbdc3d0fe332684cd587a9e74276",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use the supplied full-color SVG in both themes; no white backplate. Already available in the isolated icon worktree.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/airtable.svg"
     },
     {
       "slug": "anthropic",
       "provider": "Anthropic",
       "catalogVisible": true,
       "localAsset": "/brands/apps/anthropic.svg",
-      "darkAsset": "/brands/apps/anthropic-dark.svg",
-      "officialSourceUrl": "https://www.anthropic.com",
-      "upstreamAssetUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/anthropic.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/anthropic.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/anthropic.svg",
-          "sha256": "f2220f457053fd2fa07d748056615494178ed87eab362ec52f68bb6105be73fe",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/anthropic-dark.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/anthropic.svg",
-          "sha256": "3ea696828d53800e3ff0ed2b81feae066499a4a28710542b8c501d29a9837697",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Keep",
-        "note": "Retain existing SVG pair. Source is a documented Simple Icons derivative, not a fresh vendor-original verification.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/anthropic-dark.svg"
     },
     {
       "slug": "asana",
       "provider": "Asana",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/asana.svg",
-      "officialSourceUrl": "https://asana.com/brand",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/55AADN1JF6BYA5VTNKS3GXXNVC.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/asana.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "user-supplied",
-          "sourceFile": "paper/asana-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/55AADN1JF6BYA5VTNKS3GXXNVC.svg",
-          "sha256": "fc4b9e23f5e8cb1675fc6675b318f9456d10e382cf2d594d2c8fd54e5d4218f1",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "user-supplied",
-          "sourceFile": "paper/asana-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/55AADN1JF6BYA5VTNKS3GXXNVC.svg",
-          "sha256": "fc4b9e23f5e8cb1675fc6675b318f9456d10e382cf2d594d2c8fd54e5d4218f1",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use the board's clean mark-only SVG as the selected direction; record it as a user-supplied presentation derivative, not a newly vendor-verified original. No decorative card/shadow.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/asana.svg"
     },
     {
       "slug": "beehiiv",
       "provider": "beehiiv",
       "catalogVisible": false,
-      "localAsset": "/brands/apps/beehiiv.png",
-      "officialSourceUrl": "https://www.beehiiv.com",
-      "upstreamAssetUrl": "https://beehiiv-marketing-images.s3.amazonaws.com/Redesign2023/favicon.png",
-      "assetType": "png",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/beehiiv.png",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/beehiiv.png",
-          "sourceUrl": "https://beehiiv-marketing-images.s3.amazonaws.com/Redesign2023/favicon.png",
-          "sha256": "ce79e0f035bf4e685977d2898b538a78aa96dcd6e3fa5ada197aca72f40d40c5",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/beehiiv.png",
-          "sourceUrl": "https://beehiiv-marketing-images.s3.amazonaws.com/Redesign2023/favicon.png",
-          "sha256": "ce79e0f035bf4e685977d2898b538a78aa96dcd6e3fa5ada197aca72f40d40c5",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Source",
-        "note": "Keep current raster as a valid interim asset; source a compact official SVG or losslessly optimize an appropriate raster derivative. Do not trace it.",
-        "exception": true,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/beehiiv.png"
     },
     {
       "slug": "bitly",
       "provider": "Bitly",
       "catalogVisible": false,
-      "localAsset": "/brands/apps/bitly.svg",
-      "officialSourceUrl": "https://bitly.com/pages/press",
-      "upstreamAssetUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/bitly.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/bitly.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/bitly.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/bitly.svg",
-          "sha256": "4de6d7b1768198b94ed9d01eb1d06f23da21da88669d9d03be800c5da155956d",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/bitly.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/bitly.svg",
-          "sha256": "4de6d7b1768198b94ed9d01eb1d06f23da21da88669d9d03be800c5da155956d",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Keep",
-        "note": "Retain existing SVG; carry forward its derivative provenance.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/bitly.svg"
     },
     {
       "slug": "box",
       "provider": "Box",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/box.svg",
-      "officialSourceUrl": "https://www.box.com/en-gb/about-us/press",
-      "upstreamAssetUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/box.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/box.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/box.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/box.svg",
-          "sha256": "0cbd2cb1db0f33740d32cf4f396ca8c796deb80964657ee2d797630de61122ed",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/box.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/box.svg",
-          "sha256": "0cbd2cb1db0f33740d32cf4f396ca8c796deb80964657ee2d797630de61122ed",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Source",
-        "note": "Retain light SVG; source a vendor light-on-dark alternative. Do not copy the board's white protective tile onto the product frame.",
-        "exception": true,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/box.svg"
     },
     {
       "slug": "brex",
       "provider": "Brex",
       "catalogVisible": false,
       "localAsset": "/brands/apps/brex.svg",
-      "darkAsset": "/brands/apps/brex-dark.svg",
-      "officialSourceUrl": "https://www.brex.com/journal/press",
-      "upstreamAssetUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/brex.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/brex.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/brex.svg",
-          "sha256": "e7e997abf6f030368b6c303408e4048fa6379ee00516176c97f55b5170cd1782",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/brex-dark.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/brex.svg",
-          "sha256": "ac6c5dcf9e5bc2bdfd16d6694efa6dbe36448a197b2a4c2e053663e2c9734a7b",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Keep",
-        "note": "Retain both theme variants.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/brex-dark.svg"
     },
     {
       "slug": "candid",
       "provider": "Candid",
       "catalogVisible": false,
-      "localAsset": "/brands/apps/candid.png",
-      "officialSourceUrl": "https://candid.org",
-      "upstreamAssetUrl": "https://cdn.candid.org/images/candid-logo/candid-logo-square.png",
-      "assetType": "png",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/candid.png",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/candid.png",
-          "sourceUrl": "https://cdn.candid.org/images/candid-logo/candid-logo-square.png",
-          "sha256": "3f8fb9669d002f07d472d01c95a00587188c506aca57799ba8b5a1367dd51059",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/candid.png",
-          "sourceUrl": "https://cdn.candid.org/images/candid-logo/candid-logo-square.png",
-          "sha256": "3f8fb9669d002f07d472d01c95a00587188c506aca57799ba8b5a1367dd51059",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Source",
-        "note": "Keep authentic raster meanwhile; seek official compact SVG. Preserve native yellow artwork inside the gray frame.",
-        "exception": true,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/candid.png"
     },
     {
       "slug": "clickhouse",
       "provider": "ClickHouse",
       "catalogVisible": true,
       "localAsset": "/brands/apps/clickhouse.svg",
-      "officialSourceUrl": "https://github.com/ClickHouse/ClickHouse/blob/12bd453a43819176d25ecf247033f6cb1af54beb/website/images/logo-clickhouse.svg",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/5H51QPXH9WGCS5JM4QYRPP8AXT.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "darkAsset": "/brands/apps/clickhouse-dark.svg",
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/clickhouse-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/5H51QPXH9WGCS5JM4QYRPP8AXT.svg",
-          "sha256": "fbceab9c80b01c70ed906ef933c888e4a85ed1cefd40af5cfee691ea9e2ad47a",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/clickhouse-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/68SDXAV9076R4R0RXJRQE7ZKG1.svg",
-          "sha256": "f687126b07750bd86c60a252a23ee244f13985552860f80fc766f9cad1a6960d",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use official black for light and white for dark; keep the existing gray tile.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/clickhouse-dark.svg"
     },
     {
       "slug": "cloudflare",
       "provider": "Cloudflare",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/cloudflare.svg",
-      "officialSourceUrl": "https://www.cloudflare.com/logo/",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/4675EDFAPXM2XWXG94ZY98A253.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/cloudflare.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "user-supplied",
-          "sourceFile": "paper/cloudflare-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/4675EDFAPXM2XWXG94ZY98A253.svg",
-          "sha256": "6bb87edf9d3759ab11efb064a4cbe25271d4761539aa4928e68bcaf795839c63",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "user-supplied",
-          "sourceFile": "paper/cloudflare-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/4675EDFAPXM2XWXG94ZY98A253.svg",
-          "sha256": "6bb87edf9d3759ab11efb064a4cbe25271d4761539aa4928e68bcaf795839c63",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use supplied two-tone SVG for both themes; retain wide aspect ratio and tune only the inner image box.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/cloudflare.svg"
     },
     {
       "slug": "cloudinary",
       "provider": "Cloudinary",
       "catalogVisible": true,
       "localAsset": "/brands/apps/cloudinary.svg",
-      "darkAsset": "/brands/apps/cloudinary-dark.svg",
-      "officialSourceUrl": "https://cloudinary.com",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/1DJHBJDTFGCEHDAZ0Z9TRNGTSA.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/cloudinary-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/1DJHBJDTFGCEHDAZ0Z9TRNGTSA.svg",
-          "sha256": "30facfd0ac1cdf45bcba16bdcfbfcaf58e3c3dd22931255e83430fca03677b11",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/cloudinary-dark.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/cloudinary.svg",
-          "sha256": "175458d8439650d70509ab436a81446e3caa26410a07cb2160e8c45f947b9ea7",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Hybrid",
-        "note": "Use the canonical blue light asset only if desired; retain the current white dark SVG. Do not replace a working dark variant with blue or add a white outer surface.",
-        "exception": true,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/cloudinary-dark.svg"
     },
     {
       "slug": "coda",
       "provider": "Coda",
       "catalogVisible": false,
-      "localAsset": "/brands/apps/coda.svg",
-      "officialSourceUrl": "https://coda.io",
-      "upstreamAssetUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/coda.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/coda.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/coda.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/coda.svg",
-          "sha256": "a8347f0881ac4b22babc86ce90eb9493d879ad4948531e5c8a572f8fe0cd20a5",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/coda.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/coda.svg",
-          "sha256": "a8347f0881ac4b22babc86ce90eb9493d879ad4948531e5c8a572f8fe0cd20a5",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Keep",
-        "note": "Retain coral vendor silhouette; no geometry changes.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/coda.svg"
     },
     {
       "slug": "composio",
       "provider": "Composio",
       "catalogVisible": false,
       "localAsset": "/brands/apps/composio.svg",
-      "darkAsset": "/brands/apps/composio-dark.svg",
-      "officialSourceUrl": "https://composio.dev",
-      "upstreamAssetUrl": "https://composio.dev/logos/composio-black.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/composio.svg",
-          "sourceUrl": "https://composio.dev/logos/composio-black.svg",
-          "sha256": "b11f005b3210e40ad04d429f5c2913cee2752cddd653d3b6eedba8c8603adf27",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/composio-dark.svg",
-          "sourceUrl": "https://composio.dev/logos/composio-black.svg",
-          "sha256": "f0756c7ccf6f46baf191aad40208ad3298255eda16d42338c5b6b96262a8e2c0",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Keep",
-        "note": "Retain current local pair.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/composio-dark.svg"
     },
     {
       "slug": "context7",
       "provider": "Context7",
       "catalogVisible": false,
       "localAsset": "/brands/apps/context7.svg",
-      "darkAsset": "/brands/apps/context7-dark.svg",
-      "officialSourceUrl": "https://context7.com",
-      "upstreamAssetUrl": "https://context7.com/_next/static/media/context7-logo-dark.2bd29d7e.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/context7.svg",
-          "sourceUrl": "https://context7.com/_next/static/media/context7-logo-dark.2bd29d7e.svg",
-          "sha256": "2568103eff372f18e878f20c66fcf02c331292ba07a2d60cc6ae3d8962c82c10",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/context7-dark.svg",
-          "sourceUrl": "https://context7.com/_next/static/media/context7-logo-dark.2bd29d7e.svg",
-          "sha256": "b0ef7a93ab2f087bf4be1a397bbccf986434c648e04a8fa7f3c0eb93bf3cfa97",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Source",
-        "note": "Source the official compact symbol and map dark ink to light theme / light ink to dark theme. Do not migrate the full lockup or its protective background.",
-        "exception": true,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/context7-dark.svg"
     },
     {
       "slug": "discord",
       "provider": "Discord",
       "catalogVisible": true,
       "localAsset": "/brands/apps/discord.svg",
-      "officialSourceUrl": "https://discord.com/branding",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/2VDGRK5VV02PK07X7SBBBWHQ8E.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "darkAsset": "/brands/apps/discord-dark.svg",
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/discord-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/2VDGRK5VV02PK07X7SBBBWHQ8E.svg",
-          "sha256": "5c0b351dd8f34f03306b5408d4a24eecc0c6f415341fea144c79b4b5cf1292cf",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/discord-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/5YYX40KYQKEGTVDKS0M5S6QK6D.svg",
-          "sha256": "af2b48f8ea5074f31ac2daeadabf23b93874af4d958fa651227db16469456900",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Adopt sourced black/white standalone symbols to match the canonical selection; no native app tile or colored outer background added.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/discord-dark.svg"
     },
     {
       "slug": "egnyte",
       "provider": "Egnyte",
       "catalogVisible": false,
-      "localAsset": "/brands/apps/egnyte.svg",
-      "officialSourceUrl": "https://www.egnyte.com/presskit.html",
-      "upstreamAssetUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/egnyte.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/egnyte.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/egnyte.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/egnyte.svg",
-          "sha256": "2793c6a40a542cd7da5e1d20d79c10db8d42fbf8d09f8f0607a77f9d8a29a78e",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/egnyte.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/egnyte.svg",
-          "sha256": "2793c6a40a542cd7da5e1d20d79c10db8d42fbf8d09f8f0607a77f9d8a29a78e",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Source",
-        "note": "Seek an official compact symbol and contrast-safe dark variant. Keep current asset until then; no whole-tile white fill.",
-        "exception": true,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/egnyte.svg"
     },
     {
       "slug": "embat",
       "provider": "Embat",
       "catalogVisible": false,
-      "localAsset": "/brands/apps/embat.svg",
-      "officialSourceUrl": "https://www.embat.io",
-      "upstreamAssetUrl": "https://www.embat.io/favicon.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/embat.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/embat.svg",
-          "sourceUrl": "https://www.embat.io/favicon.svg",
-          "sha256": "0a224790437cb6109499d6f929ceb34d76d70c99cbef193404dbf6f6c89947c0",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/embat.svg",
-          "sourceUrl": "https://www.embat.io/favicon.svg",
-          "sha256": "0a224790437cb6109499d6f929ceb34d76d70c99cbef193404dbf6f6c89947c0",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Keep",
-        "note": "Retain native artwork within the common gray product frame.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/embat.svg"
     },
     {
       "slug": "github",
       "provider": "GitHub",
       "catalogVisible": true,
       "localAsset": "/brands/apps/github.svg",
-      "darkAsset": "/brands/apps/github-dark.svg",
-      "officialSourceUrl": "https://github.com/logos",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/1P0WM1KCP3RGTTW7V0J7N5QF2D.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/github-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/1P0WM1KCP3RGTTW7V0J7N5QF2D.svg",
-          "sha256": "693d7abe6f899646cc2e96856723b45e95f71885a54910b2749f6decdf7e1ee1",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/github-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/454B5W12FPBYA6VAQK52RVX1ZW.svg",
-          "sha256": "ccd84c89b1056345608fc3489357f8acc7397e49a3cdc2d418b6c8016911d47b",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Prefer sourced black/white vendor SVGs; retain both theme variants and fit without a second enclosing disk.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/github-dark.svg"
     },
     {
       "slug": "gmail",
       "provider": "Gmail",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/gmail.svg",
-      "officialSourceUrl": "https://fonts.gstatic.com/s/i/productlogos/gmail_2020q4/v8/192px.svg",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/5XMRVTHGDAQFE7AZMF00WW5CSM.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/gmail.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/gmail-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/5XMRVTHGDAQFE7AZMF00WW5CSM.svg",
-          "sha256": "18f42e2c6f8033831d297cbd7a35dcec0ddd4b3a3d7a00044e4a91b4db4c22d7",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/gmail-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/5XMRVTHGDAQFE7AZMF00WW5CSM.svg",
-          "sha256": "18f42e2c6f8033831d297cbd7a35dcec0ddd4b3a3d7a00044e4a91b4db4c22d7",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use the sourced full-color SVG in both themes. High priority for the Sales-agent film and product captures.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/gmail.svg"
     },
     {
       "slug": "google-sheets",
       "provider": "Google Sheets",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/google-sheets.svg",
-      "officialSourceUrl": "https://sheets.google.com",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/255VHMRMETVZMBVHGVWK4H45Z0.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/google-sheets.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/google-sheets-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/255VHMRMETVZMBVHGVWK4H45Z0.svg",
-          "sha256": "dec60c57a097caf518ff5cd4d9feca5ccda17020df015cf9ae7d25abb766d702",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/google-sheets-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/255VHMRMETVZMBVHGVWK4H45Z0.svg",
-          "sha256": "dec60c57a097caf518ff5cd4d9feca5ccda17020df015cf9ae7d25abb766d702",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use sourced Sheets SVG with native tile and internal white details intact.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/google-sheets.svg"
     },
     {
       "slug": "google-drive",
       "provider": "Google Drive",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/google-drive.svg",
-      "officialSourceUrl": "https://drive.google.com",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/4ZR8GG8MW6TPW2F2K99GXJW7F0.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/google-drive.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/google-drive-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/4ZR8GG8MW6TPW2F2K99GXJW7F0.svg",
-          "sha256": "aa75924aa7274666109e642a8e9b927741b4f544b99ed2cebbb1bbe80ee422cc",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/google-drive-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/4ZR8GG8MW6TPW2F2K99GXJW7F0.svg",
-          "sha256": "aa75924aa7274666109e642a8e9b927741b4f544b99ed2cebbb1bbe80ee422cc",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use sourced Drive SVG in both themes; no colored product background.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/google-drive.svg"
     },
     {
       "slug": "google-docs",
       "provider": "Google Docs",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/google-docs.svg",
-      "officialSourceUrl": "https://docs.google.com",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/2A6PP6YBK9E39T4KB4GY3C2T7B.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/google-docs.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/google-docs-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/2A6PP6YBK9E39T4KB4GY3C2T7B.svg",
-          "sha256": "f04bf701a633c5d5744e436604f0f157d37569a3eedcd6d1a1fc784acf99d7b6",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/google-docs-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/2A6PP6YBK9E39T4KB4GY3C2T7B.svg",
-          "sha256": "f04bf701a633c5d5744e436604f0f157d37569a3eedcd6d1a1fc784acf99d7b6",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use sourced Docs SVG with its native page details; preserve transparent exterior.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/google-docs.svg"
     },
     {
       "slug": "google-slides",
       "provider": "Google Slides",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/google-slides.svg",
-      "officialSourceUrl": "https://slides.google.com",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/6Q6K2YN0X0M4K1YQ5DTANRGTCE.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/google-slides.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/google-slides-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/6Q6K2YN0X0M4K1YQ5DTANRGTCE.svg",
-          "sha256": "6e6900dc764437107b41cf4b6899231f9e6fa0bc9ac3b4abc8f3c5db1d257bec",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/google-slides-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/6Q6K2YN0X0M4K1YQ5DTANRGTCE.svg",
-          "sha256": "6e6900dc764437107b41cf4b6899231f9e6fa0bc9ac3b4abc8f3c5db1d257bec",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use sourced Slides SVG with native tile and internal white details intact.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/google-slides.svg"
     },
     {
       "slug": "google-calendar",
       "provider": "Google Calendar",
       "catalogVisible": true,
       "localAsset": "/brands/apps/google-calendar.svg",
-      "officialSourceUrl": "https://calendar.google.com",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/27CGMVXATRZM1EYV2HWT9J018A.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/google-calendar.svg",
-      "themeMode": "same",
       "aliases": [
         "gcal"
-      ],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/google-calendar-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/27CGMVXATRZM1EYV2HWT9J018A.svg",
-          "sha256": "58ef860565d13a08b16f2e26a3ec3730ce25d53d915f1cc8eb48c79020c6b84d",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/google-calendar-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/27CGMVXATRZM1EYV2HWT9J018A.svg",
-          "sha256": "58ef860565d13a08b16f2e26a3ec3730ce25d53d915f1cc8eb48c79020c6b84d",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use sourced Calendar SVG; preserve the native blue tile and 31 artwork inside gray chrome.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      ]
     },
     {
       "slug": "google-chat",
       "provider": "Google Chat",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/google-chat.svg",
-      "officialSourceUrl": "https://chat.google.com",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/6K8GETXKYGK6X6PF0NMRKMGW8J.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/google-chat.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/google-chat-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/6K8GETXKYGK6X6PF0NMRKMGW8J.svg",
-          "sha256": "03409308afca0edb2abac41b29f38b15777d577178a46534998d6a45fa0baac7",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/google-chat-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/6K8GETXKYGK6X6PF0NMRKMGW8J.svg",
-          "sha256": "03409308afca0edb2abac41b29f38b15777d577178a46534998d6a45fa0baac7",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use sourced Google Chat SVG in both themes, not a generic chat bubble.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/google-chat.svg"
     },
     {
       "slug": "google-people",
       "provider": "Google People",
       "catalogVisible": true,
       "localAsset": "/brands/apps/google-people.svg",
-      "officialSourceUrl": "https://contacts.google.com",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/0J8WC4TKJKPKWQM3R0TPV1QQ01.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/google-people.svg",
-      "themeMode": "same",
       "aliases": [
         "google contacts"
-      ],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "user-supplied",
-          "sourceFile": "paper/google-people-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/0J8WC4TKJKPKWQM3R0TPV1QQ01.svg",
-          "sha256": "a8ec042934c876b60fb8120bddd526d4ef8b10b8a4ff89b881d427ed866275fb",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "user-supplied",
-          "sourceFile": "paper/google-people-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/0J8WC4TKJKPKWQM3R0TPV1QQ01.svg",
-          "sha256": "a8ec042934c876b60fb8120bddd526d4ef8b10b8a4ff89b881d427ed866275fb",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use supplied Google G SVG, explicitly label as parent-brand fallback rather than a People-specific logo. Keep the connector name and ID distinct.",
-        "exception": true,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      ]
     },
     {
       "slug": "google-workspace-search",
       "provider": "Google Workspace Search",
       "catalogVisible": true,
       "localAsset": "/brands/apps/google-workspace-search.svg",
-      "officialSourceUrl": "https://workspace.google.com",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/1NVJ1W4Y8G6XBDT10BNB0KGQWY.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/google-workspace-search.svg",
-      "themeMode": "same",
       "aliases": [
         "workspace search"
-      ],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "user-supplied",
-          "sourceFile": "paper/google-workspace-search-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/1NVJ1W4Y8G6XBDT10BNB0KGQWY.svg",
-          "sha256": "a8ec042934c876b60fb8120bddd526d4ef8b10b8a4ff89b881d427ed866275fb",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "user-supplied",
-          "sourceFile": "paper/google-workspace-search-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/1NVJ1W4Y8G6XBDT10BNB0KGQWY.svg",
-          "sha256": "a8ec042934c876b60fb8120bddd526d4ef8b10b8a4ff89b881d427ed866275fb",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use the same supplied G artwork as the agreed parent-brand fallback; do not merge this connector with Google People.",
-        "exception": true,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      ]
     },
     {
       "slug": "hugging-face",
       "provider": "Hugging Face",
       "catalogVisible": true,
       "localAsset": "/brands/apps/hugging-face.svg",
-      "officialSourceUrl": "https://huggingface.co/brand",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/3PGCC6B6J7FKCMXPWGBPSDYD4H.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/hugging-face.svg",
-      "themeMode": "same",
       "aliases": [
         "huggingface"
-      ],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/hugging-face-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/3PGCC6B6J7FKCMXPWGBPSDYD4H.svg",
-          "sha256": "942cad1ccda905ac5a659dfd2d78b344fccfb84a8a3ac3721e08f488205638a0",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/hugging-face-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/3PGCC6B6J7FKCMXPWGBPSDYD4H.svg",
-          "sha256": "942cad1ccda905ac5a659dfd2d78b344fccfb84a8a3ac3721e08f488205638a0",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use sourced full-color vector; optimize losslessly if useful (35KB currently), preserving vendor detail.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      ]
     },
     {
       "slug": "jira",
       "provider": "Jira",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/jira.svg",
-      "darkAsset": "/brands/apps/jira.svg",
-      "officialSourceUrl": "https://atlassian.design/resources/logo-library",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/0SK3DR4Z9W7XV92M1KB9TS9DRE.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/jira-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/0SK3DR4Z9W7XV92M1KB9TS9DRE.svg",
-          "sha256": "cb0270787087f62faaf874c9032930e466e76d1cd4f557233b81e235b5f17f73",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/jira-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/0SK3DR4Z9W7XV92M1KB9TS9DRE.svg",
-          "sha256": "cb0270787087f62faaf874c9032930e466e76d1cd4f557233b81e235b5f17f73",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use the canonical Jira app-icon SVG in both themes; preserve native blue tile but keep the outer gray product frame unchanged.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/jira.svg"
     },
     {
       "slug": "kernel",
       "provider": "Kernel",
       "catalogVisible": false,
-      "localAsset": "/brands/apps/kernel.svg",
-      "officialSourceUrl": "https://www.kernel.sh",
-      "upstreamAssetUrl": "https://www.kernel.sh/rebrand/logos/logo-kernel-square.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/kernel.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/kernel.svg",
-          "sourceUrl": "https://www.kernel.sh/rebrand/logos/logo-kernel-square.svg",
-          "sha256": "7e631b194c4b00fd66eab22b6ed0449a52049eee862106cea80c73a46567212c",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/kernel.svg",
-          "sourceUrl": "https://www.kernel.sh/rebrand/logos/logo-kernel-square.svg",
-          "sha256": "7e631b194c4b00fd66eab22b6ed0449a52049eee862106cea80c73a46567212c",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Source",
-        "note": "Source a vendor contrast-safe compact mark/theme pair. Do not reuse the board's white full-frame protection.",
-        "exception": true,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/kernel.svg"
     },
     {
       "slug": "linear",
       "provider": "Linear",
       "catalogVisible": true,
       "localAsset": "/brands/apps/linear.svg",
-      "officialSourceUrl": "https://linear.app",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/381PD7F55SES9K15B27ZEE3FGV.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "darkAsset": "/brands/apps/linear-dark.svg",
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/linear-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/381PD7F55SES9K15B27ZEE3FGV.svg",
-          "sha256": "e683e95a5eb9b360ae06360c0350fd1b5fcf3d2222ef9de8e71fa0bc413dccc3",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/linear-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/4B7HGH4VV08N347X7S9AKKHFFY.svg",
-          "sha256": "32f9883452188b39787f8242c7bfce723ded255f35f13254e727871d3dae2fd1",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use sourced black on light and white on dark, with modest optical normalization.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/linear-dark.svg"
     },
     {
       "slug": "local-falcon",
       "provider": "Local Falcon",
       "catalogVisible": false,
-      "localAsset": "/brands/apps/local-falcon.png",
-      "officialSourceUrl": "https://www.localfalcon.com",
-      "upstreamAssetUrl": "https://www.localfalcon.com/uploads/ico/android-chrome-192x192.png",
-      "assetType": "png",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/local-falcon.png",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/local-falcon.png",
-          "sourceUrl": "https://www.localfalcon.com/uploads/ico/android-chrome-192x192.png",
-          "sha256": "a117bc01f775c9b1401c89155cb83c2f87cfc8bcf3babc602be634b9b978071e",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/local-falcon.png",
-          "sourceUrl": "https://www.localfalcon.com/uploads/ico/android-chrome-192x192.png",
-          "sha256": "a117bc01f775c9b1401c89155cb83c2f87cfc8bcf3babc602be634b9b978071e",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Source",
-        "note": "Keep raster for now; source official SVG and a theme-safe option before making it a large marketing element.",
-        "exception": true,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/local-falcon.png"
     },
     {
       "slug": "make",
       "provider": "Make",
       "catalogVisible": false,
       "localAsset": "/brands/apps/make.svg",
-      "darkAsset": "/brands/apps/make-dark.svg",
-      "officialSourceUrl": "https://www.make.com/en/press",
-      "upstreamAssetUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/make.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/make.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/make.svg",
-          "sha256": "7ff79fe34c235b37ded6abae67bb98d846fda36fd05e301e55ff00aff8d66831",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/make-dark.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/make.svg",
-          "sha256": "4171d140ea6717e461fa6b92370768b3665272ce9a791ce010b21f2adddd4840",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Keep",
-        "note": "Retain purple light / white dark artwork.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/make-dark.svg"
     },
     {
       "slug": "manufact",
       "provider": "Manufact",
       "catalogVisible": false,
       "localAsset": "/brands/apps/manufact.svg",
-      "officialSourceUrl": "https://manufact.com",
-      "upstreamAssetUrl": "https://manufact.com/favicon.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "darkAsset": "/brands/apps/manufact-dark.svg",
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "vendor-theme-export",
-          "sourceFile": "review-board/manufact-light.svg",
-          "sourceUrl": "https://manufact.com/favicon.svg",
-          "sha256": "4a477ebb68bc56c920d8476f0518026ba7a2da17ab2d2f07db9e953912d8dd86",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "vendor-theme-export",
-          "sourceFile": "review-board/manufact-dark.svg",
-          "sourceUrl": "https://manufact.com/favicon.svg",
-          "sha256": "1c1407eacc4544c8212d3d7a438f1bd23b800f5e16d105aba5eaedc1258258c2",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Explicit theme exports",
-        "note": "Use complete original vendor theme groups from review-board; paths unchanged.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/manufact-dark.svg"
     },
     {
       "slug": "mem0",
       "provider": "Mem0",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/mem0.svg",
-      "officialSourceUrl": "https://mem0.ai",
-      "upstreamAssetUrl": "https://framerusercontent.com/images/2ys67ADJdvcyGmQnhp8vKWSq8.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/mem0.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/mem0.svg",
-          "sourceUrl": "https://framerusercontent.com/images/2ys67ADJdvcyGmQnhp8vKWSq8.svg",
-          "sha256": "6cb3575084dac2e0655111e326d636f66a6d02936b0f36e093656476a4367cd6",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/mem0.svg",
-          "sourceUrl": "https://framerusercontent.com/images/2ys67ADJdvcyGmQnhp8vKWSq8.svg",
-          "sha256": "6cb3575084dac2e0655111e326d636f66a6d02936b0f36e093656476a4367cd6",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Keep",
-        "note": "Retain existing artwork unless exact-source synchronization is needed; preserve native background inside the frame.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/mem0.svg"
     },
     {
       "slug": "miro",
       "provider": "Miro",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/miro.svg",
-      "darkAsset": "/brands/apps/miro.svg",
-      "officialSourceUrl": "https://miro.com",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/1GTWQ2TZ73FAMVHQZPYQJ2Q0MH.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "user-supplied",
-          "sourceFile": "paper/miro-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/1GTWQ2TZ73FAMVHQZPYQJ2Q0MH.svg",
-          "sha256": "fdcbb73692c8c692d64cf14d5381967330c796405878e02c01d64be2e3512513",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "user-supplied",
-          "sourceFile": "paper/miro-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/1GTWQ2TZ73FAMVHQZPYQJ2Q0MH.svg",
-          "sha256": "fdcbb73692c8c692d64cf14d5381967330c796405878e02c01d64be2e3512513",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use supplied yellow-tile Miro SVG in both themes; native yellow remains part of the logo, not the product frame.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/miro.svg"
     },
     {
       "slug": "mixpanel",
       "provider": "Mixpanel",
       "catalogVisible": true,
       "localAsset": "/brands/apps/mixpanel.svg",
-      "officialSourceUrl": "https://mixpanel.com",
-      "upstreamAssetUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/mixpanel.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "darkAsset": "/brands/apps/mixpanel-dark.svg",
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/mixpanel.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/mixpanel.svg",
-          "sha256": "20d8ce5634ef5dc583e5f516b244279007a67fb197f5328ccc603574b40e3265",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/mixpanel-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/55WB7X84BENC00TANQFKCVCWY8.svg",
-          "sha256": "c4762f6cbe738044606cccad6742762727b6cfd047005631bb2cc424f6aba4f5",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Hybrid / source",
-        "note": "Use canonical white for dark. Source an official dark/purple counterpart for light; retain current purple light SVG until it is available.",
-        "exception": true,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/mixpanel-dark.svg"
     },
     {
       "slug": "microsoft-teams",
       "provider": "Microsoft Teams",
       "catalogVisible": true,
       "localAsset": "/brands/apps/microsoft-teams.svg",
-      "officialSourceUrl": "https://www.microsoft.com/en-us/microsoft-365/microsoft-teams/group-chat-software",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/4WCEZ4VW07PB0J9TZ6ANC0ZPK9.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/microsoft-teams.svg",
-      "themeMode": "same",
       "aliases": [
         "teams"
-      ],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/microsoft-teams-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/4WCEZ4VW07PB0J9TZ6ANC0ZPK9.svg",
-          "sha256": "6a33d49f19d1be2bcdf86921935a2171e5c18c3b11abe297ca03d5f4f302ba3a",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/microsoft-teams-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/4WCEZ4VW07PB0J9TZ6ANC0ZPK9.svg",
-          "sha256": "6a33d49f19d1be2bcdf86921935a2171e5c18c3b11abe297ca03d5f4f302ba3a",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use the sourced canonical SVG in both themes; retain native gradients and avoid inventing theme recolors.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      ]
     },
     {
       "slug": "netlify",
       "provider": "Netlify",
       "catalogVisible": true,
       "localAsset": "/brands/apps/netlify.svg",
-      "officialSourceUrl": "https://www.netlify.com/press/",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/2JY4CAE1QNNJ5KM680SZ71TD1K.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "darkAsset": "/brands/apps/netlify-dark.svg",
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/netlify-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/2JY4CAE1QNNJ5KM680SZ71TD1K.svg",
-          "sha256": "fb0e8994c35b7a6f45bb2963957eea5f1de2796fc4f072a97bdba06ebc5e7857",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/netlify.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/netlify.svg",
-          "sha256": "f8e304d2a6ee8cd600ccaa8d62bae955894eac1a3868aa90f556d5a42ae7b35e",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Hybrid",
-        "note": "Use canonical two-tone for light if adopting it; retain current teal dark presentation until a vendor dark-surface variant is sourced. No white outer tile.",
-        "exception": true,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/netlify-dark.svg"
     },
     {
       "slug": "notion",
       "provider": "Notion",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/notion.svg",
-      "darkAsset": "/brands/apps/notion.svg",
-      "officialSourceUrl": "https://www.notion.so",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/0C6Q7BZT3H58NX8F8P0ZRFJWKK.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/notion-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/0C6Q7BZT3H58NX8F8P0ZRFJWKK.svg",
-          "sha256": "05d212ce0cf06873c592dc8b3be69a6ca71164dd3d9c2bcfa86a50b107b959a2",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/notion-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/0C6Q7BZT3H58NX8F8P0ZRFJWKK.svg",
-          "sha256": "05d212ce0cf06873c592dc8b3be69a6ca71164dd3d9c2bcfa86a50b107b959a2",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use the sourced canonical standalone SVG on both themes. Preserve the white fill that belongs inside the Notion glyph; remove only an added square background, not the logo's own body.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/notion.svg"
     },
     {
       "slug": "oreilly",
       "provider": "O'Reilly",
       "catalogVisible": false,
-      "localAsset": "/brands/apps/oreilly.svg",
-      "officialSourceUrl": "https://www.oreilly.com/about/logos/",
-      "upstreamAssetUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/oreilly.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/oreilly.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/oreilly.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/oreilly.svg",
-          "sha256": "0598c4234fec37b268395677447745a15da6ebce3400a540703b27ffd90cbba6",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/oreilly.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/oreilly.svg",
-          "sha256": "0598c4234fec37b268395677447745a15da6ebce3400a540703b27ffd90cbba6",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Source",
-        "note": "Seek a vendor compact mark and dark-theme treatment; retain current mapping pending sourcing.",
-        "exception": true,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/oreilly.svg"
     },
     {
       "slug": "pagerduty",
       "provider": "PagerDuty",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/pagerduty.svg",
-      "officialSourceUrl": "https://www.pagerduty.com/brand/",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/2G7WVDVD03BA8MHNTEANP7QCN9.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/pagerduty.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/pagerduty-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/2G7WVDVD03BA8MHNTEANP7QCN9.svg",
-          "sha256": "cd5e1aab481e30ae9b874aa652011560aae097e411b38c76426743caf0518291",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/pagerduty-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/2G7WVDVD03BA8MHNTEANP7QCN9.svg",
-          "sha256": "cd5e1aab481e30ae9b874aa652011560aae097e411b38c76426743caf0518291",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use vendor-sourced P tile SVG with internal white details; keep gray frame outside it.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/pagerduty.svg"
     },
     {
       "slug": "planetscale",
       "provider": "PlanetScale",
       "catalogVisible": false,
       "localAsset": "/brands/apps/planetscale.svg",
-      "darkAsset": "/brands/apps/planetscale-dark.svg",
-      "officialSourceUrl": "https://planetscale.com",
-      "upstreamAssetUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/planetscale.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/planetscale.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/planetscale.svg",
-          "sha256": "4b35dd547d967e4e13700f463f37d4b1c335c08a5ec587cff071ac6c693c5895",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/planetscale-dark.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/planetscale.svg",
-          "sha256": "69af400123c47cca4aee272df3af96dc1164293ca67ddc4b191559d9eb3f8191",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Keep",
-        "note": "Retain existing files.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/planetscale-dark.svg"
     },
     {
       "slug": "posthog",
       "provider": "PostHog",
       "catalogVisible": true,
       "localAsset": "/brands/apps/posthog.svg",
-      "darkAsset": "/brands/apps/posthog-dark.svg",
-      "officialSourceUrl": "https://posthog.com/handbook/company/brand-assets",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/27A1JTC4XCG6HBYA5XVS5P9YCT.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/posthog-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/27A1JTC4XCG6HBYA5XVS5P9YCT.svg",
-          "sha256": "7173515706c6e49d24703bb405e3c94ccdb1882a71752e002871c321f6966919",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/posthog-dark.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/posthog.svg",
-          "sha256": "94560cf7b45953614475c770851eab2c6ca7643402c20796cc3c7b071814cae0",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Hybrid / source",
-        "note": "Use canonical full-color SVG for light; retain upstream white dark mark while sourcing a vendor-approved full-color dark-surface alternative.",
-        "exception": true,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/posthog-dark.svg"
     },
     {
       "slug": "postman",
       "provider": "Postman",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/postman.svg",
-      "officialSourceUrl": "https://www.getpostman.com/resources/media-assets/",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/5SFVDMG1AA4Z233XKKM3YW4FZW.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/postman.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/postman-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/5SFVDMG1AA4Z233XKKM3YW4FZW.svg",
-          "sha256": "6b88a28600ae3c94abd4829972fc699c28f176ee1e029f07ea8d7da2e8e42016",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/postman-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/5SFVDMG1AA4Z233XKKM3YW4FZW.svg",
-          "sha256": "6b88a28600ae3c94abd4829972fc699c28f176ee1e029f07ea8d7da2e8e42016",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use canonical orange/white complete vendor SVG in both themes; internal white artwork should remain white.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/postman.svg"
     },
     {
       "slug": "razorpay",
       "provider": "Razorpay",
       "catalogVisible": false,
       "localAsset": "/brands/apps/razorpay.svg",
-      "darkAsset": "/brands/apps/razorpay-dark.svg",
-      "officialSourceUrl": "https://razorpay.com/newsroom/brand-assets/",
-      "upstreamAssetUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/razorpay.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/razorpay.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/razorpay.svg",
-          "sha256": "d001c6cca46dab90fba4582dc11bed9fae8185e5c34a890c90e2c25e681e5dda",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/razorpay-dark.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/razorpay.svg",
-          "sha256": "1750117f1a27de9f72b37cf9df6b3e2619d0bfdd90b88fbf86f818b43dc92bcf",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Keep",
-        "note": "Retain existing files.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/razorpay-dark.svg"
     },
     {
       "slug": "resend",
       "provider": "Resend",
       "catalogVisible": true,
       "localAsset": "/brands/apps/resend.svg",
-      "darkAsset": "/brands/apps/resend-dark.svg",
-      "officialSourceUrl": "https://resend.com/brand",
-      "upstreamAssetUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/resend.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/resend.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/resend.svg",
-          "sha256": "ca5cc821aea2faf7dc3c5a6a408c2826719af211245637f8957cea6c644cf1f8",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/resend-dark.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/resend.svg",
-          "sha256": "617968c9791bec13b661c9dd66ec3f470d87707d75b4948c95f409beb8fc4cce",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Refine",
-        "note": "Do not blindly swap at fixed size. Use a vendor compact export or validated inner sizing while preserving required clear space; retain current glyph until reviewed.",
-        "exception": true,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/resend-dark.svg"
     },
     {
       "slug": "sanity",
       "provider": "Sanity",
       "catalogVisible": false,
       "localAsset": "/brands/apps/sanity.svg",
-      "darkAsset": "/brands/apps/sanity-dark.svg",
-      "officialSourceUrl": "https://github.com/sanity-io/logos/blob/e298a1ac2757c83910fe08b496a115bc9aef06bd/src/sanityMonogram.tsx",
-      "upstreamAssetUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/sanity.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/sanity.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/sanity.svg",
-          "sha256": "34b1344de15696179d4afa9a4eef9dba20e6ceb04c0f6ab3aebcb1d66bc61cd8",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/sanity-dark.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/sanity.svg",
-          "sha256": "4ce0828bc0fd06a08672e28b062bb9c92403a48e742136c9c23d5fc348f74d29",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Keep",
-        "note": "Retain existing SVG pair.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/sanity-dark.svg"
     },
     {
       "slug": "sentry",
       "provider": "Sentry",
       "catalogVisible": true,
       "localAsset": "/brands/apps/sentry.svg",
-      "darkAsset": "/brands/apps/sentry-dark.svg",
-      "officialSourceUrl": "https://sentry.io/branding/",
-      "upstreamAssetUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/sentry.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/sentry.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/sentry.svg",
-          "sha256": "f4122865338a48bc4d302925815458627ed0350ff4584f63e70c79e5ce34bb3f",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/sentry-dark.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/sentry.svg",
-          "sha256": "225041b8512fce5c2bef61d6e6398cc7cbe5fc5674060ae6f3f93ad15b748356",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Refine",
-        "note": "Retain baseline until vendor clear-space optical sizing is verified in the managed preview.",
-        "exception": true,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/sentry-dark.svg"
     },
     {
       "slug": "shopify",
       "provider": "Shopify",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/shopify.svg",
-      "officialSourceUrl": "https://www.shopify.com/brand-assets",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/05FJDYMTA0ZZF2VH33TB8PGHW6.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/shopify.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/shopify-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/05FJDYMTA0ZZF2VH33TB8PGHW6.svg",
-          "sha256": "4828edd455cb08247f30335883cc3dc60402becb32829d8d7269bdd6a404b866",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/shopify-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/05FJDYMTA0ZZF2VH33TB8PGHW6.svg",
-          "sha256": "4828edd455cb08247f30335883cc3dc60402becb32829d8d7269bdd6a404b866",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Prefer vendor SVG after standalone validation; keep native aspect ratio and white S.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/shopify.svg"
     },
     {
       "slug": "similarweb",
       "provider": "Similarweb",
       "catalogVisible": false,
       "localAsset": "/brands/apps/similarweb.svg",
-      "darkAsset": "/brands/apps/similarweb-dark.svg",
-      "officialSourceUrl": "https://www.similarweb.com",
-      "upstreamAssetUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/similarweb.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/similarweb.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/similarweb.svg",
-          "sha256": "8949f218ebe071af83bdecdb2d48e048d821a8a67e963240ea84b0c955105909",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/similarweb-dark.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/similarweb.svg",
-          "sha256": "1cb736cc16bebe55d4371be450816d8959acd63a8c456c902608fb785a79f306",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Keep",
-        "note": "Retain dark-blue light / white dark variants.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/similarweb-dark.svg"
     },
     {
       "slug": "slack",
       "provider": "Slack",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/slack.svg",
-      "officialSourceUrl": "https://slack.com/brand-guidelines",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/33QKPSC1Y0P4X4P94NQTQJH6F2.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/slack.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/slack-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/33QKPSC1Y0P4X4P94NQTQJH6F2.svg",
-          "sha256": "1f40066b694020057218c46eb2a11982b278d89b2dc8f96a21e4ea04e2b9db3b",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/slack-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/33QKPSC1Y0P4X4P94NQTQJH6F2.svg",
-          "sha256": "1f40066b694020057218c46eb2a11982b278d89b2dc8f96a21e4ea04e2b9db3b",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use the canonical vector; remove the old purple app background by replacing the asset, not editing the gray product container.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/slack.svg"
     },
     {
       "slug": "stripe",
       "provider": "Stripe",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/stripe.svg",
-      "officialSourceUrl": "https://stripe.com/newsroom/information",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/7WZM72FR41WB5T8SFP5Y40K2JK.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/stripe.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/stripe-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/7WZM72FR41WB5T8SFP5Y40K2JK.svg",
-          "sha256": "7253e3eb4657773723a696a1f4ad9c8f62794191b9f09c1359db74a51d2d3ae5",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/stripe-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/7WZM72FR41WB5T8SFP5Y40K2JK.svg",
-          "sha256": "7253e3eb4657773723a696a1f4ad9c8f62794191b9f09c1359db74a51d2d3ae5",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use official compact purple app-icon SVG; preserve its native white symbol and corners inside gray chrome.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/stripe.svg"
     },
     {
       "slug": "supabase",
       "provider": "Supabase",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/supabase.svg",
-      "officialSourceUrl": "https://github.com/supabase/supabase/blob/4031a7549f5d46da7bc79c01d56be4177dc7c114/packages/common/assets/images/supabase-logo-wordmark--light.svg",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/134AGNHNXP8NY3QEJSA1QYWF8M.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/supabase.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/supabase-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/134AGNHNXP8NY3QEJSA1QYWF8M.svg",
-          "sha256": "eb9ffcd100ad26228a578100ba7cbfc5b383e4995338d122abdc6a3b4d210ed3",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/supabase-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/134AGNHNXP8NY3QEJSA1QYWF8M.svg",
-          "sha256": "eb9ffcd100ad26228a578100ba7cbfc5b383e4995338d122abdc6a3b4d210ed3",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Prefer sourced complete SVG in both themes; preserve native gradients.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/supabase.svg"
     },
     {
       "slug": "telegram",
       "provider": "Telegram",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/telegram.svg",
-      "officialSourceUrl": "https://telegram.org/tour/screenshots",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/129EPAV9HF82GXNRS44MZ0F67S.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/telegram.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/telegram-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/129EPAV9HF82GXNRS44MZ0F67S.svg",
-          "sha256": "8704be53c1a4105d1a3727704a51af0ae5eb53695f7c357eb115a81377115528",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/telegram-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/129EPAV9HF82GXNRS44MZ0F67S.svg",
-          "sha256": "8704be53c1a4105d1a3727704a51af0ae5eb53695f7c357eb115a81377115528",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use canonical blue/white complete SVG in both themes.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/telegram.svg"
     },
     {
       "slug": "ticket-tailor",
       "provider": "Ticket Tailor",
       "catalogVisible": false,
       "localAsset": "/brands/apps/ticket-tailor.svg",
-      "darkAsset": "/brands/apps/ticket-tailor-dark.svg",
-      "officialSourceUrl": "https://www.tickettailor.com",
-      "upstreamAssetUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/tickettailor.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/ticket-tailor.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/tickettailor.svg",
-          "sha256": "19c6a0fad4b66a5b33d7f15bce8a23b4eb089f9e11389e0ed7bed0f3d79dba6c",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/ticket-tailor-dark.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/tickettailor.svg",
-          "sha256": "184bc17d307cb4b9d3d0b553788ac905b0e5c3564bbd2600ceec16c4eb029100",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Keep",
-        "note": "Retain existing files.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/ticket-tailor-dark.svg"
     },
     {
       "slug": "ticktick",
       "provider": "TickTick",
       "catalogVisible": false,
-      "localAsset": "/brands/apps/ticktick.svg",
-      "officialSourceUrl": "https://ticktick.com",
-      "upstreamAssetUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/ticktick.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/ticktick.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/ticktick.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/ticktick.svg",
-          "sha256": "fe5fd63a4ddf6df5f6bfc07bc9367b1dcdcfb866466e08f95c75a2479027f756",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/ticktick.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/ticktick.svg",
-          "sha256": "fe5fd63a4ddf6df5f6bfc07bc9367b1dcdcfb866466e08f95c75a2479027f756",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Keep",
-        "note": "Retain; no identity replacement needed.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/ticktick.svg"
     },
     {
       "slug": "todoist",
       "provider": "Todoist",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/todoist.svg",
-      "officialSourceUrl": "https://doist.com/press",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/77X34T5YTWVPVDYR31Q8SV8NEE.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/todoist.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/todoist-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/77X34T5YTWVPVDYR31Q8SV8NEE.svg",
-          "sha256": "b9312150e897a3fa9a236e17e7f0c11fd0665abe32d500c7224a6c7bc66059fc",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/todoist-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/77X34T5YTWVPVDYR31Q8SV8NEE.svg",
-          "sha256": "b9312150e897a3fa9a236e17e7f0c11fd0665abe32d500c7224a6c7bc66059fc",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use canonical complete red/white SVG so internal white details remain white.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/todoist.svg"
     },
     {
       "slug": "vercel",
       "provider": "Vercel",
       "catalogVisible": false,
       "localAsset": "/brands/apps/vercel.svg",
-      "darkAsset": "/brands/apps/vercel-dark.svg",
-      "officialSourceUrl": "https://vercel.com/geist/brands",
-      "upstreamAssetUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/vercel.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/vercel.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/vercel.svg",
-          "sha256": "d1f80f8bfc88edf3c6bee7b15ce4f6de9b0016a399c6972387fb775e12f3b5a3",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/vercel-dark.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/vercel.svg",
-          "sha256": "525ed3ec8cfc8c92a417e800780e78e32de56ec4356267b4231a95d9ada214ff",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Keep",
-        "note": "Retain existing files and sizing.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/vercel-dark.svg"
     },
     {
       "slug": "webflow",
       "provider": "Webflow",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/webflow.svg",
-      "officialSourceUrl": "https://brand-at.webflow.io/resources#logos",
-      "upstreamAssetUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/webflow.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/webflow.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/webflow.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/webflow.svg",
-          "sha256": "66058e08a9f4b381d91abc64f95f9fbb8d8e49d7fda97882da62f32673af9b3d",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/webflow.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/webflow.svg",
-          "sha256": "66058e08a9f4b381d91abc64f95f9fbb8d8e49d7fda97882da62f32673af9b3d",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Keep",
-        "note": "Retain existing correct mark or synchronize vendor provenance without changing appearance.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/webflow.svg"
     },
     {
       "slug": "wix",
       "provider": "Wix",
       "catalogVisible": true,
       "localAsset": "/brands/apps/wix.svg",
-      "officialSourceUrl": "https://www.wix.com/about/design-assets",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/3BG0AWNKZ4X6QB6T6X69VPSMDP.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "darkAsset": "/brands/apps/wix-dark.svg",
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/wix-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/3BG0AWNKZ4X6QB6T6X69VPSMDP.svg",
-          "sha256": "e9a4e09c0a4a4383c098957cc9d9262aa2b875ce93ea6dc6ac3af213815eb58b",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/wix-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/4E2DT13PQZJ1PJD2YC149FFT05.svg",
-          "sha256": "aaba8010180c83b94798a8fee848b01651bb62ce7827bb8df1bb951f3ca0423d",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use sourced black for light and white for dark; tune its wide aspect ratio within the same outer size.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "darkAsset": "/brands/apps/wix-dark.svg"
     },
     {
       "slug": "xero",
       "provider": "Xero",
       "catalogVisible": false,
-      "localAsset": "/brands/apps/xero.svg",
-      "officialSourceUrl": "https://www.xero.com/uk/about/media/downloads",
-      "upstreamAssetUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/xero.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/xero.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/xero.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/xero.svg",
-          "sha256": "dc9a4a6ff297fe05b92a424d98ea0cb355d9249e9427351f680c8fc2ae5c4d64",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "simple-icons-derivative",
-          "sourceFile": "upstream/xero.svg",
-          "sourceUrl": "https://github.com/simple-icons/simple-icons/blob/16.28.0/icons/xero.svg",
-          "sha256": "dc9a4a6ff297fe05b92a424d98ea0cb355d9249e9427351f680c8fc2ae5c4d64",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Source",
-        "note": "Source full-color vendor SVG with actual white lettering, not transparent letter holes. Canonical is not yet a better replacement.",
-        "exception": true,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/xero.svg"
     },
     {
       "slug": "zapier",
       "provider": "Zapier",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/zapier.svg",
-      "officialSourceUrl": "https://www.figma.com/file/NQFxTCE5pGR3dHZt0DkOyy/Zapier-Brand-Guidelines-%5BExternal%5D?type=design&node-id=101-9701&mode=design",
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/10TZZFVX3BW98XHBVP2PP06PG9.svg",
-      "assetType": "svg",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/zapier.svg",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "user-supplied",
-          "sourceFile": "paper/zapier-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/10TZZFVX3BW98XHBVP2PP06PG9.svg",
-          "sha256": "6d8957ac603d3db0816c9f3f5a7dc5ef3a04c6b0b7c24f2e69627449e80ff065",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "user-supplied",
-          "sourceFile": "paper/zapier-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/10TZZFVX3BW98XHBVP2PP06PG9.svg",
-          "sha256": "6d8957ac603d3db0816c9f3f5a7dc5ef3a04c6b0b7c24f2e69627449e80ff065",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Replace",
-        "note": "Use supplied canonical SVG in both themes; no CSS inversion or extra colored outer container.",
-        "exception": false,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      }
+      "localAsset": "/brands/apps/zapier.svg"
     },
     {
       "slug": "openai",
       "provider": "OpenAI",
       "catalogVisible": true,
       "localAsset": "/brands/apps/openai.svg",
-      "darkAsset": "/brands/apps/openai-dark.svg",
-      "officialSourceUrl": "https://openai.com/brand/",
-      "upstreamAssetUrl": "https://github.com/lobehub/lobe-icons/blob/a94750e3f5f8fc33757b839d85030e742284e43a/packages/static-svg/icons/openai.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "verifiedAt": "2026-09-10",
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/openai.svg",
-          "sourceUrl": "https://github.com/lobehub/lobe-icons/blob/a94750e3f5f8fc33757b839d85030e742284e43a/packages/static-svg/icons/openai.svg",
-          "sha256": "a6f64c2670a20c03c134ae0ccf1dab4dfd817f10a41da21547f720c5c1fb6820",
-          "acquiredAt": "2026-09-10",
-          "verification": "Retained from upstream master while applying the canonical connector icon registry."
-        },
-        "dark": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/openai-dark.svg",
-          "sourceUrl": "https://github.com/lobehub/lobe-icons/blob/a94750e3f5f8fc33757b839d85030e742284e43a/packages/static-svg/icons/openai.svg",
-          "sha256": "8f281b924400eb1a16b9a0f5fc6eb22db4d517bfee1446c21b2038fce3d6bf4d",
-          "acquiredAt": "2026-09-10",
-          "verification": "Retained from upstream master while applying the canonical connector icon registry."
-        }
-      },
-      "selection": {
-        "decision": "Keep",
-        "note": "Retain the current upstream artwork and theme behavior; this migration does not alter this identity.",
-        "exception": false,
-        "opticalReview": "Retained upstream and covered by the shared registry size matrix."
-      }
+      "darkAsset": "/brands/apps/openai-dark.svg"
     },
     {
       "slug": "openrouter",
       "provider": "OpenRouter",
       "catalogVisible": true,
       "localAsset": "/brands/apps/openrouter.svg",
-      "darkAsset": "/brands/apps/openrouter-dark.svg",
-      "officialSourceUrl": "https://openrouter.ai/blog/announcements/brand-refresh/",
-      "upstreamAssetUrl": "https://github.com/OpenRouterTeam/sign-in-with-openrouter/blob/main/public/openrouter-logo-light.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "verifiedAt": "2026-09-10",
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/openrouter.svg",
-          "sourceUrl": "https://github.com/OpenRouterTeam/sign-in-with-openrouter/blob/main/public/openrouter-logo-light.svg",
-          "sha256": "d852fda5798ecde0c3c2d376e357c7da935a16a17a74510855424aa967800d10",
-          "acquiredAt": "2026-09-10",
-          "verification": "Retained from upstream master while applying the canonical connector icon registry."
-        },
-        "dark": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/openrouter-dark.svg",
-          "sourceUrl": "https://github.com/OpenRouterTeam/sign-in-with-openrouter/blob/main/public/openrouter-logo-light.svg",
-          "sha256": "2446b7fd8587b330af9f8bf62c72d59f8e7578cd676325faae846b257d60e791",
-          "acquiredAt": "2026-09-10",
-          "verification": "Retained from upstream master while applying the canonical connector icon registry."
-        }
-      },
-      "selection": {
-        "decision": "Keep",
-        "note": "Retain the current upstream artwork and theme behavior; this migration does not alter this identity.",
-        "exception": false,
-        "opticalReview": "Retained upstream and covered by the shared registry size matrix."
-      }
+      "darkAsset": "/brands/apps/openrouter-dark.svg"
     },
     {
       "slug": "xai",
       "provider": "Grok",
       "catalogVisible": true,
       "localAsset": "/brands/apps/xai.svg",
-      "darkAsset": "/brands/apps/xai-dark.svg",
-      "officialSourceUrl": "https://x.ai/",
-      "upstreamAssetUrl": "https://github.com/lobehub/lobe-icons/blob/a94750e3f5f8fc33757b839d85030e742284e43a/packages/static-svg/icons/grok.svg",
-      "assetType": "svg",
-      "darkVariantRequired": true,
-      "verifiedAt": "2026-09-10",
-      "themeMode": "pair",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/xai.svg",
-          "sourceUrl": "https://github.com/lobehub/lobe-icons/blob/a94750e3f5f8fc33757b839d85030e742284e43a/packages/static-svg/icons/grok.svg",
-          "sha256": "70c65581a2f3e83944663c1813f5956da0fb808dc588c7c9688df140a8fe586f",
-          "acquiredAt": "2026-09-10",
-          "verification": "Retained from upstream master while applying the canonical connector icon registry."
-        },
-        "dark": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/xai-dark.svg",
-          "sourceUrl": "https://github.com/lobehub/lobe-icons/blob/a94750e3f5f8fc33757b839d85030e742284e43a/packages/static-svg/icons/grok.svg",
-          "sha256": "77f08e036bdaf2c5eab894ba2b815e55d4e4f55f205cedb5f1f647aad159f4a3",
-          "acquiredAt": "2026-09-10",
-          "verification": "Retained from upstream master while applying the canonical connector icon registry."
-        }
-      },
-      "selection": {
-        "decision": "Keep",
-        "note": "Retain the current upstream artwork and theme behavior; this migration does not alter this identity.",
-        "exception": false,
-        "opticalReview": "Retained upstream and covered by the shared registry size matrix."
-      }
+      "darkAsset": "/brands/apps/xai-dark.svg"
     },
     {
       "slug": "imessage-photon",
       "provider": "iMessage Photon",
       "catalogVisible": true,
-      "localAsset": "/brands/apps/imessage-photon.png",
-      "officialSourceUrl": "https://photon.codes/",
-      "upstreamAssetUrl": "https://framerusercontent.com/images/XbFmp7b9ze39qL1GdqVbmJXbiS8.png?height=512&width=512",
-      "assetType": "png",
-      "darkVariantRequired": false,
-      "darkAsset": "/brands/apps/imessage-photon.png",
-      "themeMode": "same",
-      "aliases": [],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/imessage-photon.png",
-          "sourceUrl": "https://framerusercontent.com/images/XbFmp7b9ze39qL1GdqVbmJXbiS8.png?height=512&width=512",
-          "sha256": "61d5802c9673df9026a4caffaaa4db7be68d66d13f204713d4af6eb6bd2d6f7c",
-          "acquiredAt": "2026-09-12",
-          "verification": "Retained from upstream master while applying the canonical connector icon registry."
-        },
-        "dark": {
-          "sourceClass": "retained-upstream",
-          "sourceFile": "upstream/imessage-photon.png",
-          "sourceUrl": "https://framerusercontent.com/images/XbFmp7b9ze39qL1GdqVbmJXbiS8.png?height=512&width=512",
-          "sha256": "61d5802c9673df9026a4caffaaa4db7be68d66d13f204713d4af6eb6bd2d6f7c",
-          "acquiredAt": "2026-09-12",
-          "verification": "Retained from upstream master while applying the canonical connector icon registry."
-        }
-      },
-      "selection": {
-        "decision": "Keep",
-        "note": "Retain the current upstream artwork and theme behavior; this migration does not alter this identity.",
-        "exception": false,
-        "opticalReview": "Retained upstream and covered by the shared registry size matrix."
-      }
+      "localAsset": "/brands/apps/imessage-photon.png"
     },
     {
       "slug": "jam-dev",
       "provider": "Jam.dev",
       "catalogVisible": false,
-      "assetType": "svg",
       "localAsset": "/brands/apps/jam-dev.svg",
-      "darkVariantRequired": true,
       "darkAsset": "/brands/apps/jam-dev-dark.svg",
-      "themeMode": "pair",
       "aliases": [
         "jam"
-      ],
-      "opticalFit": "standard",
-      "provenance": {
-        "light": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/jam-dev-light.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/41HR3R9HD2DCM7KSHZBKYHNRV0.svg",
-          "sha256": "e1dabe92dad4b3fa5b2fe14ee60b5b6dcee0d1914619b503232be95332c1297c",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        },
-        "dark": {
-          "sourceClass": "board-selected",
-          "sourceFile": "paper/jam-dev-dark.svg",
-          "sourceUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/2R9MH9Z95SHV5T1XAA4ZPE25QK.svg",
-          "sha256": "1e3541ad536a30bed27e3cd53c2a0f87fbb973fb47b8d07a4ee4f4d136f6685a",
-          "acquiredAt": "2026-09-11",
-          "verification": "Approved source bundle; no independent vendor re-verification in this migration."
-        }
-      },
-      "selection": {
-        "decision": "Register only",
-        "note": "Keep the sourced light/dark fruit SVGs in the brand library. Add a runtime mapping only where a supported Jam identity already exists; do not enable a connector.",
-        "exception": true,
-        "opticalReview": "Pending managed runtime review at 24/28/32/36/44/48px; baseline inner p-1.5 retained."
-      },
-      "upstreamAssetUrl": "https://app.paper.design/file-assets/01M274Y0NZY1HZDZZHY570TNY0/41HR3R9HD2DCM7KSHZBKYHNRV0.svg"
+      ]
     }
-  ],
-  "selectionDate": "2026-09-11",
-  "sourceBundleSha256": "8297f781858b44cc43edd7824725e5c700542adc9a9f563610d5b42675d54485"
+  ]
 }

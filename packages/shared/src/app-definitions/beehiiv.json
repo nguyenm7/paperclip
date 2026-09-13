@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/beehiiv.png",
-    "darkLogoUrl": "/brands/apps/beehiiv.png"
+    "logoUrl": "/brands/apps/beehiiv.png"
   },
   "urlPatterns": [
     "https://mcp.beehiiv.com/*"

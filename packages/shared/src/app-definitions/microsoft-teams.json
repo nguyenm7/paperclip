@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/microsoft-teams.svg",
-    "darkLogoUrl": "/brands/apps/microsoft-teams.svg"
+    "logoUrl": "/brands/apps/microsoft-teams.svg"
   },
   "urlPatterns": [
     "https://teams.microsoft.com/*"

@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/telegram.svg",
-    "darkLogoUrl": "/brands/apps/telegram.svg"
+    "logoUrl": "/brands/apps/telegram.svg"
   },
   "urlPatterns": [
     "https://t.me/*",

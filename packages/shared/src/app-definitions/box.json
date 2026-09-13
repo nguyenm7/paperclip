@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/box.svg",
-    "darkLogoUrl": "/brands/apps/box.svg"
+    "logoUrl": "/brands/apps/box.svg"
   },
   "urlPatterns": [
     "https://mcp.box.com/*"

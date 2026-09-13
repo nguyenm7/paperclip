@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/cloudflare.svg",
-    "darkLogoUrl": "/brands/apps/cloudflare.svg"
+    "logoUrl": "/brands/apps/cloudflare.svg"
   },
   "urlPatterns": [
     "https://mcp.cloudflare.com/*"

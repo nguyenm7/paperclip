@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/todoist.svg",
-    "darkLogoUrl": "/brands/apps/todoist.svg"
+    "logoUrl": "/brands/apps/todoist.svg"
   },
   "urlPatterns": [
     "https://ai.todoist.net/*"

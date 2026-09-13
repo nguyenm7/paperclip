@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/egnyte.svg",
-    "darkLogoUrl": "/brands/apps/egnyte.svg"
+    "logoUrl": "/brands/apps/egnyte.svg"
   },
   "urlPatterns": [
     "https://mcp-server.egnyte.com/*"

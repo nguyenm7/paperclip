@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/candid.png",
-    "darkLogoUrl": "/brands/apps/candid.png"
+    "logoUrl": "/brands/apps/candid.png"
   },
   "urlPatterns": [
     "https://mcp.candid.org/*"

@@ -1,7 +1,4 @@
-import { createHash } from "node:crypto";
-
 export const assetPathPattern = /^\/brands\/apps\/[a-z0-9-]+\.(svg|png)$/;
-export const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 export const normalizeBrandKey = (value) => value.trim().toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
 // Conservative structural rejection, not a general-purpose SVG sanitizer.
@@ -34,26 +31,16 @@ export function validateManifest(manifest, readAsset) {
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(row.slug) || slugs.has(row.slug)) throw new Error(`Duplicate or invalid slug: ${row.slug}`);
     slugs.add(row.slug);
     if (typeof row.provider !== "string" || !row.provider.trim()) throw new Error(`${row.slug}: missing provider name`);
-    if (!Array.isArray(row.aliases) || row.aliases.some((alias) => typeof alias !== "string" || !alias.trim())) throw new Error(`${row.slug}: invalid aliases`);
-    for (const name of [row.slug, row.provider, ...row.aliases]) {
+    const aliases = row.aliases ?? [];
+    if (!Array.isArray(aliases) || aliases.some((alias) => typeof alias !== "string" || !alias.trim())) throw new Error(`${row.slug}: invalid aliases`);
+    for (const name of [row.slug, row.provider, ...aliases]) {
       const key = normalizeBrandKey(name);
       if (keys.has(key) && keys.get(key) !== row.slug) throw new Error(`${row.slug}: ambiguous brand alias ${name}`);
       keys.set(key, row.slug);
     }
-    if (!["same", "pair"].includes(row.themeMode) || !row.localAsset || !row.darkAsset
-      || (row.themeMode === "same") !== (row.localAsset === row.darkAsset)
-      || row.darkVariantRequired !== (row.themeMode === "pair")) throw new Error(`${row.slug}: incomplete or inconsistent theme pair`);
-    if (row.opticalFit !== "standard" || !row.selection?.note || !row.selection?.opticalReview) throw new Error(`${row.slug}: missing optical fit or selection evidence`);
-    for (const [theme, asset] of [["light", row.localAsset], ["dark", row.darkAsset]]) {
-      if (!assetPathPattern.test(asset) || !asset.endsWith(`.${row.assetType}`)) throw new Error(`${row.slug}: invalid asset path`);
-      const provenance = row.provenance?.[theme];
-      if (!provenance || !["board-selected", "user-supplied", "vendor-theme-export", "simple-icons-derivative", "retained-upstream", "vendor-sourced"].includes(provenance.sourceClass)
-        || !provenance.sourceFile || !provenance.sourceUrl || !provenance.acquiredAt || !/^[a-f0-9]{64}$/.test(provenance.sha256)) throw new Error(`${row.slug}/${theme}: missing provenance`);
-      if (new URL(provenance.sourceUrl).protocol !== "https:" || provenance.sourceFile.startsWith("/")
-        || provenance.sourceFile.split(/[\\/]/).includes("..")) throw new Error(`${row.slug}/${theme}: invalid provenance source`);
-      const bytes = readAsset(asset, provenance);
-      if (sha256(bytes) !== provenance.sha256) throw new Error(`${row.slug}/${theme}: source hash mismatch`);
-      validateArtwork(bytes, asset);
+    for (const asset of new Set([row.localAsset, ...(row.darkAsset === undefined ? [] : [row.darkAsset])])) {
+      if (typeof asset !== "string" || !assetPathPattern.test(asset)) throw new Error(`${row.slug}: invalid asset path`);
+      validateArtwork(readAsset(asset), asset);
     }
   }
   return manifest.providers.length;

@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/bitly.svg",
-    "darkLogoUrl": "/brands/apps/bitly.svg"
+    "logoUrl": "/brands/apps/bitly.svg"
   },
   "urlPatterns": [
     "https://api-ssl.bitly.com/*"

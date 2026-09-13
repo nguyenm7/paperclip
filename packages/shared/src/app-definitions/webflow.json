@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/webflow.svg",
-    "darkLogoUrl": "/brands/apps/webflow.svg"
+    "logoUrl": "/brands/apps/webflow.svg"
   },
   "urlPatterns": [
     "https://mcp.webflow.com/*"

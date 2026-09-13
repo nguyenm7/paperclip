@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/xero.svg",
-    "darkLogoUrl": "/brands/apps/xero.svg"
+    "logoUrl": "/brands/apps/xero.svg"
   },
   "urlPatterns": [
     "https://mcp.xero.com/*"

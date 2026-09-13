@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/kernel.svg",
-    "darkLogoUrl": "/brands/apps/kernel.svg"
+    "logoUrl": "/brands/apps/kernel.svg"
   },
   "urlPatterns": [
     "https://mcp.onkernel.com/*"

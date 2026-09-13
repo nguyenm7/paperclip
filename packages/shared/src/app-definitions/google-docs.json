@@ -9,8 +9,7 @@
   ],
   "featured": true,
   "branding": {
-    "logoUrl": "/brands/apps/google-docs.svg",
-    "darkLogoUrl": "/brands/apps/google-docs.svg"
+    "logoUrl": "/brands/apps/google-docs.svg"
   },
   "urlPatterns": [
     "https://docsmcp.googleapis.com/*",

@@ -8,8 +8,7 @@
   ],
   "featured": false,
   "branding": {
-    "logoUrl": "/brands/apps/asana.svg",
-    "darkLogoUrl": "/brands/apps/asana.svg"
+    "logoUrl": "/brands/apps/asana.svg"
   },
   "urlPatterns": [
     "https://mcp.asana.com/*"

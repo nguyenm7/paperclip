@@ -7,8 +7,6 @@ type BrandProvider = {
   slug: string;
   localAsset: string;
   darkAsset?: string;
-  assetType: "svg" | "png";
-  darkVariantRequired: boolean;
 };
 
 type BrandManifest = {
@@ -26,7 +24,7 @@ function publicAssetPath(asset: string): string {
 }
 
 describe("local app brand assets", () => {
-  it("maps every provider to a unique local asset that exists", () => {
+  it("maps each unique provider identity to an existing local asset", () => {
     expect(manifest.schemaVersion).toBe(1);
     expect(manifest.providers.length).toBeGreaterThan(50);
     expect(new Set(manifest.providers.map((provider) => provider.slug)).size).toBe(
@@ -37,12 +35,12 @@ describe("local app brand assets", () => {
       const assetPath = publicAssetPath(provider.localAsset);
       expect(existsSync(assetPath), `${provider.slug} local asset should exist`).toBe(true);
       expect(statSync(assetPath).isFile(), `${provider.slug} local asset should be a file`).toBe(true);
-      expect(path.extname(assetPath)).toBe(`.${provider.assetType}`);
+      expect([".svg", ".png"]).toContain(path.extname(assetPath));
     }
   });
 
   it("ships each required dark-theme variant", () => {
-    for (const provider of manifest.providers.filter((entry) => entry.darkVariantRequired)) {
+    for (const provider of manifest.providers.filter((entry) => entry.darkAsset)) {
       expect(provider.darkAsset, `${provider.slug} should declare a dark asset`).toBeTruthy();
       const assetPath = publicAssetPath(provider.darkAsset!);
       expect(existsSync(assetPath), `${provider.slug} dark asset should exist`).toBe(true);

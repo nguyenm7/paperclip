@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "paperclip",
+  "displayName": "Paperclip",
+  "version": "0.1.0",
+  "description": "Keeps a Claude Code session aware of the Paperclip issue it is working on: status in the context, transitions as notifications, and a pc CLI wrapper on PATH. Read-only in v0.",
+  "author": {
+    "name": "Paperclip Labs, Inc"
+  },
+  "homepage": "https://docs.paperclip.ing",
+  "repository": "https://github.com/nguyenm7/paperclip",
+  "license": "MIT",
+  "keywords": ["paperclip", "agents", "orchestration", "tasks"],
+  "defaultEnabled": false,
+  "experimental": {
+    "monitors": "./monitors/monitors.json"
+  },
+  "userConfig": {
+    "api_base": {
+      "type": "string",
+      "title": "Paperclip API base URL",
+      "description": "Where your Paperclip server is reachable.",
+      "default": "http://localhost:3100"
+    },
+    "company_id": {
+      "type": "string",
+      "title": "Company ID",
+      "description": "Company this session's agent belongs to.",
+      "required": true
+    },
+    "agent_id": {
+      "type": "string",
+      "title": "Agent ID or shortname",
+      "description": "The Paperclip agent this session acts as, e.g. claudecoder."
+    },
+    "api_key": {
+      "type": "string",
+      "title": "Agent API key",
+      "description": "Long-lived agent key from `paperclipai agent local-cli`. Stored in secure storage, not settings.json.",
+      "sensitive": true
+    },
+    "data_dir": {
+      "type": "directory",
+      "title": "Paperclip data dir (optional)",
+      "description": "Set only when pointing at an isolated test-drive instance instead of ~/.paperclip."
+    },
+    "poll_seconds": {
+      "type": "number",
+      "title": "Poll interval (seconds)",
+      "description": "How often the watcher checks issue status.",
+      "default": 15,
+      "min": 3,
+      "max": 300
+    },
+    "review_ready_statuses": {
+      "type": "string",
+      "title": "Review-ready statuses",
+      "description": "Comma-separated issue statuses that mean the task is ready for your review.",
+      "default": "in_review"
+    },
+    "terminal_statuses": {
+      "type": "string",
+      "title": "Terminal statuses",
+      "description": "Comma-separated statuses after which the watcher stops polling. The server's enum is: backlog, todo, in_progress, in_review, done, blocked, cancelled.",
+      "default": "done,cancelled"
+    }
+  }
+}

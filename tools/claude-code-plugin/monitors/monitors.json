@@ -1,0 +1,7 @@
+[
+  {
+    "name": "paperclip-issue-status",
+    "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/pc-watch.sh",
+    "description": "Paperclip issue status transitions for the task this session is working on"
+  }
+]

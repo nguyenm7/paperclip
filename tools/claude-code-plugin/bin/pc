@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# `pc` — thin Paperclip CLI wrapper, on PATH for the Bash tool while this plugin
+# is enabled. Resolves --api-base and --data-dir from plugin config so the agent
+# types `pc issue get PAP-14557 --json` and nothing else.
+#
+# Set PAPERCLIP_CLI="pnpm paperclipai" to run against a dev checkout.
+
+set -uo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../scripts/lib.sh
+. "$SCRIPT_DIR/../scripts/lib.sh"
+
+if [ $# -eq 0 ]; then
+  pc_cli --help
+  exit $?
+fi
+
+pc_cli "$@"
